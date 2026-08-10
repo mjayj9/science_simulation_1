@@ -15,6 +15,28 @@ export const MODEL_REGISTRY = [
     limitationsKo: ["완전한 SPA 다주기 급수 구현보다 정확도가 낮음"],
   },
   {
+    id: "weather.offline-haurwitz-erbs",
+    version: "1.0.0",
+    titleKo: "오프라인 Haurwitz·Erbs 일사 시계열",
+    expression: "GHIclear=1098 cosθz exp(-0.059/cosθz); attenuation once; Erbs → DNI,DHI",
+    variables: [
+      { symbol: "θz", labelKo: "태양 천정각", unit: "deg" },
+      { symbol: "GHIclear", labelKo: "맑은 하늘 수평면 전천일사", unit: "W/m²" },
+      { symbol: "kd", labelKo: "Erbs 산란율", unit: "1" },
+    ],
+    sourceUrls: [
+      "https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.clearsky.haurwitz.html",
+      "https://www.sandia.gov/research/publications/details/global-horizontal-irradiance-clear-sky-models-implementation-and-analysis-2012-03-01/",
+      "https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.erbs.html",
+    ],
+    assumptionsKo: ["외부 자료가 없을 때의 결정론적 fallback", "시나리오 감쇠는 GHI에 한 번 적용한 뒤 Erbs 분해"],
+    limitationsKo: [
+      "천정각만 사용하는 clear-sky 근사로 에어로졸·수증기·현지 탁도를 직접 반영하지 않음",
+      "pvlib Haurwitz는 apparent zenith 기준이나 구현은 Erbs와 공유하는 true zenith를 사용해 지평선 부근 차이가 있음",
+      "계측 또는 재분석 기상자료를 대체하지 않음",
+    ],
+  },
+  {
     id: "irradiance.erbs",
     version: "1.0.0",
     titleKo: "Erbs GHI 분해",
@@ -30,17 +52,24 @@ export const MODEL_REGISTRY = [
   },
   {
     id: "poa.hay-davies",
-    version: "1.0.0",
+    version: "1.1.0",
     titleKo: "POA 직달·Hay-Davies 산란·지면반사",
-    expression: "GPOA=VDNI max(0,n·s)IAM + DHI[AiRb+(1-Ai)(1+cosβ)/2] + ρgGHI(1-cosβ)/2",
+    expression: "ηcos=max(0,n·s); ηangle=ηcos·IAM; GPOA=V·DNI·ηangle + Gdiffuse + Gground",
     variables: [
       { symbol: "V", labelKo: "직달 가시율", unit: "1" },
+      { symbol: "ηcos", labelKo: "기하 코사인 투영 계수", unit: "1" },
+      { symbol: "IAM", labelKo: "입사각 광학 계수", unit: "1" },
+      { symbol: "ηangle", labelKo: "가시율 제외 직달 각도 계수", unit: "1" },
       { symbol: "β", labelKo: "패널 기울기", unit: "deg" },
       { symbol: "ρg", labelKo: "지면 반사율", unit: "1" },
     ],
-    sourceUrls: ["https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/plane-of-array-poa-irradiance/"],
-    assumptionsKo: ["지면은 Lambert 반사체", "태양은 평행광"],
-    limitationsKo: ["다중 반사와 3D 대기 산란을 생략"],
+    sourceUrls: [
+      "https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/plane-of-array-poa-irradiance/",
+      "https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/shading-soiling-and-reflection-losses/incident-angle-reflection-losses/ashrae-iam-model/",
+      "https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/shading-soiling-and-reflection-losses/incident-angle-reflection-losses/physical-iam-model/",
+    ],
+    assumptionsKo: ["지면은 Lambert 반사체", "태양은 평행광", "IAM은 직달항에만 적용하고 산란·지면 IAM은 1로 둠"],
+    limitationsKo: ["다중 반사와 3D 대기 산란을 생략", "AOI>80°에서는 ASHRAE/단순 physical IAM의 정확도가 낮아 모듈별 실측 검증이 필요"],
   },
   {
     id: "iam.physical-ashrae",
@@ -53,7 +82,7 @@ export const MODEL_REGISTRY = [
       "https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/shading-soiling-and-reflection-losses/incident-angle-reflection-losses/ashrae-iam-model/",
     ],
     assumptionsKo: ["전면 유리 모듈"],
-    limitationsKo: ["ASHRAE 식은 큰 입사각에서 정확도가 낮음"],
+    limitationsKo: ["AOI>80°에서는 ASHRAE 및 단순 physical 식의 정확도가 낮아 모듈별 실측 검증이 필요"],
   },
   {
     id: "thermal.faiman",

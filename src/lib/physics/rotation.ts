@@ -1,6 +1,6 @@
 import { DEG2RAD, clamp, mod } from "./types";
 import type { Vec3 } from "./types";
-import { cross, magnitude, normalize, scale, subtract } from "./vector";
+import { cross, dot, magnitude, normalize, rotateAroundY, safeNormalize, scale, subtract } from "./vector";
 
 export interface RotationState {
   angleRad: number;
@@ -21,6 +21,44 @@ export interface AerodynamicPanel {
   normal: Vec3;
   areaM2: number;
   dragCoefficient?: number;
+}
+
+/** Right-handed panel frame in one coordinate space: sampleAxisU × sampleAxisV = normal. */
+export interface PanelFrame {
+  normal: Vec3;
+  sampleAxisU: Vec3;
+  sampleAxisV: Vec3;
+}
+
+export interface PanelFrameInput {
+  normal: Vec3;
+  /** Optional in-plane sampling axis. It is projected onto the panel plane. */
+  sampleAxisU?: Vec3;
+}
+
+/** Builds a deterministic orthonormal sampling frame around the front normal. */
+export function createPanelFrame(input: PanelFrameInput): PanelFrame {
+  const normal = normalize(input.normal);
+  const reference = Math.abs(normal.y) > 0.9
+    ? { x: 0, y: 0, z: 1 }
+    : { x: 0, y: 1, z: 0 };
+  const fallbackU = normalize(cross(reference, normal));
+  const requestedU = input.sampleAxisU;
+  const projectedU = requestedU
+    ? subtract(requestedU, scale(normal, dot(requestedU, normal)))
+    : fallbackU;
+  const sampleAxisU = safeNormalize(projectedU, fallbackU);
+  const sampleAxisV = normalize(cross(normal, sampleAxisU));
+  return { normal, sampleAxisU, sampleAxisV };
+}
+
+/** Applies the same world +Y transform to the normal and both ray-sampling axes. */
+export function rotatePanelFrameAroundY(frame: PanelFrame, angleRad: number): PanelFrame {
+  return {
+    normal: rotateAroundY(frame.normal, angleRad),
+    sampleAxisU: rotateAroundY(frame.sampleAxisU, angleRad),
+    sampleAxisV: rotateAroundY(frame.sampleAxisV, angleRad),
+  };
 }
 
 export function rpmToAngularVelocity(rpm: number): number {

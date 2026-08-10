@@ -93,6 +93,26 @@ function obstacleColor(item: SceneObstacle) {
   }[item.type];
 }
 
+function rotateAroundY([x, y, z]: Vec3Tuple, angleRad: number): Vec3Tuple {
+  const cosine = Math.cos(angleRad);
+  const sine = Math.sin(angleRad);
+  return [cosine * x + sine * z, y, -sine * x + cosine * z];
+}
+
+function multiplyQuaternions(
+  [lx, ly, lz, lw]: QuaternionTuple,
+  [rx, ry, rz, rw]: QuaternionTuple,
+): QuaternionTuple {
+  const result: QuaternionTuple = [
+    lw * rx + lx * rw + ly * rz - lz * ry,
+    lw * ry - lx * rz + ly * rw + lz * rx,
+    lw * rz + lx * ry - ly * rx + lz * rw,
+    lw * rw - lx * rx - ly * ry - lz * rz,
+  ];
+  const length = Math.hypot(...result) || 1;
+  return result.map((value) => value / length) as QuaternionTuple;
+}
+
 export function ThreeWorkspace({
   panels,
   obstacles,
@@ -160,7 +180,7 @@ export function ThreeWorkspace({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.domElement.setAttribute("aria-label", "3D 태양광 패널 조립 장면");
     renderer.domElement.tabIndex = 0;
     host.appendChild(renderer.domElement);
@@ -361,6 +381,7 @@ export function ThreeWorkspace({
       panelGroup.add(mesh);
       meshById.set(panel.id, mesh);
     });
+    // Base panel poses are rotated exactly once at the render-group level.
     panelGroup.rotation.y = rotationAngleRad;
   }, [panels, rotationAngleRad]);
 
@@ -430,28 +451,38 @@ export function ThreeWorkspace({
     const state = stateRef.current;
     if (!state) return;
     state.helperGroup.clear();
-    const panelGeometry = new THREE.BoxGeometry(PANEL_SIZE, PANEL_SIZE, PANEL_DEPTH);
+    const half = rotationAngleRad / 2;
+    const worldY: QuaternionTuple = [0, Math.sin(half), 0, Math.cos(half)];
     panels.forEach((panel) => {
+      const worldPosition = rotateAroundY(panel.position, rotationAngleRad);
+      const worldQuaternion = multiplyQuaternions(worldY, panel.quaternion);
       if (showNormals || panel.id === selectedPanelId) {
-        const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(...panel.quaternion));
+        const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(...worldQuaternion));
+        const isSelected = panel.id === selectedPanelId;
         state.helperGroup.add(
-          new THREE.ArrowHelper(normal, new THREE.Vector3(...panel.position), 0.035, "#5eead4", 0.011, 0.006),
-        );
-      }
-      if (showRays && sunElevationDeg > 0) {
-        const origin = new THREE.Vector3(...panel.position);
-        const start = origin.clone().addScaledVector(normalizedSun, 0.22);
-        const geometry = new THREE.BufferGeometry().setFromPoints([start, origin]);
-        state.helperGroup.add(
-          new THREE.Line(
-            geometry,
-            new THREE.LineDashedMaterial({ color: "#ffd76a", dashSize: 0.012, gapSize: 0.008, opacity: 0.45, transparent: true }),
+          new THREE.ArrowHelper(
+            normal,
+            new THREE.Vector3(...worldPosition),
+            isSelected ? 0.052 : 0.035,
+            isSelected ? "#fff0a6" : "#5eead4",
+            isSelected ? 0.014 : 0.011,
+            isSelected ? 0.008 : 0.006,
           ),
         );
       }
+      if (showRays && sunElevationDeg > 0) {
+        const origin = new THREE.Vector3(...worldPosition);
+        const start = origin.clone().addScaledVector(normalizedSun, 0.22);
+        const geometry = new THREE.BufferGeometry().setFromPoints([start, origin]);
+        const line = new THREE.Line(
+          geometry,
+          new THREE.LineDashedMaterial({ color: "#ffd76a", dashSize: 0.012, gapSize: 0.008, opacity: 0.45, transparent: true }),
+        );
+        line.computeLineDistances();
+        state.helperGroup.add(line);
+      }
     });
-    panelGeometry.dispose();
-  }, [panels, selectedPanelId, showNormals, showRays, normalizedSun, sunElevationDeg]);
+  }, [panels, rotationAngleRad, selectedPanelId, showNormals, showRays, normalizedSun, sunElevationDeg]);
 
   useEffect(() => {
     const state = stateRef.current;

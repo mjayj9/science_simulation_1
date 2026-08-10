@@ -175,7 +175,11 @@ export function solarPosition(input: SolarPositionInput): SolarPositionResult {
   };
 }
 
-/** Three.js ENU convention: +X east, +Y up, +Z north. */
+/**
+ * Three.js ENU convention: +X east, +Y up, +Z north.
+ * Solar azimuth is clockwise from north: north 0°, east 90°, south 180°,
+ * west 270°. The returned vector points from the observer toward the sun.
+ */
 export function sunVector(position: Pick<SolarPositionResult, "azimuthDeg" | "elevationDeg">): Vec3;
 export function sunVector(azimuthDeg: number, elevationDeg: number): Vec3;
 export function sunVector(
@@ -186,13 +190,17 @@ export function sunVector(
     typeof positionOrAzimuth === "number" ? positionOrAzimuth : positionOrAzimuth.azimuthDeg;
   const elevationDeg =
     typeof positionOrAzimuth === "number" ? (elevationArg ?? 0) : positionOrAzimuth.elevationDeg;
+  if (!Number.isFinite(azimuthDeg) || !Number.isFinite(elevationDeg)) {
+    throw new RangeError("Solar azimuth and elevation must be finite");
+  }
   const azimuth = azimuthDeg * DEG2RAD;
   const elevation = elevationDeg * DEG2RAD;
   const cosElevation = Math.cos(elevation);
+  const clean = (value: number): number => Math.abs(value) < 1e-15 ? 0 : value;
   return {
-    x: Math.sin(azimuth) * cosElevation,
-    y: Math.sin(elevation),
-    z: Math.cos(azimuth) * cosElevation,
+    x: clean(Math.sin(azimuth) * cosElevation),
+    y: clean(Math.sin(elevation)),
+    z: clean(Math.cos(azimuth) * cosElevation),
   };
 }
 

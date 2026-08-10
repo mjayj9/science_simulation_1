@@ -18,6 +18,8 @@ interface ActiveJob {
   supersededBy?: string;
   completed: number;
   total: number;
+  completedWork: number;
+  totalWork: number;
 }
 
 /**
@@ -97,6 +99,8 @@ export class SimulationWorkerRuntime {
       cancelled: false,
       completed: 0,
       total: request.input.weather.length,
+      completedWork: 0,
+      totalWork: request.input.weather.length,
     };
     this.active.set(request.requestId, job);
     this.emit({
@@ -116,6 +120,8 @@ export class SimulationWorkerRuntime {
         onProgress: (event) => {
           job.completed = event.completed;
           job.total = event.total;
+          job.completedWork = event.completedWork;
+          job.totalWork = event.totalWork;
           if (this.active.get(request.requestId) === job) this.emit(event);
         },
       });
@@ -140,7 +146,9 @@ export class SimulationWorkerRuntime {
           fingerprint: request.fingerprint,
           completed: job.completed,
           total: job.total,
-          fraction: job.total > 0 ? job.completed / job.total : 0,
+          completedWork: job.completedWork,
+          totalWork: job.totalWork,
+          fraction: job.totalWork > 0 ? job.completedWork / job.totalWork : 0,
           ...(job.cancelReason ? { reason: job.cancelReason } : {}),
         });
       } else if (this.active.get(request.requestId) === job) {

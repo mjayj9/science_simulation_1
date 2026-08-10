@@ -54,8 +54,6 @@ import {
   Zap,
 } from "lucide-react";
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -80,19 +78,34 @@ import {
   calculateCircuit,
   calculateInverter,
   simulateInstant,
+  solarPosition as calculatePhysicsSolarPosition,
+  sunVector as physicsSunVector,
   type CircuitDevice,
   type ElectricalConfig as PhysicsElectricalConfig,
+  type GHIClosureResult,
   type InverterConfig as PhysicsInverterConfig,
   type ThermalConfig as PhysicsThermalConfig,
   type TraceStage,
 } from "../lib/physics";
 import { generatePreset as generateGeometryPreset } from "../lib/geometry";
-import { getOfflineWeather, type OfflineWeatherPreset } from "../lib/weather";
+import {
+  assertWeatherSeries,
+  fetchOpenMeteo,
+  getOfflineWeather,
+  importPvgisJson,
+  normalizeNasaPowerResponse,
+  type OfflineWeatherPreset,
+  type WeatherPoint,
+  type WeatherSeries,
+} from "../lib/weather";
 import {
   createSimulationCancelRequest,
   createSimulationRunRequest,
   isSimulationEventStale,
+  rotationIntervalSamples,
+  type SimulationKernelInput,
   type SimulationRunRequest,
+  type SimulationVariantWorkItem,
   type SimulationWorkerEvent,
 } from "../workers";
 
@@ -100,7 +113,7 @@ type Screen = "assembly" | "environment" | "circuit" | "simulation" | "compare" 
 type PresetName = "cube" | "plane" | "cylinder" | "sphere" | "cone" | "free";
 type WeatherPreset = "clear" | "partly" | "overcast" | "rain" | "night";
 type EnvironmentName = "mountain" | "coast" | "plain" | "suburban" | "urban";
-type DataMode = "manual" | "open-meteo" | "pvgis-file" | "nasa-file" | "offline";
+export type DataMode = "manual" | "open-meteo" | "pvgis-file" | "nasa-file" | "offline";
 
 interface ElectricalSettings {
   efficiency: number;
@@ -173,6 +186,7 @@ interface EnvironmentSettings {
 }
 
 interface SolarPosition {
+  timeUtcMs: number;
   elevationDeg: number;
   azimuthDeg: number;
   vector: Vec3Tuple;
@@ -184,8 +198,14 @@ interface SolarPosition {
 interface PanelResult extends ScenePanel {
   normal: Vec3Tuple;
   incidenceDeg: number;
+  panelTiltDeg: number;
+  panelAzimuthDeg: number;
+  cosineIncidence: number;
+  etaCos: number;
   visibility: number;
   iam: number;
+  etaAngle: number;
+  ghiClosure: GHIClosureResult;
   beamWm2: number;
   skyWm2: number;
   groundWm2: number;
@@ -212,6 +232,11 @@ interface SystemResult {
   mismatchW: number;
   wiringW: number;
   bypassCount: number;
+  areaWeightedAoiDeg: number;
+  areaWeightedEtaCos: number;
+  areaWeightedIam: number;
+  areaWeightedEtaAngle: number;
+  areaWeightedVisibility: number;
   losses: { name: string; value: number; color: string }[];
   modelTrace: TraceStage[];
   ivPoints: { voltage: number; current: number; power: number }[];
@@ -220,12 +245,51 @@ interface SystemResult {
 interface DailyPoint {
   time: string;
   minute: number;
+  /** True when power is already the weighted mean over [minute, next minute]. */
+  intervalMean: boolean;
   dc: number;
   ac: number;
   poa: number;
   temperature: number;
   elevation: number;
+  aoi: number;
+  etaCos: number;
+  iam: number;
+  etaAngle: number;
+  ghi: number;
+  dni: number;
+  dhi: number;
 }
+
+type DiagnosticSeriesKey =
+  | "elevation"
+  | "aoi"
+  | "etaCos"
+  | "iam"
+  | "etaAngle"
+  | "ghi"
+  | "dni"
+  | "dhi"
+  | "poa"
+  | "dc"
+  | "ac";
+
+const DIAGNOSTIC_SERIES: Record<
+  DiagnosticSeriesKey,
+  { label: string; color: string; axis: "angle" | "factor" | "irradiance" | "power" }
+> = {
+  elevation: { label: "태양 고도", color: "#ffd166", axis: "angle" },
+  aoi: { label: "AOI", color: "#f78c6b", axis: "angle" },
+  etaCos: { label: "ηcos", color: "#72d6c9", axis: "factor" },
+  iam: { label: "IAM", color: "#b8a1ff", axis: "factor" },
+  etaAngle: { label: "ηangle", color: "#4fd1a5", axis: "factor" },
+  ghi: { label: "GHI", color: "#8bb8ff", axis: "irradiance" },
+  dni: { label: "DNI", color: "#ffb65c", axis: "irradiance" },
+  dhi: { label: "DHI", color: "#7f9cf5", axis: "irradiance" },
+  poa: { label: "POA", color: "#f4ba4b", axis: "irradiance" },
+  dc: { label: "DC", color: "#e6a93f", axis: "power" },
+  ac: { label: "AC", color: "#42c6a5", axis: "power" },
+};
 
 interface Provenance {
   provider: string;
@@ -411,14 +475,83 @@ function normalFromQuaternion([x, y, z, w]: QuaternionTuple): Vec3Tuple {
   return normalize([2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)]);
 }
 
+function rotateVectorByQuaternion(
+  [x, y, z, w]: QuaternionTuple,
+  vector: Vec3Tuple,
+): Vec3Tuple {
+  const uv: Vec3Tuple = [
+    y * vector[2] - z * vector[1],
+    z * vector[0] - x * vector[2],
+    x * vector[1] - y * vector[0],
+  ];
+  const uuv: Vec3Tuple = [
+    y * uv[2] - z * uv[1],
+    z * uv[0] - x * uv[2],
+    x * uv[1] - y * uv[0],
+  ];
+  return normalize([
+    vector[0] + 2 * (w * uv[0] + uuv[0]),
+    vector[1] + 2 * (w * uv[1] + uuv[1]),
+    vector[2] + 2 * (w * uv[2] + uuv[2]),
+  ]);
+}
+
+function multiplyQuaternions(
+  [lx, ly, lz, lw]: QuaternionTuple,
+  [rx, ry, rz, rw]: QuaternionTuple,
+): QuaternionTuple {
+  const result: QuaternionTuple = [
+    lw * rx + lx * rw + ly * rz - lz * ry,
+    lw * ry - lx * rz + ly * rw + lz * rx,
+    lw * rz + lx * ry - ly * rx + lz * rw,
+    lw * rw - lx * rx - ly * ry - lz * rz,
+  ];
+  const length = Math.hypot(...result) || 1;
+  return result.map((value) => value / length) as QuaternionTuple;
+}
+
 function rotateAroundY(v: Vec3Tuple, angle: number): Vec3Tuple {
   const c = Math.cos(angle);
   const s = Math.sin(angle);
   return [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]];
 }
 
+/** World-first qY · q0, matching the annual worker and Three.js world rotation. */
+function rotatePanelAroundWorldY(item: ScenePanel, angle: number): ScenePanel {
+  if (Math.abs(angle) < 1e-14) return item;
+  const half = angle / 2;
+  const worldY: QuaternionTuple = [0, Math.sin(half), 0, Math.cos(half)];
+  return {
+    ...item,
+    position: rotateAroundY(item.position, angle),
+    quaternion: multiplyQuaternions(worldY, item.quaternion),
+  };
+}
+
+function panelOrientation(normal: Vec3Tuple): { tiltDeg: number; azimuthDeg: number } {
+  const tiltDeg = deg(Math.acos(clamp(normal[1], -1, 1)));
+  const azimuthDeg = tiltDeg < 1e-8
+    ? 0
+    : (deg(Math.atan2(normal[0], normal[2])) + 360) % 360;
+  return { tiltDeg, azimuthDeg };
+}
+
 function panel(id: string, label: string, position: Vec3Tuple, normal: Vec3Tuple): ScenePanel {
   return { id, label, position, quaternion: quaternionFromNormal(normal) };
+}
+
+function renderPanelsFromBase(basePanels: ScenePanel[], results: PanelResult[]): ScenePanel[] {
+  const resultById = new Map(results.map((item) => [item.id, item]));
+  return basePanels.map((base) => {
+    const result = resultById.get(base.id);
+    return {
+      ...base,
+      irradianceWm2: result?.effectiveWm2,
+      temperatureC: result?.temperatureC,
+      powerW: result?.powerW,
+      bypassActive: result?.bypassActive,
+    };
+  });
 }
 
 function generatePreset(name: PresetName, tiltDeg = 30, azimuthDeg = 180): ScenePanel[] {
@@ -445,40 +578,246 @@ function seededUnit(seed: number, index: number) {
   return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
 }
 
-function calculateSolarPosition(localDateTime: string, latitude: number, longitude: number, timezoneHours: number): SolarPosition {
-  const [datePart, timePart = "12:00"] = localDateTime.split("T");
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [hour, minute] = timePart.split(":").map(Number);
-  const start = Date.UTC(year, 0, 0);
-  const now = Date.UTC(year, month - 1, day);
-  const dayOfYear = Math.floor((now - start) / 86400000);
-  const fractionalHour = hour + minute / 60;
-  const gamma = (2 * Math.PI / 365) * (dayOfYear - 1 + (fractionalHour - 12) / 24);
-  const equationOfTimeMin = 229.18 * (0.000075 + 0.001868 * Math.cos(gamma) - 0.032077 * Math.sin(gamma) - 0.014615 * Math.cos(2 * gamma) - 0.040849 * Math.sin(2 * gamma));
-  const declination = 0.006918 - 0.399912 * Math.cos(gamma) + 0.070257 * Math.sin(gamma) - 0.006758 * Math.cos(2 * gamma) + 0.000907 * Math.sin(2 * gamma) - 0.002697 * Math.cos(3 * gamma) + 0.00148 * Math.sin(3 * gamma);
-  const trueSolarMinutes = ((fractionalHour * 60 + equationOfTimeMin + 4 * longitude - 60 * timezoneHours) % 1440 + 1440) % 1440;
-  const hourAngle = rad(trueSolarMinutes / 4 - 180);
-  const lat = rad(latitude);
-  const cosZenith = clamp(Math.sin(lat) * Math.sin(declination) + Math.cos(lat) * Math.cos(declination) * Math.cos(hourAngle), -1, 1);
-  const zenith = Math.acos(cosZenith);
-  const elevation = Math.PI / 2 - zenith;
-  let azimuth = Math.atan2(Math.sin(hourAngle), Math.cos(hourAngle) * Math.sin(lat) - Math.tan(declination) * Math.cos(lat));
-  azimuth = (azimuth + Math.PI) % (Math.PI * 2);
-  const azimuthDeg = (deg(azimuth) + 360) % 360;
-  const elevationDeg = deg(elevation);
-  const vector: Vec3Tuple = normalize([Math.cos(elevation) * Math.sin(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.cos(azimuth)]);
-  const cosH = clamp(-Math.tan(lat) * Math.tan(declination), -1, 1);
-  const daylightMinutes = 8 * deg(Math.acos(cosH));
-  const solarNoon = 720 - 4 * longitude - equationOfTimeMin + timezoneHours * 60;
-  const fmt = (minutes: number) => `${String(Math.floor(((minutes / 60) % 24 + 24) % 24)).padStart(2, "0")}:${String(Math.round(minutes % 60)).padStart(2, "0")}`;
+function localDateTimeToUtcMs(localDateTime: string, timezoneHours: number): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(localDateTime);
+  if (!match) throw new RangeError("로컬 날짜·시간 형식이 올바르지 않습니다.");
+  const utcMs = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+  ) - timezoneHours * 3_600_000;
+  if (!Number.isFinite(utcMs)) throw new RangeError("UTC 변환 결과가 올바르지 않습니다.");
+  return utcMs;
+}
+
+/** Adds wall-clock minutes while preserving month/year rollover independently of the host timezone. */
+export function advanceLocalDateTime(localDateTime: string, minutes: number): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(localDateTime);
+  if (!match || !Number.isFinite(minutes)) throw new RangeError("로컬 날짜·시간 또는 재생 간격이 올바르지 않습니다.");
+  const advanced = new Date(Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]) + minutes,
+  ));
+  return advanced.toISOString().slice(0, 16);
+}
+
+function localDayStartUtcMs(day: string, timezoneHours: number): number {
+  return localDateTimeToUtcMs(`${day}T00:00`, timezoneHours);
+}
+
+function solarPositionFromUtc(
+  timeUtcMs: number,
+  latitudeDeg: number,
+  longitudeDeg: number,
+  elevationM: number,
+): SolarPosition {
+  const calculated = calculatePhysicsSolarPosition({
+    timestamp: timeUtcMs,
+    latitudeDeg,
+    longitudeDeg,
+    elevationM,
+  });
+  const vector = physicsSunVector(calculated);
   return {
-    elevationDeg,
-    azimuthDeg,
-    vector,
-    sunrise: fmt(solarNoon - daylightMinutes / 2),
-    sunset: fmt(solarNoon + daylightMinutes / 2),
-    equationOfTimeMin,
+    timeUtcMs,
+    elevationDeg: calculated.elevationDeg,
+    azimuthDeg: calculated.azimuthDeg,
+    vector: [vector.x, vector.y, vector.z],
+    sunrise: "물리 코어",
+    sunset: "물리 코어",
+    equationOfTimeMin: calculated.equationOfTimeMinutes,
   };
+}
+
+function weatherStateFromPoint(point: WeatherPoint, manual: WeatherState): WeatherState {
+  return {
+    ghi: point.ghiWm2,
+    dni: point.dniWm2,
+    dhi: point.dhiWm2,
+    ambientC: point.ambientC,
+    windMs: point.windSpeedMs,
+    windDirectionDeg: point.windDirectionDeg,
+    gustMs: point.gustMs,
+    cloudPct: point.cloudFraction * 100,
+    albedo: manual.albedo,
+    soilingPct: manual.soilingPct,
+  };
+}
+
+function interpolateWeatherPoint(
+  left: WeatherPoint,
+  right: WeatherPoint,
+  timeUtcMs: number,
+): WeatherPoint {
+  const fraction = (timeUtcMs - left.timeUtcMs) / (right.timeUtcMs - left.timeUtcMs);
+  const linear = (a: number, b: number) => a + (b - a) * fraction;
+  const directionDelta = ((right.windDirectionDeg - left.windDirectionDeg + 540) % 360) - 180;
+  return {
+    timeUtcMs,
+    ghiWm2: Math.max(0, linear(left.ghiWm2, right.ghiWm2)),
+    dniWm2: Math.max(0, linear(left.dniWm2, right.dniWm2)),
+    dhiWm2: Math.max(0, linear(left.dhiWm2, right.dhiWm2)),
+    ambientC: linear(left.ambientC, right.ambientC),
+    windSpeedMs: Math.max(0, linear(left.windSpeedMs, right.windSpeedMs)),
+    windDirectionDeg: (left.windDirectionDeg + directionDelta * fraction + 360) % 360,
+    gustMs: Math.max(0, linear(left.gustMs, right.gustMs)),
+    cloudFraction: clamp(linear(left.cloudFraction, right.cloudFraction), 0, 1),
+    precipitationMm: Math.max(0, linear(left.precipitationMm, right.precipitationMm)),
+  };
+}
+
+function preferredWeatherPointAt(series: WeatherSeries, targetUtcMs: number): WeatherPoint | null {
+  const points = series.points;
+  if (!points.length) return null;
+  let lookupUtcMs = targetUtcMs;
+  if (series.provenance.kind === "tmy") {
+    const target = new Date(targetUtcMs);
+    const sourceYear = new Date(points[0].timeUtcMs).getUTCFullYear();
+    lookupUtcMs = Date.UTC(
+      sourceYear,
+      target.getUTCMonth(),
+      target.getUTCDate(),
+      target.getUTCHours(),
+      target.getUTCMinutes(),
+    );
+    if (new Date(lookupUtcMs).getUTCMonth() !== target.getUTCMonth()) {
+      lookupUtcMs = Date.UTC(sourceYear, target.getUTCMonth(), 28, target.getUTCHours(), target.getUTCMinutes());
+    }
+  }
+  if (lookupUtcMs < points[0].timeUtcMs || lookupUtcMs > points.at(-1)!.timeUtcMs) return null;
+  let low = 0;
+  let high = points.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const point = points[middle];
+    if (point.timeUtcMs === lookupUtcMs) return { ...point, timeUtcMs: targetUtcMs };
+    if (point.timeUtcMs < lookupUtcMs) low = middle + 1;
+    else high = middle - 1;
+  }
+  const left = points[Math.max(0, high)];
+  const right = points[Math.min(points.length - 1, low)];
+  if (!left || !right || left === right || right.timeUtcMs - left.timeUtcMs > 3 * 3_600_000) {
+    return null;
+  }
+  const interpolated = interpolateWeatherPoint(left, right, lookupUtcMs);
+  return { ...interpolated, timeUtcMs: targetUtcMs };
+}
+
+function mergePreferredWeather(
+  preferred: WeatherSeries | null,
+  fallback: WeatherSeries,
+): WeatherSeries {
+  if (!preferred) return fallback;
+  let preferredCount = 0;
+  const points = fallback.points.map((point) => {
+    const resolved = preferredWeatherPointAt(preferred, point.timeUtcMs);
+    if (!resolved) return point;
+    preferredCount += 1;
+    return resolved;
+  });
+  return {
+    points,
+    provenance: preferredCount > 0 ? preferred.provenance : fallback.provenance,
+  };
+}
+
+function offlinePresetFor(preset: WeatherPreset): OfflineWeatherPreset {
+  return {
+    clear: "clear",
+    partly: "partly-cloudy",
+    overcast: "overcast",
+    rain: "rain",
+    night: "night",
+  }[preset] as OfflineWeatherPreset;
+}
+
+function provenanceFromSeries(series: WeatherSeries): Provenance {
+  const provider = {
+    "open-meteo": "Open-Meteo",
+    pvgis: "PVGIS 5.3",
+    "nasa-power": "NASA POWER",
+    offline: "내장 오프라인 맑은하늘",
+    manual: "사용자 입력",
+  }[series.provenance.provider];
+  return {
+    provider,
+    kind: series.provenance.labelKo,
+    retrievedAt: series.provenance.fetchedAt,
+    resolution: series.provenance.temporalResolution,
+    spatial: series.provenance.spatialResolution ?? "격자 메타데이터 없음",
+    ...(series.provenance.fallbackReason
+      ? { fallbackReason: series.provenance.fallbackReason }
+      : {}),
+  };
+}
+
+function dataModeFromSeries(series: WeatherSeries): DataMode {
+  return {
+    "open-meteo": "open-meteo",
+    pvgis: "pvgis-file",
+    "nasa-power": "nasa-file",
+    offline: "offline",
+    manual: "manual",
+  }[series.provenance.provider] as DataMode;
+}
+
+const DATA_MODES = new Set<DataMode>(["manual", "open-meteo", "pvgis-file", "nasa-file", "offline"]);
+const WEATHER_PROVIDERS = new Set<WeatherSeries["provenance"]["provider"]>(["open-meteo", "pvgis", "nasa-power", "offline", "manual"]);
+const MAX_PERSISTED_WEATHER_POINTS = 10_000;
+const WEATHER_POINT_FIELDS = [
+  "timeUtcMs",
+  "ghiWm2",
+  "dniWm2",
+  "dhiWm2",
+  "ambientC",
+  "windSpeedMs",
+  "windDirectionDeg",
+  "gustMs",
+  "cloudFraction",
+  "precipitationMm",
+] as const satisfies readonly (keyof WeatherPoint)[];
+
+function isDataMode(value: unknown): value is DataMode {
+  return typeof value === "string" && DATA_MODES.has(value as DataMode);
+}
+
+function isStoredProvenance(value: unknown): value is Provenance {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Provenance>;
+  return [candidate.provider, candidate.kind, candidate.retrievedAt, candidate.resolution, candidate.spatial]
+    .every((entry) => typeof entry === "string");
+}
+
+/**
+ * Keeps autosave below a predictable bound and rejects malformed untrusted JSON
+ * before it reaches interpolation or the annual worker.
+ */
+function safeStoredWeatherSeries(value: unknown): WeatherSeries | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<WeatherSeries>;
+  if (!Array.isArray(candidate.points) || candidate.points.length < 1 || candidate.points.length > MAX_PERSISTED_WEATHER_POINTS) return null;
+  if (!candidate.provenance || typeof candidate.provenance !== "object") return null;
+  if (!WEATHER_PROVIDERS.has(candidate.provenance.provider)) return null;
+  if (candidate.points.some((point) =>
+    !point || typeof point !== "object" || WEATHER_POINT_FIELDS.some((field) => !Number.isFinite(point[field]))
+  )) return null;
+  try {
+    return assertWeatherSeries(candidate as WeatherSeries);
+  } catch {
+    return null;
+  }
+}
+
+/** An automatic-source click must never resolve back to the manual tab. */
+export function automaticDataModeFromSeries(series: WeatherSeries | null): Exclude<DataMode, "manual"> {
+  if (!series || series.provenance.provider === "manual") return "offline";
+  const mode = dataModeFromSeries(series);
+  return mode === "manual" ? "offline" : mode;
 }
 
 function rayAabb(origin: Vec3Tuple, direction: Vec3Tuple, min: Vec3Tuple, max: Vec3Tuple) {
@@ -513,9 +852,10 @@ function obstacleBounds(obstacle: SceneObstacle): { min: Vec3Tuple; max: Vec3Tup
 }
 
 function sampleVisibility(target: ScenePanel, allPanels: ScenePanel[], obstacles: SceneObstacle[], sun: Vec3Tuple, samples = 3) {
-  const q = target.quaternion;
-  const localX: Vec3Tuple = normalize([1 - 2 * (q[1] * q[1] + q[2] * q[2]), 2 * (q[0] * q[1] + q[3] * q[2]), 2 * (q[0] * q[2] - q[3] * q[1])]);
-  const localY: Vec3Tuple = normalize([2 * (q[0] * q[1] - q[3] * q[2]), 1 - 2 * (q[0] * q[0] + q[2] * q[2]), 2 * (q[1] * q[2] + q[3] * q[0])]);
+  // target.quaternion is already the composed world quaternion. Sampling axes,
+  // the POA normal and the rendered mesh therefore share one transform.
+  const localX = rotateVectorByQuaternion(target.quaternion, [1, 0, 0]);
+  const localY = rotateVectorByQuaternion(target.quaternion, [0, 1, 0]);
   const bounds = obstacles.filter((item) => item.type !== "ground" && item.type !== "water").map(obstacleBounds);
   const panelBounds = allPanels.filter((item) => item.id !== target.id).map((item) => ({
     min: [item.position[0] - 0.0245, item.position[1] - 0.0245, item.position[2] - 0.002] as Vec3Tuple,
@@ -545,36 +885,31 @@ function evaluateSystem(
   inverter: InverterSettings,
   rotationAngle: number,
   topology: "series" | "parallel",
-  seed: number,
+  iamB0: number,
   sampleCount = 3,
   circuitMode: "simple" | "single-diode" = "single-diode",
   bypassEnabled = true,
 ): SystemResult {
-  const daylight = solar.elevationDeg > 0 && weatherInput.ghi > 0;
+  // Daylight is geometric. Preserve a supplied GHI/DNI/DHI triplet so the
+  // shared closure audit can expose inconsistent data instead of hiding it.
+  const daylight = solar.elevationDeg > 0;
   const weather = daylight ? weatherInput : { ...weatherInput, ghi: 0, dni: 0, dhi: 0 };
   const physicsElectrical = toPhysicsElectrical(electrical);
   const physicsThermal = toPhysicsThermal(thermal);
   const physicsInverter = toPhysicsInverter(inverter);
-  const rotatedPanels = panels.map((item) => ({
-    ...item,
-    position: rotateAroundY(item.position, rotationAngle),
-    quaternion: item.quaternion,
-  }));
-  const evaluatedPanels = rotatedPanels.map((item, index): { result: PanelResult; device: CircuitDevice } => {
-    const baseNormal = normalFromQuaternion(item.quaternion);
-    const normal = rotateAroundY(baseNormal, rotationAngle);
+  const rotatedPanels = panels.map((item) => rotatePanelAroundWorldY(item, rotationAngle));
+  const evaluatedPanels = rotatedPanels.map((item): { result: PanelResult; device: CircuitDevice } => {
+    const normal = normalFromQuaternion(item.quaternion);
     const mu = dot(normal, solar.vector);
     const visibility = mu > 0 && daylight ? sampleVisibility(item, rotatedPanels, obstacles, solar.vector, sampleCount) : 0;
-    const cloudJitter = weather.cloudPct > 10 ? 0.96 + seededUnit(seed, index + Math.round(solar.azimuthDeg)) * 0.08 : 1;
-    const irradianceScale = daylight ? cloudJitter : 0;
     const minimumLogHeight = environment.displacementM + environment.roughnessM + 0.01;
     const instant = simulateInstant({
-      timestamp: 0,
+      timestamp: solar.timeUtcMs,
       solarOverride: { azimuthDeg: solar.azimuthDeg, elevationDeg: solar.elevationDeg },
       irradiance: {
-        ghiWm2: weather.ghi * irradianceScale,
-        dniWm2: weather.dni * irradianceScale,
-        dhiWm2: weather.dhi * irradianceScale,
+        ghiWm2: weather.ghi,
+        dniWm2: weather.dni,
+        dhiWm2: weather.dhi,
       },
       panel: {
         normal: { x: normal[0], y: normal[1], z: normal[2] },
@@ -584,7 +919,7 @@ function evaluateSystem(
         diffuseVisibility: clamp(0.82 + 0.18 * visibility, 0, 1),
         groundVisibility: 1,
         albedo: weather.albedo,
-        iam: { model: "ashrae", b0: 0.05 },
+        iam: { model: "ashrae", b0: clamp(iamB0, 0, 1) },
         diffuseModel: "hay-davies",
         soilingLossFraction: clamp(weather.soilingPct / 100, 0, 1),
         heightM: Math.max(0.03, item.position[1], minimumLogHeight),
@@ -621,7 +956,8 @@ function evaluateSystem(
       vocV: simpleVocV,
       mpp,
     };
-    const effectiveWm2 = instant.poa.totalWm2 * (1 - clamp(weather.soilingPct / 100, 0, 1));
+    const effectiveWm2 = instant.effectivePoaWm2;
+    const orientation = panelOrientation(normal);
     const result: PanelResult = {
       ...item,
       irradianceWm2: effectiveWm2,
@@ -629,8 +965,14 @@ function evaluateSystem(
       powerW: mpp.powerW,
       normal,
       incidenceDeg: instant.poa.angleOfIncidenceDeg,
+      panelTiltDeg: orientation.tiltDeg,
+      panelAzimuthDeg: orientation.azimuthDeg,
+      cosineIncidence: instant.poa.cosineIncidence,
+      etaCos: instant.poa.etaCos,
       visibility,
-      iam: instant.poa.incidenceAngleModifier,
+      iam: instant.poa.iamFactor,
+      etaAngle: instant.poa.etaAngle,
+      ghiClosure: instant.poa.ghiClosure,
       beamWm2: instant.poa.beamWm2,
       skyWm2: instant.poa.skyDiffuseWm2,
       groundWm2: instant.poa.groundReflectedWm2,
@@ -645,6 +987,11 @@ function evaluateSystem(
     return { result, device: { id: item.id, curve } };
   });
   const panelResults = evaluatedPanels.map((item) => item.result);
+  const totalPanelArea = panelResults.length * PANEL_AREA_M2;
+  const areaWeighted = (selector: (item: PanelResult) => number) =>
+    totalPanelArea > 0
+      ? panelResults.reduce((sum, item) => sum + selector(item) * PANEL_AREA_M2, 0) / totalPanelArea
+      : 0;
   const grossW = panelResults.reduce((sum, item) => sum + item.powerW, 0);
   const circuit = calculateCircuit({
     devices: evaluatedPanels.map((item) => item.device),
@@ -703,6 +1050,11 @@ function evaluateSystem(
     mismatchW,
     wiringW,
     bypassCount: panelResults.filter((item) => item.bypassActive).length,
+    areaWeightedAoiDeg: areaWeighted((item) => item.incidenceDeg),
+    areaWeightedEtaCos: areaWeighted((item) => item.etaCos),
+    areaWeightedIam: areaWeighted((item) => item.iam),
+    areaWeightedEtaAngle: areaWeighted((item) => item.etaAngle),
+    areaWeightedVisibility: areaWeighted((item) => item.visibility),
     losses: [
       { name: "가용 DC", value: grossW, color: "#f5b942" },
       { name: "회로 불일치", value: -mismatchW, color: "#d96957" },
@@ -716,11 +1068,18 @@ function evaluateSystem(
   };
 }
 
-function integrateWh(points: { minute: number; ac: number }[]) {
+export function integrateWh(points: { minute: number; ac: number; intervalMean?: boolean }[]) {
   let energy = 0;
   for (let index = 1; index < points.length; index += 1) {
     const dtHours = (points[index].minute - points[index - 1].minute) / 60;
-    energy += 0.5 * (points[index - 1].ac + points[index].ac) * dtHours;
+    const previous = points[index - 1];
+    // A fixed-RPM row is already the midpoint-quadrature mean of this exact
+    // forward interval. Trapezoid-integrating two adjacent interval means
+    // would shift half of the next interval into the current one.
+    const intervalPowerW = previous.intervalMean
+      ? previous.ac
+      : 0.5 * (previous.ac + points[index].ac);
+    energy += intervalPowerW * dtHours;
   }
   return energy;
 }
@@ -829,15 +1188,30 @@ export default function SimulatorClient() {
   const [weatherPreset, setWeatherPreset] = useState<WeatherPreset>("clear");
   const [weather, setWeather] = useState<WeatherState>(WEATHER_PRESETS.clear);
   const [dataMode, setDataMode] = useState<DataMode>("manual");
+  const [automaticWeatherSeries, setAutomaticWeatherSeries] = useState<WeatherSeries | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [provenance, setProvenance] = useState<Provenance>({
     provider: "수동 프리셋",
-    kind: "모델 추정 · 수동",
+    kind: "사용자 입력",
     retrievedAt: "—",
     resolution: "순간 시나리오",
     spatial: "해당 없음",
   });
   const [seed, setSeed] = useState(DEFAULT_SEED);
+  const [iamB0, setIamB0] = useState(0.05);
+  const [diagnosticSeries, setDiagnosticSeries] = useState<Record<DiagnosticSeriesKey, boolean>>({
+    elevation: true,
+    aoi: true,
+    etaCos: false,
+    iam: false,
+    etaAngle: true,
+    ghi: false,
+    dni: false,
+    dhi: false,
+    poa: true,
+    dc: true,
+    ac: true,
+  });
 
   const [environmentName, setEnvironmentName] = useState<EnvironmentName>("plain");
   const [environment, setEnvironment] = useState<EnvironmentSettings>(ENVIRONMENTS.plain);
@@ -877,12 +1251,20 @@ export default function SimulatorClient() {
   const [toast, setToast] = useState<string | null>(null);
   const hydrated = useRef(false);
 
-  const solarAuto = useMemo(() => calculateSolarPosition(dateTime, latitude, longitude, timezoneHours), [dateTime, latitude, longitude, timezoneHours]);
+  const instantUtcMs = useMemo(
+    () => localDateTimeToUtcMs(dateTime, timezoneHours),
+    [dateTime, timezoneHours],
+  );
+  const solarAuto = useMemo(
+    () => solarPositionFromUtc(instantUtcMs, latitude, longitude, elevationM),
+    [instantUtcMs, latitude, longitude, elevationM],
+  );
   const solar = useMemo<SolarPosition>(() => {
     if (sunMode === "auto") return solarAuto;
     const el = rad(manualSun.elevationDeg);
     const az = rad(manualSun.azimuthDeg);
     return {
+      timeUtcMs: instantUtcMs,
       elevationDeg: manualSun.elevationDeg,
       azimuthDeg: manualSun.azimuthDeg,
       vector: normalize([Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)]),
@@ -890,7 +1272,33 @@ export default function SimulatorClient() {
       sunset: "수동",
       equationOfTimeMin: 0,
     };
-  }, [sunMode, solarAuto, manualSun]);
+  }, [sunMode, solarAuto, manualSun, instantUtcMs]);
+
+  const buildAutomaticWeather = useCallback((startUtcMs: number, endUtcMs: number, stepMinutes: number) => {
+    const fallback = getOfflineWeather({
+      latitudeDeg: latitude,
+      longitudeDeg: longitude,
+      elevationM,
+      start: startUtcMs,
+      end: endUtcMs,
+      stepMinutes,
+      seed: String(seed),
+      offlinePreset: offlinePresetFor(weatherPreset),
+    });
+    return mergePreferredWeather(automaticWeatherSeries, fallback);
+  }, [automaticWeatherSeries, elevationM, latitude, longitude, seed, weatherPreset]);
+
+  const instantWeather = useMemo(() => {
+    if (dataMode === "manual") return weather;
+    const series = buildAutomaticWeather(instantUtcMs, instantUtcMs, 1);
+    return weatherStateFromPoint(series.points[0], weather);
+  }, [buildAutomaticWeather, dataMode, instantUtcMs, weather]);
+
+  const activateAutomaticWeather = useCallback(() => {
+    const series = automaticWeatherSeries ?? buildAutomaticWeather(instantUtcMs, instantUtcMs, 1);
+    setDataMode(automaticDataModeFromSeries(series));
+    setProvenance(provenanceFromSeries(series));
+  }, [automaticWeatherSeries, buildAutomaticWeather, instantUtcMs]);
 
   const sampleGrid = quality === "fast" ? 1 : quality === "precise" ? 5 : 3;
   const simulationYear = Number(dateTime.slice(0, 4));
@@ -902,7 +1310,7 @@ export default function SimulatorClient() {
   ), [panels, topology, circuitEdges]);
   const result = useMemo(
     () => {
-      const computed = evaluateSystem(panels, obstacles, solar, weather, environment, electrical, thermal, inverter, activeRotationAngle, topology, seed, sampleGrid, circuitMode, bypassEnabled);
+      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled);
       if (circuitValidation.isValid) return computed;
       return {
         ...computed,
@@ -913,68 +1321,111 @@ export default function SimulatorClient() {
         losses: [...computed.losses, { name: "배선 검증 실패", value: -computed.dcW, color: "#d64f61" }],
       };
     },
-    [panels, obstacles, solar, weather, environment, electrical, thermal, inverter, activeRotationAngle, topology, seed, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
+    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
+  );
+  const renderPanels = useMemo(
+    () => renderPanelsFromBase(panels, result.panels),
+    [panels, result.panels],
   );
 
   const staticResult = useMemo(
     () => {
-      const computed = evaluateSystem(panels, obstacles, solar, weather, environment, electrical, thermal, inverter, 0, topology, seed, sampleGrid, circuitMode, bypassEnabled);
+      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, 0, topology, iamB0, sampleGrid, circuitMode, bypassEnabled);
       return circuitValidation.isValid ? computed : { ...computed, dcW: 0, acW: 0, currentA: 0, inverterEfficiency: 0 };
     },
-    [panels, obstacles, solar, weather, environment, electrical, thermal, inverter, topology, seed, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
+    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
   );
 
   const buildDaySeries = useCallback((targetPanels: ScenePanel[], day: string, stepMinutes: number, modelMode: "simple" | "single-diode") => {
     const points: DailyPoint[] = [];
-    const dayStart = Date.parse(`${day}T00:00:00Z`);
-    for (let minute = 0; minute <= 1440; minute += stepMinutes) {
-      const time = new Date(dayStart + minute * 60_000).toISOString().slice(0, 16);
+    const dayStart = localDayStartUtcMs(day, timezoneHours);
+    const weatherSeries = buildAutomaticWeather(dayStart, dayStart + 86_400_000, stepMinutes);
+    const samplesPerTurn = quality === "precise" ? 72 : quality === "balanced" ? 24 : 12;
+    const phaseVariant: SimulationVariantWorkItem | null = rotation.mode === "fixed"
+      ? {
+          variantId: "ui-daily-rotation",
+          panelCount: targetPanels.length,
+          totalPanelAreaM2: targetPanels.length * PANEL_AREA_M2,
+          referenceEfficiency: clamp(electrical.efficiency / 100, 0, 1),
+          rotation: {
+            mode: "fixed",
+            rpm: rotation.rpm,
+            initialAngleRad: 0,
+            referenceTimestamp: dayStart,
+          },
+          rotationPhaseSamples: samplesPerTurn,
+        }
+      : null;
+    const phaseInput: SimulationKernelInput | null = phaseVariant
+      ? { variants: [phaseVariant], weather: weatherSeries.points }
+      : null;
+
+    for (const [stepIndex, weatherPoint] of weatherSeries.points.entries()) {
+      const minute = Math.round((weatherPoint.timeUtcMs - dayStart) / 60_000);
       const displayHour = Math.floor(minute / 60);
       const displayMinute = minute % 60;
-      const sunAtTime = calculateSolarPosition(time, latitude, longitude, timezoneHours);
-      const clearFactor = Math.max(0, Math.sin(rad(sunAtTime.elevationDeg)));
-      const weatherAtTime = weatherPreset === "night"
-        ? WEATHER_PRESETS.night
-        : {
-            ...weather,
-            ghi: weather.ghi * Math.min(1, clearFactor),
-            dni: weather.dni * Math.sqrt(clearFactor),
-            dhi: weather.dhi * (0.55 + 0.45 * clearFactor),
-            ambientC: weather.ambientC - 6 * Math.cos((minute / 1440) * Math.PI * 2),
-          };
-      const requiresPhaseAverage = rotation.mode === "fixed" && Math.abs(rotation.rpm) * stepMinutes >= 0.5;
-      const phaseCount = requiresPhaseAverage ? quality === "precise" ? 72 : quality === "balanced" ? 24 : 12 : 1;
+      const sunAtTime = solarPositionFromUtc(
+        weatherPoint.timeUtcMs,
+        latitude,
+        longitude,
+        elevationM,
+      );
+      const weatherAtTime = weatherStateFromPoint(weatherPoint, weather);
+      // The worker's quadrature folds any number of complete turns into one
+      // periodic cycle and preserves a weighted residual arc. This avoids the
+      // severe phase alias caused by capping samples along hundreds of turns.
+      const phaseSamples = phaseInput && phaseVariant
+        ? rotationIntervalSamples({
+            input: phaseInput,
+            variant: phaseVariant,
+            weather: weatherPoint,
+            stepIndex,
+          })
+        : [{ angleRad: 0, weight: 1, intervalAveraged: false }];
       let dc = 0;
       let ac = 0;
       let poa = 0;
       let temperature = 0;
-      for (let phase = 0; phase < phaseCount; phase += 1) {
-        const angle = rotation.mode === "fixed"
-          ? requiresPhaseAverage
-            ? (phase / phaseCount) * Math.PI * 2
-            : (rotation.rpm * 2 * Math.PI * minute) % (Math.PI * 2)
-          : 0;
-        const calculated = evaluateSystem(targetPanels, obstacles, sunAtTime, weatherAtTime, environment, electrical, thermal, inverter, angle, topology, seed + minute + Math.round(dayStart / 86_400_000) + phase, quality === "precise" ? 3 : 1, modelMode, bypassEnabled);
+      let aoi = 0;
+      let etaCos = 0;
+      let iam = 0;
+      let etaAngle = 0;
+      for (const phase of phaseSamples) {
+        const calculated = evaluateSystem(targetPanels, obstacles, sunAtTime, weatherAtTime, environment, electrical, thermal, inverter, phase.angleRad, topology, iamB0, quality === "precise" ? 3 : 1, modelMode, bypassEnabled);
         const sample = targetPanels === panels && !circuitValidation.isValid
           ? { ...calculated, dcW: 0, acW: 0 }
           : calculated;
-        dc += sample.dcW / phaseCount;
-        ac += sample.acW / phaseCount;
-        poa += (sample.panels.reduce((sum, item) => sum + item.poaWm2, 0) / Math.max(1, sample.panels.length)) / phaseCount;
-        temperature += (sample.panels.reduce((sum, item) => sum + item.temperatureC, 0) / Math.max(1, sample.panels.length)) / phaseCount;
+        dc += sample.dcW * phase.weight;
+        ac += sample.acW * phase.weight;
+        temperature += (sample.panels.reduce((sum, item) => sum + item.temperatureC, 0) / Math.max(1, sample.panels.length)) * phase.weight;
+        const diagnosticPanel = sample.panels.find((item) => item.id === selectedPanelId)
+          ?? sample.panels[0];
+        poa += (diagnosticPanel?.poaWm2 ?? 0) * phase.weight;
+        aoi += (diagnosticPanel?.incidenceDeg ?? 0) * phase.weight;
+        etaCos += (diagnosticPanel?.etaCos ?? 0) * phase.weight;
+        iam += (diagnosticPanel?.iam ?? 0) * phase.weight;
+        etaAngle += (diagnosticPanel?.etaAngle ?? 0) * phase.weight;
       }
       points.push({
         time: minute === 1440 ? "24:00" : `${String(displayHour).padStart(2, "0")}:${String(displayMinute).padStart(2, "0")}`,
         minute,
+        intervalMean: phaseSamples[0]?.intervalAveraged ?? false,
         dc,
         ac,
         poa,
         temperature,
         elevation: sunAtTime.elevationDeg,
+        aoi,
+        etaCos,
+        iam,
+        etaAngle,
+        ghi: weatherPoint.ghiWm2,
+        dni: weatherPoint.dniWm2,
+        dhi: weatherPoint.dhiWm2,
       });
     }
     return points;
-  }, [latitude, longitude, timezoneHours, weatherPreset, weather, rotation, obstacles, environment, electrical, thermal, inverter, topology, seed, quality, bypassEnabled, panels, circuitValidation.isValid]);
+  }, [buildAutomaticWeather, timezoneHours, latitude, longitude, elevationM, weather, rotation, quality, obstacles, environment, electrical, thermal, inverter, topology, iamB0, bypassEnabled, panels, circuitValidation.isValid, selectedPanelId]);
 
   const dailySeries = useMemo<DailyPoint[]>(
     () => buildDaySeries(panels, dateTime.slice(0, 10), 15, circuitMode),
@@ -1014,8 +1465,8 @@ export default function SimulatorClient() {
   }, [annualEnergyWhByVariant, buildDaySeries, compareShapes, simulationYear, tiltDeg, panelAzimuthDeg]);
   const compareInstantByShape = useMemo(() => Object.fromEntries(compareShapes.map((shapeName) => {
     const targetPanels = generatePreset(shapeName, tiltDeg, panelAzimuthDeg);
-    return [shapeName, evaluateSystem(targetPanels, obstacles, solar, weather, environment, electrical, thermal, inverter, activeRotationAngle, topology, seed, 1, circuitMode, bypassEnabled)];
-  })), [compareShapes, tiltDeg, panelAzimuthDeg, obstacles, solar, weather, environment, electrical, thermal, inverter, activeRotationAngle, topology, seed, circuitMode, bypassEnabled]);
+    return [shapeName, evaluateSystem(targetPanels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, 1, circuitMode, bypassEnabled)];
+  })), [compareShapes, tiltDeg, panelAzimuthDeg, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, circuitMode, bypassEnabled]);
   const bestCompareEnergy = Math.max(0, ...compareShapes.map((shapeName) => compareEnergyByShape[shapeName] ?? 0));
   const compareChartData = compareShapes.map((shapeName) => ({
     name: PRESET_LABELS[shapeName],
@@ -1023,6 +1474,14 @@ export default function SimulatorClient() {
     normalized: (compareEnergyByShape[shapeName] ?? 0) / (20 * PANEL_AREA_M2),
   }));
   const selectedPanel = result.panels.find((item) => item.id === selectedPanelId) ?? result.panels[0] ?? null;
+  const selectedBasePanel = selectedPanel
+    ? panels.find((item) => item.id === selectedPanel.id) ?? null
+    : null;
+  const selectedPanelAcW = selectedPanel
+    ? result.acW * selectedPanel.powerW /
+      Math.max(1e-12, result.panels.reduce((sum, item) => sum + Math.max(0, item.powerW), 0))
+    : 0;
+  const automaticSourceLabel = automaticWeatherSeries?.provenance.labelKo ?? "모델 추정값";
   const overlaps = useMemo(() => {
     const pairs: string[] = [];
     panels.forEach((a, index) => panels.slice(index + 1).forEach((b) => {
@@ -1047,6 +1506,8 @@ export default function SimulatorClient() {
     weather,
     dataMode,
     provenance,
+    automaticWeatherSeries: safeStoredWeatherSeries(automaticWeatherSeries),
+    iamB0,
     seed,
     environmentName,
     environment,
@@ -1060,7 +1521,7 @@ export default function SimulatorClient() {
     bypassEnabled,
     gltfReference: gltfName ? { fileName: gltfName, embedded: false } : null,
     resultSettings: { quality, sampleGrid },
-  }), [scenarioName, preset, panels, obstacles, latitude, longitude, elevationM, timezoneHours, dateTime, sunMode, manualSun, weatherPreset, weather, dataMode, provenance, seed, environmentName, environment, electrical, thermal, inverter, rotation, topology, circuitEdges, circuitMode, bypassEnabled, gltfName, quality, sampleGrid]);
+  }), [scenarioName, preset, panels, obstacles, latitude, longitude, elevationM, timezoneHours, dateTime, sunMode, manualSun, weatherPreset, weather, dataMode, provenance, automaticWeatherSeries, iamB0, seed, environmentName, environment, electrical, thermal, inverter, rotation, topology, circuitEdges, circuitMode, bypassEnabled, gltfName, quality, sampleGrid]);
 
   useEffect(() => {
     if (hydrated.current) return;
@@ -1084,7 +1545,29 @@ export default function SimulatorClient() {
           setTimezoneHours(parsed.location.timezoneHours);
         }
         setDateTime(parsed.dateTime ?? dateTime);
+        if (parsed.sunMode === "auto" || parsed.sunMode === "manual") setSunMode(parsed.sunMode);
+        if (parsed.manualSun) setManualSun(parsed.manualSun);
         setWeather(parsed.weather ?? weather);
+        const restoredSeries = safeStoredWeatherSeries(parsed.automaticWeatherSeries);
+        setAutomaticWeatherSeries(restoredSeries);
+        const storedMode = isDataMode(parsed.dataMode) ? parsed.dataMode : "manual";
+        const restoredMode = storedMode === "manual" || storedMode === "offline" || restoredSeries
+          ? storedMode
+          : "offline";
+        setDataMode(restoredMode);
+        if (isStoredProvenance(parsed.provenance) && restoredMode === storedMode) {
+          setProvenance(parsed.provenance);
+        } else if (restoredMode === "offline") {
+          setProvenance({
+            provider: "내장 오프라인 모델",
+            kind: "모델 추정값",
+            retrievedAt: "—",
+            resolution: "저장된 원자료 없음",
+            spatial: "위치별 Haurwitz + Erbs",
+            fallbackReason: "저장 프로젝트에 원 기상 시계열이 없어 오프라인 모델로 전환",
+          });
+        }
+        if (Number.isFinite(parsed.iamB0)) setIamB0(clamp(Number(parsed.iamB0), 0, 1));
         setElectrical(parsed.electrical ?? electrical);
         setThermal(parsed.thermal ?? thermal);
         setInverter(parsed.inverter ?? inverter);
@@ -1116,12 +1599,7 @@ export default function SimulatorClient() {
   useEffect(() => {
     if (!playing) return;
     const interval = window.setInterval(() => {
-      setDateTime((current) => {
-        const [date, time] = current.split("T");
-        const [hour, minute] = time.split(":").map(Number);
-        const total = (hour * 60 + minute + playSpeed) % 1440;
-        return `${date}T${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
-      });
+      setDateTime((current) => advanceLocalDateTime(current, playSpeed));
     }, 500);
     return () => window.clearInterval(interval);
   }, [playing, playSpeed]);
@@ -1142,7 +1620,7 @@ export default function SimulatorClient() {
       } else {
         const currentAngle = rotationAngleRef.current;
         const currentOmega = autoOmegaRef.current;
-        const windTorque = 0.5 * environment.airDensity * rotation.dragCoefficient * PANEL_AREA_M2 * weather.windMs * weather.windMs * 0.06 * Math.sin(rad(weather.windDirectionDeg) - currentAngle);
+        const windTorque = 0.5 * environment.airDensity * rotation.dragCoefficient * PANEL_AREA_M2 * instantWeather.windMs * instantWeather.windMs * 0.06 * Math.sin(rad(instantWeather.windDirectionDeg) - currentAngle);
         const friction = rotation.friction * Math.tanh(currentOmega / 0.01);
         const alpha = (windTorque - rotation.damping * currentOmega - friction) / Math.max(rotation.inertia, 1e-6);
         const maxOmega = (rotation.maxRpm * 2 * Math.PI) / 60;
@@ -1157,7 +1635,7 @@ export default function SimulatorClient() {
       }
     }, 50);
     return () => window.clearInterval(interval);
-  }, [rotation, environment.airDensity, weather.windMs, weather.windDirectionDeg]);
+  }, [rotation, environment.airDensity, instantWeather.windMs, instantWeather.windDirectionDeg]);
 
   useEffect(() => () => {
     if (gltfUrl) URL.revokeObjectURL(gltfUrl);
@@ -1264,46 +1742,32 @@ export default function SimulatorClient() {
   const loadOpenMeteo = async () => {
     setDataLoading(true);
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 9000);
     try {
-      const params = new URLSearchParams({
-        latitude: String(latitude),
-        longitude: String(longitude),
-        current: "temperature_2m,cloud_cover,wind_speed_10m,wind_direction_10m,wind_gusts_10m,shortwave_radiation,direct_normal_irradiance,diffuse_radiation",
-        wind_speed_unit: "ms",
-        timezone: "auto",
+      const dayStart = localDayStartUtcMs(dateTime.slice(0, 10), timezoneHours);
+      const series = await fetchOpenMeteo({
+        latitudeDeg: latitude,
+        longitudeDeg: longitude,
+        elevationM,
+        start: dayStart,
+        end: dayStart + 86_400_000,
+      }, {
+        signal: controller.signal,
+        timeoutMs: 9_000,
+        endpoint: "https://api.open-meteo.com/v1/forecast?wind_speed_unit=ms",
       });
-      const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = await response.json() as {
-        current?: Record<string, unknown> & { interval?: number };
-        latitude?: number;
-        longitude?: number;
-      };
-      const current = payload.current;
-      if (!current || !Number.isFinite(current.shortwave_radiation)) throw new Error("invalid-schema");
-      const numeric = (key: string, fallback: number) => Number.isFinite(Number(current[key])) ? Number(current[key]) : fallback;
-      setWeather((value) => ({
-        ...value,
-        ghi: Math.max(0, numeric("shortwave_radiation", value.ghi)),
-        dni: Math.max(0, numeric("direct_normal_irradiance", value.dni)),
-        dhi: Math.max(0, numeric("diffuse_radiation", value.dhi)),
-        ambientC: numeric("temperature_2m", value.ambientC),
-        cloudPct: numeric("cloud_cover", value.cloudPct),
-        windMs: numeric("wind_speed_10m", value.windMs),
-        windDirectionDeg: numeric("wind_direction_10m", value.windDirectionDeg),
-        gustMs: numeric("wind_gusts_10m", value.gustMs),
-      }));
-      setDataMode("open-meteo");
-      setProvenance({ provider: "Open-Meteo Best Match", kind: "현재시각 모델값", retrievedAt: new Date().toISOString(), resolution: `${current.interval ?? 900}초 모델 간격`, spatial: `${payload.latitude?.toFixed?.(3)}, ${payload.longitude?.toFixed?.(3)} · 모델별 상이` });
-      setToast("Open-Meteo 모델 자료를 불러왔습니다.");
+      setAutomaticWeatherSeries(series);
+      setDataMode(dataModeFromSeries(series));
+      setProvenance(provenanceFromSeries(series));
+      setToast(series.provenance.provider === "offline"
+        ? "Open-Meteo 실패 — 결정론적 오프라인 시계열로 전환했습니다."
+        : `Open-Meteo ${series.points.length}개 시간점을 불러왔습니다.`);
     } catch (error) {
-      setDataMode("offline");
-      setProvenance({ provider: "내장 오프라인 맑은하늘", kind: "모델 추정", retrievedAt: new Date().toISOString(), resolution: "15분 생성", spatial: "지점 계산", fallbackReason: error instanceof Error ? error.message : "network" });
-      setWeather(WEATHER_PRESETS.clear);
-      setToast("API 실패 — 오프라인 모델 추정값으로 전환했습니다.");
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setToast("Open-Meteo 조회를 취소했습니다.");
+      } else {
+        setToast(error instanceof Error ? error.message : "Open-Meteo 조회에 실패했습니다.");
+      }
     } finally {
-      window.clearTimeout(timeout);
       setDataLoading(false);
     }
   };
@@ -1313,22 +1777,13 @@ export default function SimulatorClient() {
     if (!file) return;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text);
-      const row = parsed?.outputs?.tmy_hourly?.[0] ?? parsed?.outputs?.hourly?.[0] ?? parsed?.properties?.parameter ?? parsed?.hourly?.[0];
-      if (!row) throw new Error("지원되는 JSON 구조가 아닙니다.");
-      const value = (candidate: unknown, fallback: number) => Number.isFinite(Number(candidate)) ? Number(candidate) : fallback;
-      setWeather((current) => ({
-        ...current,
-        ghi: value(row["G(h)"] ?? row.GHI ?? row.ALLSKY_SFC_SW_DWN, current.ghi),
-        dni: value(row["Gb(n)"] ?? row.DNI, current.dni),
-        dhi: value(row["Gd(h)"] ?? row.DHI, current.dhi),
-        ambientC: value(row.T2m ?? row.T2M, current.ambientC),
-        windMs: value(row.WS10m ?? row.WS10M, current.windMs),
-        windDirectionDeg: value(row.WD10m ?? row.WD10M, current.windDirectionDeg),
-      }));
+      const series = kind === "pvgis-file"
+        ? importPvgisJson(text)
+        : normalizeNasaPowerResponse(JSON.parse(text));
+      setAutomaticWeatherSeries(series);
       setDataMode(kind);
-      setProvenance({ provider: kind === "pvgis-file" ? "PVGIS 5.3 파일" : "NASA POWER 파일", kind: kind === "pvgis-file" ? "대표년(TMY) / 가져오기" : "위성·재분석 / 가져오기", retrievedAt: new Date().toISOString(), resolution: "원본 파일 메타데이터 참조", spatial: "가져온 격자" });
-      setToast(`${file.name} 자료를 불러왔습니다.`);
+      setProvenance(provenanceFromSeries(series));
+      setToast(`${file.name}에서 ${series.points.length.toLocaleString("ko-KR")}개 시간점을 불러왔습니다.`);
     } catch (error) {
       setToast(error instanceof Error ? error.message : "파일을 읽지 못했습니다.");
     } finally {
@@ -1384,23 +1839,7 @@ export default function SimulatorClient() {
       const offsetMs = timezoneHours * 3_600_000;
       const startMs = Date.UTC(year, 0, 1) - offsetMs;
       const endMs = Date.UTC(year + 1, 0, 1) - offsetMs;
-      const offlinePreset: OfflineWeatherPreset = {
-        clear: "clear",
-        partly: "partly-cloudy",
-        overcast: "overcast",
-        rain: "rain",
-        night: "night",
-      }[weatherPreset] as OfflineWeatherPreset;
-      const weatherSeries = getOfflineWeather({
-        latitudeDeg: latitude,
-        longitudeDeg: longitude,
-        elevationM,
-        start: startMs,
-        end: endMs,
-        stepMinutes: 60,
-        seed: String(seed),
-        offlinePreset,
-      });
+      const weatherSeries = buildAutomaticWeather(startMs, endMs, 60);
       const physicsElectrical = toPhysicsElectrical(electrical);
       const physicsThermal = toPhysicsThermal(thermal);
       const physicsInverter = toPhysicsInverter(inverter);
@@ -1414,13 +1853,24 @@ export default function SimulatorClient() {
           referenceEfficiency: physicsElectrical.efficiency,
           panels: sourcePanels.map((item) => {
             const normal = normalFromQuaternion(item.quaternion);
+            const sampleAxisU = rotateVectorByQuaternion(item.quaternion, [1, 0, 0]);
+            const sampleAxisV = rotateVectorByQuaternion(item.quaternion, [0, 1, 0]);
             return {
               panelId: item.id,
+              positionM: { x: item.position[0], y: item.position[1], z: item.position[2] },
               normal: { x: normal[0], y: normal[1], z: normal[2] },
+              quaternion: {
+                x: item.quaternion[0],
+                y: item.quaternion[1],
+                z: item.quaternion[2],
+                w: item.quaternion[3],
+              },
+              sampleAxisU: { x: sampleAxisU[0], y: sampleAxisU[1], z: sampleAxisU[2] },
+              sampleAxisV: { x: sampleAxisV[0], y: sampleAxisV[1], z: sampleAxisV[2] },
               areaM2: PANEL_AREA_M2,
               efficiency: physicsElectrical.efficiency,
               albedo: weather.albedo,
-              iam: { model: "ashrae" as const, b0: 0.05 },
+              iam: { model: "ashrae" as const, b0: clamp(iamB0, 0, 1) },
               diffuseModel: "hay-davies" as const,
               soilingLossFraction: clamp(weather.soilingPct / 100, 0, 1),
               heightM: Math.max(0.03, item.position[1]),
@@ -1437,6 +1887,9 @@ export default function SimulatorClient() {
             : rotation.mode === "auto"
               ? { mode: "fixed" as const, rpm: (autoOmega * 60) / (2 * Math.PI), initialAngleRad: 0, referenceTimestamp: startMs }
               : { mode: "static" as const, angleRad: 0 },
+          rotationPhaseSamples: rotation.mode === "fixed"
+            ? quality === "precise" ? 72 : quality === "balanced" ? 24 : 12
+            : 1,
         };
       });
       const input = {
@@ -1454,7 +1907,7 @@ export default function SimulatorClient() {
           inverter: physicsInverter,
           panelDefaults: {
             albedo: weather.albedo,
-            iam: { model: "ashrae" as const, b0: 0.05 },
+            iam: { model: "ashrae" as const, b0: clamp(iamB0, 0, 1) },
             diffuseModel: "hay-davies" as const,
             soilingLossFraction: clamp(weather.soilingPct / 100, 0, 1),
           },
@@ -1558,6 +2011,26 @@ export default function SimulatorClient() {
       setObstacles(migrated.obstacles ?? []);
       setCircuitEdges(migrated.circuitEdges ?? []);
       setWeather(migrated.weather ?? WEATHER_PRESETS.clear);
+      const restoredSeries = safeStoredWeatherSeries(migrated.automaticWeatherSeries);
+      setAutomaticWeatherSeries(restoredSeries);
+      const storedMode = isDataMode(migrated.dataMode) ? migrated.dataMode : "manual";
+      const restoredMode = storedMode === "manual" || storedMode === "offline" || restoredSeries
+        ? storedMode
+        : "offline";
+      setDataMode(restoredMode);
+      if (isStoredProvenance(migrated.provenance) && restoredMode === storedMode) {
+        setProvenance(migrated.provenance);
+      } else if (restoredMode === "offline") {
+        setProvenance({
+          provider: "내장 오프라인 모델",
+          kind: "모델 추정값",
+          retrievedAt: "—",
+          resolution: "저장된 원자료 없음",
+          spatial: "위치별 Haurwitz + Erbs",
+          fallbackReason: "가져온 프로젝트에 원 기상 시계열이 없어 오프라인 모델로 전환",
+        });
+      }
+      if (Number.isFinite(migrated.iamB0)) setIamB0(clamp(Number(migrated.iamB0), 0, 1));
       setEnvironment(migrated.environment ?? ENVIRONMENTS.plain);
       setElectrical(migrated.electrical ?? DEFAULT_ELECTRICAL);
       setThermal(migrated.thermal ?? DEFAULT_THERMAL);
@@ -1653,7 +2126,7 @@ export default function SimulatorClient() {
           <div className="top-context">
             <Pill tone="data"><Database size={12} /> {provenance.kind}</Pill>
             <span className="context-item"><Sun size={14} /> {solar.elevationDeg.toFixed(1)}°</span>
-            <span className="context-item"><Wind size={14} /> {weather.windMs.toFixed(1)} m/s</span>
+            <span className="context-item"><Wind size={14} /> {instantWeather.windMs.toFixed(1)} m/s</span>
           </div>
           <div className="top-actions">
             <span className={`save-state ${saveStatus}`}>
@@ -1709,7 +2182,7 @@ export default function SimulatorClient() {
                   <div><Pill tone="good"><span className="status-dot" /> 실시간</Pill><span>{PRESET_LABELS[preset]} · {panels.length}개 · {(panels.length * PANEL_AREA_M2).toFixed(4)} m²</span></div>
                   <div><button className={showNormals ? "active" : ""} onClick={() => setShowNormals(!showNormals)}><Move3D size={15} /> 법선</button><button className={showRays ? "active" : ""} onClick={() => setShowRays(!showRays)}><Sun size={15} /> 광선</button></div>
                 </div>
-                <ThreeWorkspace panels={result.panels} obstacles={obstacles} selectedPanelId={selectedPanelId} selectedObstacleId={null} onSelectPanel={setSelectedPanelId} onPanelTransform={transformPanel} transformMode={transformMode === "scale" ? "translate" : transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
+                <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={selectedPanelId} selectedObstacleId={null} onSelectPanel={setSelectedPanelId} onPanelTransform={transformPanel} transformMode={transformMode === "scale" ? "translate" : transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
                 <div className="scene-bottom-metrics">
                   <div><span>현재 DC</span><strong>{formatPower(result.dcW)}</strong></div><div><span>현재 AC</span><strong>{formatPower(result.acW)}</strong></div><div><span>평균 POA</span><strong>{(result.panels.reduce((sum, item) => sum + item.poaWm2, 0) / Math.max(1, result.panels.length)).toFixed(0)} W/m²</strong></div><div><span>회전 속도</span><strong>{rotationRpm.toFixed(2)} RPM</strong></div>
                 </div>
@@ -1718,16 +2191,25 @@ export default function SimulatorClient() {
               <div className="inspector-rail scroll-area">
                 <PanelHeader title="패널 검사기" subtitle={selectedPanel ? `${selectedPanel.label} · ${selectedPanel.id}` : "패널을 선택하세요"} action={selectedPanel ? <Pill tone={selectedPanel.bypassActive ? "warn" : "good"}>{selectedPanel.bypassActive ? "바이패스" : "정상"}</Pill> : null} />
                 {selectedPanel ? <>
-                  <div className="inspector-hero"><div className="panel-swatch" style={{ "--level": `${Math.min(100, selectedPanel.effectiveWm2 / 10)}%` } as React.CSSProperties}><Sun size={22} /></div><div><span>패널 출력</span><strong>{formatPower(selectedPanel.powerW)}</strong><small>{selectedPanel.effectiveWm2.toFixed(0)} W/m² · {selectedPanel.temperatureC.toFixed(1)}°C</small></div></div>
+                  <div className="inspector-hero"><div className="panel-swatch" style={{ "--level": `${Math.min(100, Math.max(0, selectedPanel.effectiveWm2 / 10)).toFixed(4)}%` } as React.CSSProperties}><Sun size={22} /></div><div><span>패널 출력</span><strong>{formatPower(selectedPanel.powerW)}</strong><small>{selectedPanel.effectiveWm2.toFixed(0)} W/m² · {selectedPanel.temperatureC.toFixed(1)}°C</small></div></div>
                   <div className="trace-list compact-trace">
-                    <div><span>위치 x / y / z</span><strong>{selectedPanel.position.map((value) => value.toFixed(3)).join(" / ")} m</strong></div>
-                    <div><span>전면 법선</span><strong>{selectedPanel.normal.map((value) => value.toFixed(3)).join(", ")}</strong></div>
-                    <div><span>입사각 · IAM</span><strong>{selectedPanel.incidenceDeg.toFixed(1)}° · {selectedPanel.iam.toFixed(3)}</strong></div>
-                    <div><span>태양 가시율</span><strong>{(selectedPanel.visibility * 100).toFixed(0)}% · {sampleGrid}×{sampleGrid}</strong></div>
+                    <div><span>태양 고도 / 방위</span><strong>{solar.elevationDeg.toFixed(2)}° / {solar.azimuthDeg.toFixed(2)}°</strong></div>
+                    <div><span>패널 경사 / 방위</span><strong>{selectedPanel.panelTiltDeg.toFixed(2)}° / {selectedPanel.panelAzimuthDeg.toFixed(2)}°</strong></div>
+                    <div><span>AOI / n·s</span><strong>{selectedPanel.incidenceDeg.toFixed(2)}° / {selectedPanel.cosineIncidence.toFixed(4)}</strong></div>
+                    <div><span>패널 변환효율</span><strong>{electrical.efficiency.toFixed(2)}%</strong></div>
+                    <div><span>기하학적 입사효율 ηcos</span><strong>{selectedPanel.etaCos.toFixed(4)}</strong></div>
+                    <div><span>광학 IAM / 종합 ηangle</span><strong>{selectedPanel.iam.toFixed(4)} / {selectedPanel.etaAngle.toFixed(4)}</strong></div>
+                    <div><span>음영 가시율 / DNI</span><strong>{(selectedPanel.visibility * 100).toFixed(1)}% / {instantWeather.dni.toFixed(1)} W/m²</strong></div>
+                    <div><span>직달 / 산란 / 지면</span><strong>{selectedPanel.beamWm2.toFixed(1)} / {selectedPanel.skyWm2.toFixed(1)} / {selectedPanel.groundWm2.toFixed(1)}</strong></div>
+                    <div><span>총 POA</span><strong>{selectedPanel.poaWm2.toFixed(2)} W/m²</strong></div>
+                    <div><span>최종 유효 일사량</span><strong>{selectedPanel.effectiveWm2.toFixed(2)} W/m²</strong></div>
                     <div><span>국부 풍속</span><strong>{selectedPanel.localWindMs.toFixed(2)} m/s</strong></div>
                     <div><span>동작점</span><strong>{selectedPanel.voltageV.toFixed(3)} V · {selectedPanel.currentA.toFixed(3)} A</strong></div>
+                    <div><span>패널 DC / 배분 AC</span><strong>{selectedPanel.powerW.toFixed(4)} / {selectedPanelAcW.toFixed(4)} W</strong></div>
                   </div>
-                  <div className="control-section"><h4>선택 패널 좌표</h4>{([0, 1, 2] as const).map((axis) => <Field key={axis} label={["X · 동", "Y · 높이", "Z · 북"][axis]} unit="m" step={0.001} value={selectedPanel.position[axis]} onChange={(value) => transformPanel(selectedPanel.id, selectedPanel.position.map((item, index) => index === axis ? value : item) as Vec3Tuple, selectedPanel.quaternion)} />)}</div>
+                  {!selectedPanel.ghiClosure.isClosed ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>GHI 폐합 불일치</strong><span>잔차 {selectedPanel.ghiClosure.residualWm2.toFixed(1)} W/m² · 허용 {selectedPanel.ghiClosure.toleranceWm2.toFixed(1)} W/m²</span></div></div> : null}
+                  {selectedPanel.incidenceDeg >= 80 ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>AOI 80° 진단 한계 초과</strong><span>ASHRAE IAM은 큰 입사각에서 실측 검증이 필요합니다.</span></div></div> : null}
+                  {selectedBasePanel ? <div className="control-section"><h4>선택 패널 기준 좌표</h4>{([0, 1, 2] as const).map((axis) => <Field key={axis} label={["X · 동", "Y · 높이", "Z · 북"][axis]} unit="m" step={0.001} value={selectedBasePanel.position[axis]} onChange={(value) => transformPanel(selectedBasePanel.id, selectedBasePanel.position.map((item, index) => index === axis ? value : item) as Vec3Tuple, selectedBasePanel.quaternion)} />)}</div> : null}
                   <button className="full secondary" onClick={() => setScreen("evidence")}><BookOpenCheck size={15} /> 이 패널 계산 전체 추적</button>
                 </> : <EmptyState icon={Move3D} title="선택된 패널 없음" text="3D 장면에서 패널을 클릭하세요." />}
                 {overlaps.length ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>겹침 {overlaps.length}건 감지</strong><span>{overlaps.slice(0, 3).join(", ")}</span></div></div> : <div className="ok-card"><Check size={16} /><span>패널 겹침이 없습니다.</span></div>}
@@ -1750,7 +2232,7 @@ export default function SimulatorClient() {
 
                 <section className="surface-card env-scene">
                   <div className="scene-toolbar"><div><Pill tone="data">광선 차폐 장면</Pill><span>렌더링 그림자와 수치 raycast 분리</span></div><label className="file-button"><Upload size={15} /> GLB/GLTF 불러오기<input type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" onChange={handleGltf} /></label></div>
-                  <ThreeWorkspace panels={result.panels} obstacles={obstacles} selectedPanelId={null} selectedObstacleId={selectedObstacleId} onSelectPanel={setSelectedPanelId} onSelectObstacle={setSelectedObstacleId} onPanelTransform={transformPanel} onObstacleTransform={transformObstacle} transformMode={transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
+                  <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={null} selectedObstacleId={selectedObstacleId} onSelectPanel={setSelectedPanelId} onSelectObstacle={setSelectedObstacleId} onPanelTransform={transformPanel} onObstacleTransform={transformObstacle} transformMode={transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
                   {gltfName ? <div className="asset-chip"><Box size={14} /> {gltfName}<button onClick={() => { if (gltfUrl) URL.revokeObjectURL(gltfUrl); setGltfUrl(null); setGltfName(null); setObstacles((items) => items.filter((item) => !item.label.startsWith("GLB 차폐 경계"))); setSelectedObstacleId(null); }} aria-label="가져온 모델 제거"><X size={13} /></button></div> : null}
                 </section>
 
@@ -1792,25 +2274,63 @@ export default function SimulatorClient() {
                 <Metric label="순간 DC" value={formatPower(result.dcW)} detail={`${result.voltageV.toFixed(2)} V · ${result.currentA.toFixed(2)} A`} icon={Zap} accent="amber" />
                 <Metric label="순간 AC" value={formatPower(result.acW)} detail={`인버터 ${(result.inverterEfficiency * 100).toFixed(1)}%`} icon={Activity} accent="teal" />
                 <Metric label="하루 누적" value={formatEnergy(dailyWh)} detail="15분 · 사다리꼴 적분" icon={Sun} accent="blue" />
-                <Metric label="연간 예상" value={formatEnergy(annualWh)} detail="대표월 오프라인 추정" icon={BarChart3} accent="violet" />
+                <Metric label="연간 예상" value={formatEnergy(annualWh)} detail={`${automaticSourceLabel} 우선 · 부족 구간 모델 대체`} icon={BarChart3} accent="violet" />
               </div>
+              <div className="angle-summary-row" aria-label="시스템 입사각 및 음영 진단">
+                <div><span>면적가중 시스템 ηangle</span><strong>{result.areaWeightedEtaAngle.toFixed(4)}</strong><small>ηcos × IAM · 음영 제외</small></div>
+                <div><span>별도 직달 가시율</span><strong>{(result.areaWeightedVisibility * 100).toFixed(1)}%</strong><small>raycast 음영 · 각도 효율과 분리</small></div>
+                <div><span>ASHRAE b₀</span><strong>{iamB0.toFixed(3)}</strong><small>AOI 80° 이상은 경계 경고</small></div>
+              </div>
+              {selectedPanel && (!selectedPanel.ghiClosure.isClosed || selectedPanel.incidenceDeg >= 80) ? <div className="diagnostic-alerts" role="status">
+                {!selectedPanel.ghiClosure.isClosed ? <span><AlertTriangle size={13} /> GHI 폐합 잔차 {selectedPanel.ghiClosure.residualWm2.toFixed(1)} W/m²</span> : null}
+                {selectedPanel.incidenceDeg >= 80 ? <span><AlertTriangle size={13} /> 선택 패널 AOI {selectedPanel.incidenceDeg.toFixed(1)}° — 80° 진단 경계 초과</span> : null}
+              </div> : null}
               <div className="simulation-layout">
                 <aside className="surface-card sim-inputs scroll-area">
                   <PanelHeader title="공통 입력" subtitle="변경 즉시 모든 형상에 동기화" />
-                  <div className="tabs-mini"><button className={sunMode === "auto" ? "active" : ""} onClick={() => setSunMode("auto")}>태양 자동</button><button className={sunMode === "manual" ? "active" : ""} onClick={() => setSunMode("manual")}>수동</button></div>
+                  <div className="tabs-mini"><button className={sunMode === "auto" ? "active" : ""} onClick={() => setSunMode("auto")}>태양 자동</button><button className={sunMode === "manual" ? "active" : ""} onClick={() => setSunMode("manual")}>태양 수동</button></div>
                   {sunMode === "auto" ? <div className="field-grid two"><Field label="위도" unit="°" step={0.0001} value={latitude} min={-90} max={90} onChange={setLatitude} /><Field label="경도" unit="°" step={0.0001} value={longitude} min={-180} max={180} onChange={setLongitude} /><Field label="고도" unit="m" value={elevationM} min={-430} max={6000} onChange={setElevationM} /><Field label="UTC 오프셋" unit="h" step={0.5} value={timezoneHours} min={-12} max={14} onChange={setTimezoneHours} /></div> : <div className="field-grid two"><Field label="태양 고도" unit="°" step={0.1} value={manualSun.elevationDeg} min={-90} max={90} onChange={(value) => setManualSun({ ...manualSun, elevationDeg: value })} /><Field label="태양 방위" unit="°" step={0.1} value={manualSun.azimuthDeg} min={0} max={360} onChange={(value) => setManualSun({ ...manualSun, azimuthDeg: value })} /></div>}
-                  <div className="solar-readout"><div className="sun-disc"><Sun size={24} /></div><div><span>태양 위치</span><strong>{solar.elevationDeg.toFixed(2)}° / {solar.azimuthDeg.toFixed(2)}°</strong><small>일출 {solar.sunrise} · 일몰 {solar.sunset}</small></div></div>
+                  <div className="solar-readout"><div className="sun-disc"><Sun size={24} /></div><div><span>태양 위치 · physics solarPosition</span><strong>{solar.elevationDeg.toFixed(2)}° / {solar.azimuthDeg.toFixed(2)}°</strong><small>{sunMode === "auto" ? `UTC ${new Date(solar.timeUtcMs).toISOString().slice(0, 16).replace("T", " ")} · EoT ${solar.equationOfTimeMin.toFixed(1)}분` : "사용자 수동 벡터 · 단일 순간 계산"}</small></div></div>
 
-                  <h4>기상 프리셋</h4>
-                  <div className="weather-pills">{(["clear", "partly", "overcast", "rain", "night"] as WeatherPreset[]).map((name) => <button key={name} className={weatherPreset === name ? "active" : ""} onClick={() => { setWeatherPreset(name); setWeather(WEATHER_PRESETS[name]); setDataMode("manual"); setProvenance({ provider: "수동 프리셋", kind: "모델 추정 · 수동", retrievedAt: new Date().toISOString(), resolution: "순간 시나리오", spatial: "해당 없음" }); }}>{name === "clear" ? "맑음" : name === "partly" ? "반 구름" : name === "overcast" ? "완전 흐림" : name === "rain" ? "비" : "밤"}</button>)}</div>
-                  <div className="field-grid two"><Field label="GHI" unit="W/m²" value={weather.ghi} min={0} max={1500} onChange={(value) => setWeather({ ...weather, ghi: value })} /><Field label="DNI" unit="W/m²" value={weather.dni} min={0} max={1400} onChange={(value) => setWeather({ ...weather, dni: value })} /><Field label="DHI" unit="W/m²" value={weather.dhi} min={0} max={1000} onChange={(value) => setWeather({ ...weather, dhi: value })} /><Field label="기온" unit="°C" step={0.1} value={weather.ambientC} min={-80} max={80} onChange={(value) => setWeather({ ...weather, ambientC: value })} /><Field label="풍속 10m" unit="m/s" step={0.1} value={weather.windMs} min={0} max={60} onChange={(value) => setWeather({ ...weather, windMs: value })} /><Field label="오염 손실" unit="%" step={0.1} value={weather.soilingPct} min={0} max={95} onChange={(value) => setWeather({ ...weather, soilingPct: value })} /></div>
-                  <button className="full secondary" onClick={loadOpenMeteo} disabled={dataLoading}>{dataLoading ? <LoaderCircle size={15} className="spin" /> : <CloudDownload size={15} />} Open-Meteo 현재 모델 조회</button>
-                  <div className="api-file-row"><label><Database size={14} /> PVGIS 파일<input type="file" accept=".json,application/json" onChange={(event) => handleWeatherFile(event, "pvgis-file")} /></label><label><Database size={14} /> NASA 파일<input type="file" accept=".json,application/json" onChange={(event) => handleWeatherFile(event, "nasa-file")} /></label></div>
+                  <div className="tabs-mini weather-source-tabs"><button type="button" className={dataMode === "manual" ? "active" : ""} onClick={() => { setDataMode("manual"); setProvenance({ provider: "수동 프리셋", kind: "사용자 입력", retrievedAt: new Date().toISOString(), resolution: "순간 시나리오", spatial: "해당 없음" }); }}>순간 수동 기상</button><button type="button" className={dataMode !== "manual" ? "active" : ""} onClick={activateAutomaticWeather}>자동 시계열 현재값</button></div>
+
+                  {dataMode === "manual" ? <>
+                    <h4>순간 수동 복사·기상</h4>
+                    <div className="weather-pills">{(["clear", "partly", "overcast", "rain", "night"] as WeatherPreset[]).map((name) => <button key={name} className={weatherPreset === name ? "active" : ""} onClick={() => { setWeatherPreset(name); setWeather(WEATHER_PRESETS[name]); setDataMode("manual"); setProvenance({ provider: "수동 프리셋", kind: "사용자 입력", retrievedAt: new Date().toISOString(), resolution: "순간 시나리오", spatial: "해당 없음" }); }}>{name === "clear" ? "맑음" : name === "partly" ? "반 구름" : name === "overcast" ? "완전 흐림" : name === "rain" ? "비" : "밤"}</button>)}</div>
+                    <div className="field-grid two"><Field label="GHI" unit="W/m²" value={weather.ghi} min={0} max={1500} onChange={(value) => setWeather({ ...weather, ghi: value })} /><Field label="DNI" unit="W/m²" value={weather.dni} min={0} max={1400} onChange={(value) => setWeather({ ...weather, dni: value })} /><Field label="DHI" unit="W/m²" value={weather.dhi} min={0} max={1000} onChange={(value) => setWeather({ ...weather, dhi: value })} /><Field label="기온" unit="°C" step={0.1} value={weather.ambientC} min={-80} max={80} onChange={(value) => setWeather({ ...weather, ambientC: value })} /><Field label="풍속 10m" unit="m/s" step={0.1} value={weather.windMs} min={0} max={60} onChange={(value) => setWeather({ ...weather, windMs: value })} /></div>
+                    <div className="manual-mode-note"><Info size={14} /> 이 값은 순간 수동 계산에만 쓰이며 일간·월간·연간 시계열을 합성하지 않습니다.</div>
+                  </> : <>
+                    <h4>자동 WeatherSeries</h4>
+                    <div className="auto-weather-readout"><span>현재 시각 GHI / DNI / DHI</span><strong>{instantWeather.ghi.toFixed(1)} / {instantWeather.dni.toFixed(1)} / {instantWeather.dhi.toFixed(1)} W/m²</strong><small>{instantWeather.ambientC.toFixed(1)}°C · {instantWeather.windMs.toFixed(1)} m/s · {automaticSourceLabel}</small></div>
+                    <button className="full secondary" onClick={loadOpenMeteo} disabled={dataLoading}>{dataLoading ? <LoaderCircle size={15} className="spin" /> : <CloudDownload size={15} />} Open-Meteo 선택일 시계열 조회</button>
+                    <div className="api-file-row"><label><Database size={14} /> PVGIS JSON<input type="file" accept=".json,application/json" onChange={(event) => handleWeatherFile(event, "pvgis-file")} /></label><label><Database size={14} /> NASA JSON<input type="file" accept=".json,application/json" onChange={(event) => handleWeatherFile(event, "nasa-file")} /></label></div>
+                    <h4>누락 구간 오프라인 프리셋</h4>
+                    <div className="weather-pills">{(["clear", "partly", "overcast", "rain", "night"] as WeatherPreset[]).map((name) => <button key={name} className={weatherPreset === name ? "active" : ""} onClick={() => setWeatherPreset(name)}>{name === "clear" ? "맑음" : name === "partly" ? "반 구름" : name === "overcast" ? "완전 흐림" : name === "rain" ? "비" : "밤"}</button>)}</div>
+                  </>}
+                  <div className="field-grid two"><Field label="ASHRAE b₀" unit="—" step={0.005} value={iamB0} min={0} max={1} onChange={(value) => setIamB0(clamp(value, 0, 1))} hint="사용자 지정 광학 손실 계수" /><Field label="오염 손실" unit="%" step={0.1} value={weather.soilingPct} min={0} max={95} onChange={(value) => setWeather({ ...weather, soilingPct: value })} /><Field label="지면 반사율" unit="—" step={0.01} value={weather.albedo} min={0} max={1} onChange={(value) => setWeather({ ...weather, albedo: value })} /></div>
+                  <div className="iam-limit-note"><AlertTriangle size={14} /> AOI 80° 이상은 계산값을 표시하되 실측 검증이 필요한 진단 경계로 표시합니다.</div>
                   <div className="provenance-card"><div><Pill tone="data">{provenance.kind}</Pill><strong>{provenance.provider}</strong></div><span>{provenance.resolution} · {provenance.spatial}</span>{provenance.fallbackReason ? <small>대체 이유: {provenance.fallbackReason}</small> : null}</div>
                 </aside>
 
                 <section className="sim-results">
-                  <div className="surface-card chart-card large" id="daily-chart"><PanelHeader title="시간대별 DC · AC 발전" subtitle={`${dateTime.slice(0, 10)} · ${dataMode === "open-meteo" ? "모델 자료" : "동일 seed 오프라인 시나리오"}`} action={<Pill tone="good">E = {dailyWh.toFixed(2)} Wh</Pill>} /><div className="chart-large"><ResponsiveContainer width="100%" height="100%"><AreaChart data={dailySeries}><defs><linearGradient id="dcFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#f4ba4b" stopOpacity={0.35} /><stop offset="100%" stopColor="#f4ba4b" stopOpacity={0.02} /></linearGradient><linearGradient id="acFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#42c6a5" stopOpacity={0.35} /><stop offset="100%" stopColor="#42c6a5" stopOpacity={0.02} /></linearGradient></defs><CartesianGrid stroke="#203743" strokeDasharray="3 6" /><XAxis dataKey="time" interval={7} /><YAxis unit=" W" width={48} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c", borderRadius: 10 }} /><Legend /><Area type="monotone" dataKey="dc" name="DC" stroke="#f4ba4b" fill="url(#dcFill)" strokeWidth={2} /><Area type="monotone" dataKey="ac" name="AC" stroke="#42c6a5" fill="url(#acFill)" strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div>
+                  <div className="surface-card chart-card large" id="daily-chart">
+                    <PanelHeader title="시간대별 입사각 · 복사 · 전력 진단" subtitle={`${dateTime.slice(0, 10)} · ${automaticSourceLabel} 우선 시계열`} action={<Pill tone="good">E = {dailyWh.toFixed(2)} Wh</Pill>} />
+                    <div className="series-toggle-grid" aria-label="그래프 계열 선택">
+                      {(Object.keys(DIAGNOSTIC_SERIES) as DiagnosticSeriesKey[]).map((key) => (
+                        <button
+                          type="button"
+                          key={key}
+                          className={diagnosticSeries[key] ? "active" : ""}
+                          onClick={() => setDiagnosticSeries((current) => ({ ...current, [key]: !current[key] }))}
+                          aria-pressed={diagnosticSeries[key]}
+                        >
+                          <i style={{ background: DIAGNOSTIC_SERIES[key].color }} />
+                          {DIAGNOSTIC_SERIES[key].label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="chart-large"><ResponsiveContainer width="100%" height="100%"><LineChart data={dailySeries}><CartesianGrid stroke="#203743" strokeDasharray="3 6" /><XAxis dataKey="time" interval={7} /><YAxis yAxisId="irradiance" width={48} tickFormatter={(value) => Number(value).toFixed(0)} /><YAxis yAxisId="power" orientation="right" width={42} tickFormatter={(value) => Number(value).toFixed(2)} /><YAxis yAxisId="angle" hide domain={[-90, 180]} /><YAxis yAxisId="factor" hide domain={[0, 1]} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c", borderRadius: 10 }} formatter={(value, name) => [Number(value).toFixed(3), name]} /><Legend />{(Object.keys(DIAGNOSTIC_SERIES) as DiagnosticSeriesKey[]).filter((key) => diagnosticSeries[key]).map((key) => { const descriptor = DIAGNOSTIC_SERIES[key]; return <Line key={key} yAxisId={descriptor.axis} type="monotone" dataKey={key} name={descriptor.label} stroke={descriptor.color} dot={false} strokeWidth={key === "poa" || key === "dc" || key === "ac" ? 2 : 1.5} isAnimationActive={false} />; })}</LineChart></ResponsiveContainer></div>
+                  </div>
                   <div className="sim-lower-grid">
                     <section className="surface-card chart-card"><PanelHeader title="월간 예상 발전량" subtitle="대표월 시나리오 · 시간별 계산" /><div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyData}><CartesianGrid stroke="#203743" strokeDasharray="3 6" vertical={false} /><XAxis dataKey="month" /><YAxis tickFormatter={(value) => `${value.toFixed(0)}`} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c" }} formatter={(value) => [`${Number(value).toFixed(1)} Wh`, "에너지"]} /><Bar dataKey="energy" radius={[5, 5, 0, 0]}>{monthlyData.map((_, index) => <Cell key={index} fill={index === 5 ? "#f4ba4b" : "#3d8295"} />)}</Bar></BarChart></ResponsiveContainer></div></section>
                     <section className="surface-card loss-card"><PanelHeader title="손실 단계 원장" subtitle="각 현상은 계산 사슬에서 한 번만 반영" /><div className="loss-list">{result.losses.map((item) => <div key={item.name}><span><i style={{ background: item.color }} />{item.name}</span><strong className={item.value < 0 ? "negative" : ""}>{item.value >= 0 ? "+" : ""}{item.value.toFixed(3)} W</strong></div>)}</div><button className="full text-button" onClick={() => setScreen("evidence")}>공식과 중간값 열기 <ArrowDownToLine size={14} /></button></section>
@@ -1846,7 +2366,7 @@ export default function SimulatorClient() {
                   const compareResult = compareInstantByShape[name];
                   const energy = compareEnergyByShape[name] ?? 0;
                   const hasWorkerResult = annualEnergyWhByVariant[`compare:${name}`] !== undefined;
-                  return <article className="compare-card surface-card" key={name}><div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div>{energy === bestCompareEnergy ? <Pill tone="good">현재 1위</Pill> : null}</div><div className="mini-scene"><ThreeWorkspace panels={compareResult.panels} obstacles={obstacles} selectedPanelId={null} onSelectPanel={() => undefined} onPanelTransform={() => undefined} transformMode="translate" gridSnap={false} surfaceSnap={false} showNormals={false} showRays={false} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} quality="fast" /></div><div className="compare-kpis"><div><span>순간 AC</span><strong>{compareResult.acW.toFixed(2)} W</strong></div><div><span>연간</span><strong>{formatEnergy(energy)}</strong></div><div><span>면적당</span><strong>{(energy / (20 * PANEL_AREA_M2)).toFixed(0)} Wh/m²</strong></div><div><span>패널/면적</span><strong>20 / 0.050 m²</strong></div></div><div className="rank-bar"><span style={{ width: `${bestCompareEnergy > 0 ? (energy / bestCompareEnergy) * 100 : 0}%` }} /></div><small>{hasWorkerResult ? "8,760 시간점 워커" : "12개 대표일 실제 계산"} · RPM {rotationRpm.toFixed(2)} · DC {compareResult.dcW.toFixed(2)} W · AC {compareResult.acW.toFixed(2)} W</small></article>;
+                  return <article className="compare-card surface-card" key={name}><div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div>{energy === bestCompareEnergy ? <Pill tone="good">현재 1위</Pill> : null}</div><div className="mini-scene"><ThreeWorkspace panels={renderPanelsFromBase(generatePreset(name, tiltDeg, panelAzimuthDeg), compareResult.panels)} obstacles={obstacles} selectedPanelId={null} onSelectPanel={() => undefined} onPanelTransform={() => undefined} transformMode="translate" gridSnap={false} surfaceSnap={false} showNormals={false} showRays={false} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} quality="fast" /></div><div className="compare-kpis"><div><span>순간 AC</span><strong>{compareResult.acW.toFixed(2)} W</strong></div><div><span>연간</span><strong>{formatEnergy(energy)}</strong></div><div><span>면적당</span><strong>{(energy / (20 * PANEL_AREA_M2)).toFixed(0)} Wh/m²</strong></div><div><span>패널/면적</span><strong>20 / 0.050 m²</strong></div></div><div className="rank-bar"><span style={{ width: `${bestCompareEnergy > 0 ? (energy / bestCompareEnergy) * 100 : 0}%` }} /></div><small>{hasWorkerResult ? "8,760 시간점 워커" : "12개 대표일 실제 계산"} · RPM {rotationRpm.toFixed(2)} · DC {compareResult.dcW.toFixed(2)} W · AC {compareResult.acW.toFixed(2)} W</small></article>;
                 })}
               </div>
               <div className="compare-bottom-grid">
@@ -1869,7 +2389,7 @@ export default function SimulatorClient() {
                   <PanelHeader title={POA_MODEL_DESCRIPTOR?.titleKo ?? "패널면 입사 복사량"} subtitle={`model: ${POA_MODEL_DESCRIPTOR?.id ?? "poa.hay-davies"}@${POA_MODEL_DESCRIPTOR?.version ?? "1.0.0"}`} action={<Pill tone="data">실행 중</Pill>} />
                   <div className="formula-hero"><code>{POA_MODEL_DESCRIPTOR?.expression ?? "GPOA = Gbeam + Gsky + Gground"}</code></div>
                   <div className="formula-table"><div className="formula-row header"><span>변수</span><span>한국어 설명</span><span>단위</span><span>현재값</span></div>{[
-                    ["GPOA,i", "선택 패널 총 입사 복사", "W/m²", selectedPanel?.poaWm2.toFixed(2) ?? "—"], ["Vsun,i", "다점 태양 가시율", "0–1", selectedPanel?.visibility.toFixed(3) ?? "—"], ["DNI", "직달 법선 복사조도", "W/m²", weather.dni.toFixed(1)], ["ni · s", "패널 법선과 태양 벡터 내적", "—", selectedPanel ? Math.cos(rad(selectedPanel.incidenceDeg)).toFixed(4) : "—"], ["IAMi", "입사각 반사 계수", "—", selectedPanel?.iam.toFixed(4) ?? "—"], ["Gsky,i", "하늘 산란 성분", "W/m²", selectedPanel?.skyWm2.toFixed(2) ?? "—"], ["Gground,i", "지면 반사 성분", "W/m²", selectedPanel?.groundWm2.toFixed(2) ?? "—"],
+                    ["GPOA,i", "선택 패널 총 입사 복사", "W/m²", selectedPanel?.poaWm2.toFixed(2) ?? "—"], ["Vsun,i", "다점 태양 가시율", "0–1", selectedPanel?.visibility.toFixed(3) ?? "—"], ["DNI", "직달 법선 복사조도", "W/m²", instantWeather.dni.toFixed(1)], ["ni · s", "패널 법선과 태양 벡터 내적", "—", selectedPanel?.cosineIncidence.toFixed(4) ?? "—"], ["ηcos", "발전 방향의 기하 투영", "0–1", selectedPanel?.etaCos.toFixed(4) ?? "—"], ["IAMi", `ASHRAE 광학 계수 · b₀=${iamB0.toFixed(3)}`, "—", selectedPanel?.iam.toFixed(4) ?? "—"], ["ηangle", "ηcos × IAM · 음영 제외", "0–1", selectedPanel?.etaAngle.toFixed(4) ?? "—"], ["Gsky,i", "하늘 산란 성분", "W/m²", selectedPanel?.skyWm2.toFixed(2) ?? "—"], ["Gground,i", "지면 반사 성분", "W/m²", selectedPanel?.groundWm2.toFixed(2) ?? "—"],
                   ].map((row) => <div className="formula-row" key={row[0]}><code>{row[0]}</code><span>{row[1]}</span><span>{row[2]}</span><strong>{row[3]}</strong></div>)}</div>
                   <div className="evidence-cards"><article><h4>채택 근거</h4><p>POA는 물리 코어가 직달·Hay–Davies 하늘 산란·Lambert 지면 반사를 분리 계산하고, UI raycast 가시율을 입력으로 전달합니다.</p><div className="source-links">{POA_MODEL_DESCRIPTOR?.sourceUrls.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer">공식 근거 {index + 1} ↗</a>)}</div></article><article><h4>가정과 한계</h4><ul>{POA_MODEL_DESCRIPTOR?.assumptionsKo.map((item) => <li key={item}>{item}</li>)}{POA_MODEL_DESCRIPTOR?.limitationsKo.map((item) => <li key={item}>{item}</li>)}</ul></article></div>
                 </section>

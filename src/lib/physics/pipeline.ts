@@ -7,7 +7,7 @@ import {
 import type { InverterConfig, InverterResult } from "./inverter";
 import { DEFAULT_INVERTER, calculateInverter } from "./inverter";
 import type { IAMConfig, IrradianceComponents, POAResult } from "./irradiance";
-import { calculatePOA, erbsDecomposition } from "./irradiance";
+import { calculatePOA, checkGHIClosure, erbsDecomposition } from "./irradiance";
 import { integrateTrapezoid } from "./integration";
 import type { SolarPositionInput, SolarPositionResult } from "./solar";
 import {
@@ -20,8 +20,8 @@ import { DEFAULT_THERMAL, faimanTemperature } from "./thermal";
 import type { TraceStage, Vec3 } from "./types";
 import { clamp } from "./types";
 import { logWindSpeed } from "./environment";
-import { rotateAroundY } from "./vector";
-import { fixedRotation } from "./rotation";
+import type { PanelFrame } from "./rotation";
+import { createPanelFrame, fixedRotation, rotatePanelFrameAroundY } from "./rotation";
 
 export interface InstantSimulationInput {
   timestamp: Date | string | number;
@@ -33,7 +33,10 @@ export interface InstantSimulationInput {
     dhiWm2?: number;
   };
   panel?: {
+    /** Body-frame front normal when rotation is supplied; otherwise world normal. */
     normal?: Vec3;
+    /** Optional local in-plane ray-sampling axis; rotated with the normal. */
+    sampleAxisU?: Vec3;
     areaM2?: number;
     efficiency?: number;
     visibility?: number;
@@ -72,8 +75,11 @@ export interface InstantSimulationResult {
   irradiance: IrradianceComponents;
   poa: POAResult;
   panelNormal: Vec3;
+  panelFrame: PanelFrame;
   moduleWindSpeedMS: number;
   moduleTemperatureC: number;
+  /** POA after soiling only; angle loss is already included in poa.totalWm2. */
+  effectivePoaWm2: number;
   dcPowerW: number;
   dcVoltageV: number;
   dcCurrentA: number;
@@ -106,12 +112,77 @@ function makeManualSolar(
   };
 }
 
+type SolarContextInput = Pick<
+  InstantSimulationInput,
+  "location" | "solarOverride" | "weather"
+>;
+
+function resolveSolar(
+  timestamp: Date | string | number,
+  input: SolarContextInput,
+): SolarPositionResult {
+  if (input.solarOverride) return makeManualSolar(timestamp, input.solarOverride);
+  const ambientTemperatureC = input.weather?.ambientTemperatureC ?? 25;
+  return solarPosition({
+    timestamp,
+    latitudeDeg: input.location?.latitudeDeg ?? 37.5665,
+    longitudeDeg: input.location?.longitudeDeg ?? 126.978,
+    elevationM: input.location?.elevationM ?? 38,
+    pressureHPa:
+      input.location?.pressureHPa ??
+      (input.weather?.pressurePa === undefined ? undefined : input.weather.pressurePa / 100),
+    temperatureC: input.location?.temperatureC ?? ambientTemperatureC,
+    deltaTSeconds: input.location?.deltaTSeconds,
+    deltaUt1Seconds: input.location?.deltaUt1Seconds,
+    applyRefraction: input.location?.applyRefraction,
+  });
+}
+
+/**
+ * Deterministic no-network fallback for daily-series generation.
+ *
+ * Haurwitz supplies clear-sky GHI from solar zenith, then the shared Erbs
+ * implementation derives a horizontally closed DNI/DHI pair. This replaces
+ * the former hard-coded irradiance triplet; no time-of-day scale factors are
+ * applied. Formula references:
+ * https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.clearsky.haurwitz.html
+ * https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.erbs.html
+ */
+function defaultDailyClearSkyIrradiance(
+  solar: SolarPositionResult,
+): InstantSimulationInput["irradiance"] {
+  const cosineZenith = solar.isDaylight
+    ? Math.max(0, Math.cos(solar.zenithDeg * Math.PI / 180))
+    : 0;
+  if (!(cosineZenith > 0)) {
+    return { ghiWm2: 0, dniWm2: 0, dhiWm2: 0 };
+  }
+  const ghiWm2 = 1_098 * cosineZenith * Math.exp(-0.059 / cosineZenith);
+  const components = erbsDecomposition({
+    ghiWm2,
+    solarZenithDeg: solar.zenithDeg,
+    extraterrestrialNormalWm2: extraterrestrialNormalIrradiance(solar),
+  });
+  return {
+    ghiWm2: components.ghiWm2,
+    dniWm2: components.dniWm2,
+    dhiWm2: components.dhiWm2,
+  };
+}
+
 function normalizeIrradiance(
   input: InstantSimulationInput["irradiance"],
   solar: SolarPositionResult,
 ): IrradianceComponents {
   if (!solar.isDaylight) {
-    return { ghiWm2: 0, dniWm2: 0, dhiWm2: 0, clearnessIndex: 0, diffuseFraction: 0 };
+    return {
+      ghiWm2: 0,
+      dniWm2: 0,
+      dhiWm2: 0,
+      clearnessIndex: 0,
+      diffuseFraction: 0,
+      ghiClosure: checkGHIClosure({ ghiWm2: 0, dniWm2: 0, dhiWm2: 0, solarZenithDeg: solar.zenithDeg }),
+    };
   }
   const ghi = Math.max(0, input.ghiWm2);
   const cosineZenith = Math.max(0, Math.cos(solar.zenithDeg * Math.PI / 180));
@@ -136,14 +207,23 @@ function normalizeIrradiance(
     dhiWm2: dhi,
     clearnessIndex: 0,
     diffuseFraction: ghi > 0 ? dhi / ghi : 0,
+    ghiClosure: checkGHIClosure({
+      ghiWm2: ghi,
+      dniWm2: dni,
+      dhiWm2: dhi,
+      solarZenithDeg: solar.zenithDeg,
+    }),
   };
 }
 
-function rotatedNormal(input: InstantSimulationInput, nowMs: number): Vec3 {
-  const base = input.panel?.normal ?? { x: 0, y: 1, z: 0 };
+function worldPanelFrame(input: InstantSimulationInput, nowMs: number): PanelFrame {
+  const base = createPanelFrame({
+    normal: input.panel?.normal ?? { x: 0, y: 1, z: 0 },
+    sampleAxisU: input.panel?.sampleAxisU,
+  });
   const rotation = input.rotation;
   if (!rotation) return base;
-  if (rotation.mode === "static") return rotateAroundY(base, rotation.angleRad ?? 0);
+  if (rotation.mode === "static") return rotatePanelFrameAroundY(base, rotation.angleRad ?? 0);
   const referenceMs = rotation.referenceTimestamp === undefined
     ? nowMs
     : timestampMs(rotation.referenceTimestamp);
@@ -152,7 +232,7 @@ function rotatedNormal(input: InstantSimulationInput, nowMs: number): Vec3 {
     rotation.rpm,
     (nowMs - referenceMs) / 1000,
   );
-  return rotateAroundY(base, state.angleRad);
+  return rotatePanelFrameAroundY(base, state.angleRad);
 }
 
 function offInverter(config: InverterConfig): InverterResult {
@@ -162,24 +242,11 @@ function offInverter(config: InverterConfig): InverterResult {
 export function simulateInstant(input: InstantSimulationInput): InstantSimulationResult {
   const nowMs = timestampMs(input.timestamp);
   const ambientTemperatureC = input.weather?.ambientTemperatureC ?? 25;
-  const solar = input.solarOverride
-    ? makeManualSolar(input.timestamp, input.solarOverride)
-    : solarPosition({
-        timestamp: input.timestamp,
-        latitudeDeg: input.location?.latitudeDeg ?? 37.5665,
-        longitudeDeg: input.location?.longitudeDeg ?? 126.978,
-        elevationM: input.location?.elevationM ?? 38,
-        pressureHPa:
-          input.location?.pressureHPa ??
-          (input.weather?.pressurePa === undefined ? undefined : input.weather.pressurePa / 100),
-        temperatureC: input.location?.temperatureC ?? ambientTemperatureC,
-        deltaTSeconds: input.location?.deltaTSeconds,
-        deltaUt1Seconds: input.location?.deltaUt1Seconds,
-        applyRefraction: input.location?.applyRefraction,
-      });
+  const solar = resolveSolar(input.timestamp, input);
   const sunDirection = sunVector(solar);
   const irradiance = normalizeIrradiance(input.irradiance, solar);
-  const panelNormal = rotatedNormal(input, nowMs);
+  const panelFrame = worldPanelFrame(input, nowMs);
+  const panelNormal = panelFrame.normal;
   const poa = calculatePOA({
     ...irradiance,
     solarZenithDeg: solar.zenithDeg,
@@ -221,6 +288,8 @@ export function simulateInstant(input: InstantSimulationInput): InstantSimulatio
     areaM2: input.panel?.areaM2 ?? baseElectrical.areaM2,
     efficiency: input.panel?.efficiency ?? baseElectrical.efficiency,
   };
+  // POA already contains η_cos and IAM. Downstream electrical models consume
+  // this value directly and must not multiply either angle factor again.
   const effectivePoa = poa.totalWm2 * (1 - clamp(input.panel?.soilingLossFraction ?? 0, 0, 1));
   let dcPowerW = 0;
   let dcVoltageV = 0;
@@ -273,8 +342,23 @@ export function simulateInstant(input: InstantSimulationInput): InstantSimulatio
     },
     {
       modelId: "poa.hay-davies",
-      inputs: { ghiWm2: irradiance.ghiWm2, dniWm2: irradiance.dniWm2, dhiWm2: irradiance.dhiWm2 },
-      outputs: { beamWm2: poa.beamWm2, skyDiffuseWm2: poa.skyDiffuseWm2, groundReflectedWm2: poa.groundReflectedWm2, totalWm2: poa.totalWm2 },
+      inputs: {
+        ghiWm2: irradiance.ghiWm2,
+        dniWm2: irradiance.dniWm2,
+        dhiWm2: irradiance.dhiWm2,
+        ghiClosureResidualWm2: irradiance.ghiClosure.residualWm2,
+      },
+      outputs: {
+        etaCos: poa.etaCos,
+        iamFactor: poa.iamFactor,
+        etaAngle: poa.etaAngle,
+        solarZenithMismatchDeg: poa.solarZenithMismatchDeg,
+        directPoaWm2: poa.directPoaWm2,
+        diffusePoaWm2: poa.diffusePoaWm2,
+        groundPoaWm2: poa.groundPoaWm2,
+        totalWm2: poa.totalWm2,
+        ghiClosureOk: irradiance.ghiClosure.isClosed,
+      },
     },
     {
       modelId: "wind.log-profile",
@@ -304,8 +388,10 @@ export function simulateInstant(input: InstantSimulationInput): InstantSimulatio
     irradiance,
     poa,
     panelNormal,
+    panelFrame,
     moduleWindSpeedMS,
     moduleTemperatureC,
+    effectivePoaWm2: effectivePoa,
     dcPowerW,
     dcVoltageV,
     dcCurrentA,
@@ -341,19 +427,10 @@ export function generateDailySeries(input: DailySeriesInput): DailySeriesResult 
   const samples: InstantSimulationResult[] = [];
   for (let elapsed = 0; elapsed <= durationMs + 1e-6; elapsed += stepMs) {
     const timestamp = start + elapsed;
-    const solar = input.baseInput.solarOverride
-      ? makeManualSolar(timestamp, input.baseInput.solarOverride)
-      : solarPosition({
-          timestamp,
-          latitudeDeg: input.baseInput.location?.latitudeDeg ?? 37.5665,
-          longitudeDeg: input.baseInput.location?.longitudeDeg ?? 126.978,
-          ...input.baseInput.location,
-        });
-    const irradiance = input.irradianceAt?.(timestamp, solar) ?? input.baseInput.irradiance ?? {
-      ghiWm2: solar.isDaylight ? 800 : 0,
-      dniWm2: solar.isDaylight ? 850 : 0,
-      dhiWm2: solar.isDaylight ? 120 : 0,
-    };
+    const solar = resolveSolar(timestamp, input.baseInput);
+    const irradiance = input.irradianceAt?.(timestamp, solar)
+      ?? input.baseInput.irradiance
+      ?? defaultDailyClearSkyIrradiance(solar);
     samples.push(simulateInstant({ ...input.baseInput, timestamp, irradiance }));
   }
   const relativeTimesSeconds = samples.map((sample) => (sample.timestampMs - start) / 1000);

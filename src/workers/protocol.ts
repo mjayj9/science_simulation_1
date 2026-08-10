@@ -3,13 +3,18 @@ import type {
   InstantSimulationInput,
   InverterConfig,
   InverterResult,
+  Quaternion,
   SolarPositionInput,
   ThermalConfig,
   Vec3,
 } from "../lib/physics";
 import type { WeatherPoint } from "../lib/weather";
 
-export const SIMULATION_WORKER_PROTOCOL_VERSION = 1 as const;
+/**
+ * v2 adds interval-aware rotation quadrature, closure diagnostics, work-based
+ * progress and an explicit point-boundary annual integration contract.
+ */
+export const SIMULATION_WORKER_PROTOCOL_VERSION = 2 as const;
 
 type InstantPanelInput = NonNullable<InstantSimulationInput["panel"]>;
 type InstantElectricalInput = NonNullable<InstantSimulationInput["electrical"]>;
@@ -26,7 +31,13 @@ export type SimulationPanelDefaults = Omit<
  */
 export type SimulationPanelWorkItem = SimulationPanelDefaults & {
   panelId: string;
+  /** World-space pose before the variant's +Y rotation is applied. */
+  positionM?: Vec3;
   normal?: Vec3;
+  /** Three.js-compatible local +Z-front orientation before +Y rotation. */
+  quaternion?: Quaternion;
+  /** Optional second in-plane ray-sampling axis; sampleAxisU is inherited above. */
+  sampleAxisV?: Vec3;
   areaM2?: number;
   efficiency?: number;
   electrical?: InstantElectricalInput;
@@ -51,6 +62,14 @@ export interface SimulationVariantWorkItem {
   electrical?: InstantElectricalInput;
   inverter?: InverterConfig | false;
   rotation?: InstantSimulationInput["rotation"];
+  /**
+   * Midpoint quadrature density per revolution for fixed-rotation intervals.
+   * Complete turns are reduced by periodicity and a fractional turn receives
+   * samples in proportion to its angular span. Omit (or use 1) for exact
+   * timestamp evaluation. When referenceTimestamp is omitted, weather[0] is
+   * the deterministic rotation epoch.
+   */
+  rotationPhaseSamples?: number;
 }
 
 export interface SimulationPhysicsOptions {
@@ -65,6 +84,11 @@ export interface SimulationPhysicsOptions {
 
 export interface SimulationKernelInput {
   variants: SimulationVariantWorkItem[];
+  /**
+   * Ordered point boundaries. Energy is integrated over N-1 intervals. Annual
+   * hourly input therefore needs 8,761 points (8,785 in a leap year), including
+   * the closing endpoint.
+   */
   weather: WeatherPoint[];
   physics?: SimulationPhysicsOptions;
   /** `annual` enables conservative gap validation and annual result labelling. */
@@ -106,15 +130,27 @@ export interface SimulationProgressEvent {
   type: "simulation/progress";
   requestId: string;
   fingerprint: string;
-  /** Completed weather rows; retained for protocol v1 consumers. */
+  /** Completed weather points; retained as a user-facing row counter. */
   completed: number;
   total: number;
-  /** Approximate panel-level work, useful when variants have different panel counts. */
+  /** Panel-phase work used as the authoritative progress denominator. */
   completedWork: number;
   totalWork: number;
+  /** Exactly completedWork / totalWork. */
   fraction: number;
+  /** Number of completed variant-points whose source components failed closure. */
+  ghiClosureWarningCount: number;
   elapsedMs: number;
   estimatedRemainingMs?: number;
+}
+
+export interface SimulationGhiClosureDiagnostic {
+  residualWm2: number;
+  relativeResidual: number;
+  toleranceWm2: number;
+  isClosed: boolean;
+  /** Worker never silently rewrites supplied GHI/DNI/DHI. */
+  policy: "preserve-source-and-warn" | "not-evaluated";
 }
 
 export interface SimulationResultRow {
@@ -126,6 +162,8 @@ export interface SimulationResultRow {
   mismatchLossFractionByVariant: Record<string, number>;
   bypassActiveCountByVariant: Record<string, number>;
   inverterStatusByVariant: Record<string, InverterResult["status"] | "disabled">;
+  ghiClosureByVariant: Record<string, SimulationGhiClosureDiagnostic>;
+  rotationIntervalAveragedByVariant: Record<string, boolean>;
 }
 
 export interface SimulationChunkEvent {
@@ -155,8 +193,11 @@ export interface SimulationCompleteEvent {
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
   monthlyEnergy: SimulationMonthlyEnergy[];
+  /** Weather point count. There are `intervals = steps - 1` integration intervals. */
   steps: number;
+  intervals: number;
   durationHours: number;
+  ghiClosureWarningCount: number;
   elapsedMs: number;
 }
 
@@ -167,6 +208,8 @@ export interface SimulationCancelledEvent {
   fingerprint: string;
   completed: number;
   total: number;
+  completedWork: number;
+  totalWork: number;
   fraction: number;
   reason?: string;
 }

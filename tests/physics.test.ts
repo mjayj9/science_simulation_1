@@ -7,13 +7,18 @@ import {
   calculateCircuit,
   calculateInverter,
   calculatePOA,
+  checkGHIClosure,
+  createPanelFrame,
   erbsDecomposition,
+  extraterrestrialNormalIrradiance,
   faimanTemperature,
   fixedRotation,
+  generateDailySeries,
   generateWeatherPreset,
   integrateTrapezoid,
   phaseAverage,
   physicalIAM,
+  rotatePanelFrameAroundY,
   simpleDcPower,
   simulateInstant,
   singleDiodeCurve,
@@ -62,7 +67,193 @@ describe("solar position and vectors", () => {
   it("uses +X east, +Y up, +Z north", () => {
     expect(sunVector(0, 0)).toEqual({ x: 0, y: 0, z: 1 });
     expect(sunVector(90, 0).x).toBeCloseTo(1, 12);
+    expect(sunVector(180, 0).z).toBeCloseTo(-1, 12);
+    expect(sunVector(270, 0).x).toBeCloseTo(-1, 12);
     expect(sunVector(180, 90).y).toBeCloseTo(1, 12);
+    for (const azimuthDeg of [0, 90, 180, 270]) {
+      const direction = sunVector(azimuthDeg, 37);
+      expect(Math.hypot(direction.x, direction.y, direction.z)).toBeCloseTo(1, 12);
+    }
+  });
+});
+
+describe("incident-angle diagnosis contract 1-10", () => {
+  const directOnlyAtAoi = (angleDeg: number, dniWm2 = 1000) => {
+    const angle = angleDeg * Math.PI / 180;
+    return calculatePOA({
+      ghiWm2: dniWm2,
+      dniWm2,
+      dhiWm2: 0,
+      solarZenithDeg: 0,
+      sunDirection: { x: 0, y: 1, z: 0 },
+      panelNormal: { x: Math.sin(angle), y: Math.cos(angle), z: 0 },
+      albedo: 0,
+      iam: { model: "ashrae", b0: 0.05 },
+    });
+  };
+
+  it("1: exposes etaCos=1, IAM=1 and 1000 W/m² direct POA at AOI 0°", () => {
+    const result = directOnlyAtAoi(0);
+    expect(result.etaCos).toBe(1);
+    expect(result.iamFactor).toBe(1);
+    expect(result.etaAngle).toBe(1);
+    expect(result.directPoaWm2).toBe(1000);
+    expect(result.beamWm2).toBe(result.directPoaWm2);
+  });
+
+  it("2: applies cosine and IAM exactly once at AOI 60°", () => {
+    const result = directOnlyAtAoi(60);
+    const iam60 = ashraeIAM(60, 0.05);
+    expect(result.etaCos).toBeCloseTo(0.5, 12);
+    expect(result.iamFactor).toBeCloseTo(iam60, 12);
+    expect(result.etaAngle).toBeCloseTo(0.5 * iam60, 12);
+    expect(result.directPoaWm2).toBeCloseTo(500 * iam60, 9);
+  });
+
+  it("3: returns zero direct POA at AOI 90°", () => {
+    const result = directOnlyAtAoi(90);
+    expect(result.etaCos).toBe(0);
+    expect(result.etaAngle).toBe(0);
+    expect(result.directPoaWm2).toBe(0);
+  });
+
+  it("4: rejects back-face direct irradiance above AOI 90°", () => {
+    const result = directOnlyAtAoi(120);
+    expect(result.cosineIncidence).toBeLessThan(0);
+    expect(result.etaCos).toBe(0);
+    expect(result.directPoaWm2).toBe(0);
+  });
+
+  it("5: gives AOI 60° and 500 W/m² on a horizontal panel at 30° solar elevation", () => {
+    const direction = sunVector(180, 30);
+    const result = calculatePOA({
+      ghiWm2: 500,
+      dniWm2: 1000,
+      dhiWm2: 0,
+      solarZenithDeg: 60,
+      sunDirection: direction,
+      panelNormal: { x: 0, y: 1, z: 0 },
+      albedo: 0,
+      iam: { model: "none" },
+    });
+    expect(result.angleOfIncidenceDeg).toBeCloseTo(60, 12);
+    expect(result.etaCos).toBeCloseTo(0.5, 12);
+    expect(result.directPoaWm2).toBeCloseTo(500, 9);
+  });
+
+  it("6: changes output with sun direction through AOI at fixed DNI", () => {
+    const evaluate = (elevationDeg: number) => calculatePOA({
+      ghiWm2: 1000 * Math.sin(elevationDeg * Math.PI / 180),
+      dniWm2: 1000,
+      dhiWm2: 0,
+      solarZenithDeg: 90 - elevationDeg,
+      sunDirection: sunVector(180, elevationDeg),
+      panelNormal: { x: 0, y: 1, z: 0 },
+      albedo: 0,
+      iam: { model: "none" },
+    });
+    const lowSun = evaluate(30);
+    const highSun = evaluate(60);
+    expect(lowSun.angleOfIncidenceDeg).toBeGreaterThan(highSun.angleOfIncidenceDeg);
+    expect(lowSun.directPoaWm2).toBeLessThan(highSun.directPoaWm2);
+  });
+
+  it("7: is linear in DNI when AOI and all other factors are fixed", () => {
+    const low = directOnlyAtAoi(30, 500);
+    const high = directOnlyAtAoi(30, 1000);
+    expect(high.etaAngle).toBeCloseTo(low.etaAngle, 12);
+    expect(high.directPoaWm2).toBeCloseTo(2 * low.directPoaWm2, 9);
+  });
+
+  it("8: audits GHI = DNI cos(zenith) + DHI closure", () => {
+    const closed = checkGHIClosure({
+      ghiWm2: 600,
+      dniWm2: 1000,
+      dhiWm2: 100,
+      solarZenithDeg: 60,
+    });
+    expect(closed.reconstructedGhiWm2).toBeCloseTo(600, 9);
+    expect(closed.residualWm2).toBeCloseTo(0, 9);
+    expect(closed.isClosed).toBe(true);
+    expect(checkGHIClosure({ ghiWm2: 700, dniWm2: 1000, dhiWm2: 100, solarZenithDeg: 60 }).isClosed).toBe(false);
+    const poa = calculatePOA({
+      ghiWm2: 600,
+      dniWm2: 1000,
+      dhiWm2: 100,
+      solarZenithDeg: 60,
+      sunDirection: sunVector(180, 30),
+      panelNormal: { x: 0, y: 1, z: 0 },
+    });
+    expect(poa.ghiClosure.isClosed).toBe(true);
+  });
+
+  it("9: does not multiply etaCos again in the DC model after POA", () => {
+    const angle = 60 * Math.PI / 180;
+    const commonInput = {
+      timestamp: 0,
+      solarOverride: { azimuthDeg: 180, elevationDeg: 90 },
+      irradiance: { ghiWm2: 1000, dniWm2: 1000, dhiWm2: 0 },
+      panel: {
+        normal: { x: Math.sin(angle), y: Math.cos(angle), z: 0 },
+        albedo: 0,
+        iam: { model: "none" as const },
+      },
+      weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+      inverter: false as const,
+    };
+    const result = simulateInstant({
+      ...commonInput,
+      electrical: {
+        mode: "simple",
+        config: { ...DEFAULT_ELECTRICAL, gammaPmpPerC: 0 },
+      },
+    });
+    expect(result.poa.etaCos).toBeCloseTo(0.5, 12);
+    expect(result.effectivePoaWm2).toBeCloseTo(500, 9);
+    expect(result.dcPowerW).toBeCloseTo(0.25, 12);
+
+    const precise = simulateInstant({
+      ...commonInput,
+      electrical: { mode: "single-diode", config: DEFAULT_ELECTRICAL },
+    });
+    const directReference = singleDiodeCurve({
+      irradianceWm2: 500,
+      cellTemperatureC: precise.moduleTemperatureC,
+      config: DEFAULT_ELECTRICAL,
+    });
+    expect(precise.effectivePoaWm2).toBeCloseTo(500, 9);
+    expect(precise.dcPowerW).toBeCloseTo(directReference.mpp.powerW, 10);
+  });
+
+  it("10: rotates the world normal and both sampling axes with one +Y transform", () => {
+    const base = createPanelFrame({
+      normal: { x: 0, y: 0, z: 1 },
+      sampleAxisU: { x: 1, y: 0, z: 0 },
+    });
+    const expected = rotatePanelFrameAroundY(base, Math.PI / 2);
+    const result = simulateInstant({
+      timestamp: 0,
+      solarOverride: { azimuthDeg: 90, elevationDeg: 30 },
+      irradiance: { ghiWm2: 500, dniWm2: 1000, dhiWm2: 0 },
+      panel: {
+        normal: base.normal,
+        sampleAxisU: base.sampleAxisU,
+        iam: { model: "none" },
+      },
+      rotation: { mode: "static", angleRad: Math.PI / 2 },
+      inverter: false,
+    });
+    expect(result.panelFrame).toEqual(expected);
+    expect(result.panelNormal).toEqual(expected.normal);
+    expect(result.panelFrame.normal.x).toBeCloseTo(1, 12);
+    expect(result.panelFrame.normal.y).toBeCloseTo(0, 12);
+    expect(result.panelFrame.normal.z).toBeCloseTo(0, 12);
+    expect(result.panelFrame.sampleAxisU.x).toBeCloseTo(0, 12);
+    expect(result.panelFrame.sampleAxisU.y).toBeCloseTo(0, 12);
+    expect(result.panelFrame.sampleAxisU.z).toBeCloseTo(-1, 12);
+    expect(result.panelFrame.sampleAxisV.x).toBeCloseTo(0, 12);
+    expect(result.panelFrame.sampleAxisV.y).toBeCloseTo(1, 12);
+    expect(result.panelFrame.sampleAxisV.z).toBeCloseTo(0, 12);
   });
 });
 
@@ -193,6 +384,88 @@ describe("inverter, rotation, integration and deterministic pipeline", () => {
 
   it("integrates the triangular 2 W profile to exactly 2 Wh", () => {
     expect(integrateTrapezoid([0, 3600, 7200], [0, 2, 0])).toBeCloseTo(2, 12);
+  });
+
+  it("uses Haurwitz plus Erbs defaults instead of a fixed daily irradiance triplet", () => {
+    const input = {
+      startTimestamp: "2024-03-20T00:00:00Z",
+      durationHours: 24,
+      stepMinutes: 60,
+      baseInput: {
+        location: { latitudeDeg: 0, longitudeDeg: 0, elevationM: 0 },
+        panel: { normal: { x: 0, y: 1, z: 0 }, albedo: 0, iam: { model: "none" as const } },
+        weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+        electrical: {
+          mode: "simple" as const,
+          config: { ...DEFAULT_ELECTRICAL, gammaPmpPerC: 0 },
+        },
+        inverter: false as const,
+      },
+    };
+    const first = generateDailySeries(input);
+    const second = generateDailySeries(input);
+    const daylight = first.samples.filter((sample) => sample.solar.isDaylight);
+
+    expect(daylight.length).toBeGreaterThan(8);
+    expect(second.samples.map((sample) => sample.irradiance)).toEqual(
+      first.samples.map((sample) => sample.irradiance),
+    );
+    expect(new Set(daylight.map((sample) => sample.irradiance.ghiWm2.toFixed(6))).size).toBeGreaterThan(4);
+
+    for (const sample of daylight) {
+      const cosineZenith = Math.max(
+        0,
+        Math.cos(sample.solar.zenithDeg * Math.PI / 180),
+      );
+      const expectedGhiWm2 = 1_098 * cosineZenith * Math.exp(-0.059 / cosineZenith);
+      const expected = erbsDecomposition({
+        ghiWm2: expectedGhiWm2,
+        solarZenithDeg: sample.solar.zenithDeg,
+        extraterrestrialNormalWm2: extraterrestrialNormalIrradiance(sample.solar),
+      });
+
+      expect(sample.irradiance.ghiWm2).toBeCloseTo(expectedGhiWm2, 9);
+      expect(sample.irradiance.dniWm2).toBeCloseTo(expected.dniWm2, 9);
+      expect(sample.irradiance.dhiWm2).toBeCloseTo(expected.dhiWm2, 9);
+      expect(sample.irradiance.ghiClosure.isClosed).toBe(true);
+      expect(
+        sample.irradiance.dhiWm2 + sample.irradiance.dniWm2 * cosineZenith,
+      ).toBeCloseTo(sample.irradiance.ghiWm2, 9);
+      expect(
+        Math.abs(sample.irradiance.ghiWm2 - 800) < 1e-9
+          && Math.abs(sample.irradiance.dniWm2 - 850) < 1e-9
+          && Math.abs(sample.irradiance.dhiWm2 - 120) < 1e-9,
+      ).toBe(false);
+    }
+  });
+
+  it("keeps explicit daily irradiance and irradianceAt resolver precedence", () => {
+    const baseInput = {
+      solarOverride: { azimuthDeg: 180, elevationDeg: 30 },
+      irradiance: { ghiWm2: 600, dniWm2: 1000, dhiWm2: 100 },
+      panel: { normal: { x: 0, y: 1, z: 0 }, albedo: 0, iam: { model: "none" as const } },
+      inverter: false as const,
+    };
+    const explicit = generateDailySeries({
+      startTimestamp: 0,
+      durationHours: 0,
+      baseInput,
+    });
+    expect(explicit.samples[0].irradiance.ghiWm2).toBe(600);
+    expect(explicit.samples[0].irradiance.dniWm2).toBe(1000);
+    expect(explicit.samples[0].irradiance.dhiWm2).toBe(100);
+    expect(explicit.samples[0].irradiance.ghiClosure.isClosed).toBe(true);
+
+    const resolved = generateDailySeries({
+      startTimestamp: 0,
+      durationHours: 0,
+      baseInput,
+      irradianceAt: () => ({ ghiWm2: 400, dniWm2: 600, dhiWm2: 100 }),
+    });
+    expect(resolved.samples[0].irradiance.ghiWm2).toBe(400);
+    expect(resolved.samples[0].irradiance.dniWm2).toBe(600);
+    expect(resolved.samples[0].irradiance.dhiWm2).toBe(100);
+    expect(resolved.samples[0].irradiance.ghiClosure.isClosed).toBe(true);
   });
 
   it("forces night output to zero despite invalid nonzero irradiance input", () => {
