@@ -59,6 +59,25 @@ describe("geometry infrastructure", () => {
     }
   });
 
+  it("packs curved presets compactly without panel-to-panel intersections", () => {
+    const curvedNames: PresetName[] = ["cylinder", "sphere", "cone"];
+    for (const name of curvedNames) {
+      const panels = generatePreset(name);
+      expect(detectOverlaps(panels), `${name} 패널 충돌`).toEqual([]);
+    }
+
+    const sphere = generatePreset("sphere");
+    const sphereRadius = Math.max(...sphere.map(({ position }) => Math.hypot(...position)));
+    const nominalSphereCoverage = (sphere.length * PANEL_AREA_M2) / (4 * Math.PI * sphereRadius ** 2);
+    expect(sphereRadius).toBeLessThan(0.08);
+    expect(nominalSphereCoverage).toBeGreaterThan(0.6);
+
+    const cylinder = generatePreset("cylinder");
+    const cylinderRadii = cylinder.map(({ position: [x, , z] }) => Math.hypot(x, z));
+    expect(Math.max(...cylinderRadii)).toBeLessThan(0.085);
+    expect(new Set(cylinder.map(({ position: [, y] }) => y.toFixed(6))).size).toBe(2);
+  });
+
   it("adds, duplicates, updates, deletes and detects overlap without mutating inputs", () => {
     const original = [createPanel({ id: "a" })];
     const added = addPanel(original, { id: "b", position: [0.1, 0, 0] });

@@ -9,9 +9,13 @@ import {
 import {
   add3,
   cross3,
+  dot3,
+  multiplyQuaternion,
   normalize3,
+  quaternionFromAxisAngle,
   quaternionFromNormal,
   scale3,
+  tangentAxes,
 } from "./math";
 
 export interface PresetOptions {
@@ -34,6 +38,22 @@ function panel(id: string, position: Vec3, normal: Vec3): Panel {
   };
 }
 
+function alignPanelVertical(generated: Panel, vertical: Vec3): Panel {
+  const [localHorizontal, localVertical] = tangentAxes(generated.quaternion);
+  const unitVertical = normalize3(vertical);
+  const roll = Math.atan2(
+    -dot3(unitVertical, localHorizontal),
+    dot3(unitVertical, localVertical),
+  );
+  return {
+    ...generated,
+    quaternion: multiplyQuaternion(
+      generated.quaternion,
+      quaternionFromAxisAngle([0, 0, 1], roll),
+    ),
+  };
+}
+
 function planeBasis(normal: Vec3): readonly [Vec3, Vec3] {
   const reference: Vec3 = Math.abs(normal[1]) > 0.9 ? [0, 0, 1] : [0, 1, 0];
   const horizontal = normalize3(cross3(reference, normal));
@@ -42,7 +62,7 @@ function planeBasis(normal: Vec3): readonly [Vec3, Vec3] {
 }
 
 function generateCube(gapM: number): Panel[] {
-  const sideM = 2 * PANEL_WIDTH_M + gapM * 3;
+  const sideM = 2 * PANEL_WIDTH_M + gapM;
   const half = sideM / 2;
   const offset = (PANEL_WIDTH_M + gapM) / 2;
   const faces: { normal: Vec3; center: Vec3 }[] = [
@@ -93,13 +113,16 @@ function generatePlane(options: PresetOptions, gapM: number): Panel[] {
 }
 
 function generateCylinder(gapM: number): Panel[] {
-  const radius = 0.12;
+  const columns = 10;
+  const rings = 2;
+  const circumferentialPitch = PANEL_WIDTH_M + gapM;
+  const radius = circumferentialPitch / (2 * Math.tan(Math.PI / columns));
   const verticalPitch = PANEL_HEIGHT_M + gapM;
   const panels: Panel[] = [];
-  for (let ring = 0; ring < 4; ring += 1) {
-    const y = (ring - 1.5) * verticalPitch;
-    for (let column = 0; column < 5; column += 1) {
-      const angle = (column / 5) * Math.PI * 2;
+  for (let ring = 0; ring < rings; ring += 1) {
+    const y = (ring - (rings - 1) / 2) * verticalPitch;
+    for (let column = 0; column < columns; column += 1) {
+      const angle = (column / columns) * Math.PI * 2;
       const normal: Vec3 = [Math.sin(angle), 0, Math.cos(angle)];
       panels.push(panel(`cylinder-panel-${panels.length + 1}`, [normal[0] * radius, y, normal[2] * radius], normal));
     }
@@ -107,37 +130,83 @@ function generateCylinder(gapM: number): Panel[] {
   return panels;
 }
 
-function generateSphere(): Panel[] {
-  const count = 20;
-  const radius = 0.18;
-  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  return Array.from({ length: count }, (_, index) => {
-    const y = 1 - (2 * (index + 0.5)) / count;
-    const radial = Math.sqrt(Math.max(0, 1 - y * y));
-    const angle = index * goldenAngle;
-    const normal: Vec3 = [Math.cos(angle) * radial, y, Math.sin(angle) * radial];
-    return panel(`sphere-panel-${index + 1}`, scale3(normal, radius), normal);
+function generateSphere(gapM: number): Panel[] {
+  const phi = (1 + Math.sqrt(5)) / 2;
+  const inversePhi = 1 / phi;
+  const rawDirections: Vec3[] = [];
+
+  for (const x of [-1, 1]) {
+    for (const y of [-1, 1]) {
+      for (const z of [-1, 1]) rawDirections.push([x, y, z]);
+    }
+  }
+  for (const y of [-inversePhi, inversePhi]) {
+    for (const z of [-phi, phi]) rawDirections.push([0, y, z]);
+  }
+  for (const x of [-inversePhi, inversePhi]) {
+    for (const y of [-phi, phi]) rawDirections.push([x, y, 0]);
+  }
+  for (const x of [-phi, phi]) {
+    for (const z of [-inversePhi, inversePhi]) rawDirections.push([x, 0, z]);
+  }
+
+  // 정십이면체 꼭짓점 사이의 최소 각도에 패널 pitch를 맞춘다. 구면은
+  // 정사각형으로 완전 타일링할 수 없으므로 작은 대각선 여유만 남긴다.
+  const minimumAngularSeparation = Math.acos(Math.sqrt(5) / 3);
+  const pitch = PANEL_WIDTH_M + gapM;
+  const radius = (pitch / (2 * Math.sin(minimumAngularSeparation / 2))) * 1.05;
+  // 정사각형 모서리가 이웃 접평면을 침범하지 않도록 계산한 결정적 면내 회전값.
+  const rollDegrees = [
+    46.9, 14.3, 71.2, 24.7, 70.2, 25.3, 53.9, 19.7, 38.7, 74.1,
+    20.7, 59.0, 45.6, 7.1, 85.0, 26.3, 33.4, 15.2, 64.1, 4.8,
+  ] as const;
+  return rawDirections.map((direction, index) => {
+    const normal = normalize3(direction);
+    const generated = panel(`sphere-panel-${index + 1}`, scale3(normal, radius), normal);
+    return {
+      ...generated,
+      quaternion: multiplyQuaternion(
+        generated.quaternion,
+        quaternionFromAxisAngle([0, 0, 1], rollDegrees[index] * Math.PI / 180),
+      ),
+    };
   });
 }
 
-function generateCone(): Panel[] {
+function generateCone(gapM: number): Panel[] {
   const ringCounts = [8, 6, 4, 2] as const;
-  const baseRadius = 0.18;
-  const height = 0.28;
+  // 위쪽 모서리가 더 작은 원주로 모이는 정사각형의 특성상 단순 pitch만
+  // 쓰면 패널이 겹친다. 최소 무충돌 배율을 적용해 taper 여유를 확보한다.
+  const taperPackingScale = 1.3;
+  const slantPitch = (PANEL_HEIGHT_M + gapM) * taperPackingScale;
+  const slantHeight = ringCounts.length * slantPitch;
+  const firstRingRadius = ((PANEL_WIDTH_M + gapM) * taperPackingScale)
+    / (2 * Math.tan(Math.PI / ringCounts[0]));
+  const baseRadius = firstRingRadius / (1 - 0.5 / ringCounts.length);
+  const height = Math.sqrt(Math.max(0, slantHeight * slantHeight - baseRadius * baseRadius));
   const slope = baseRadius / height;
   const panels: Panel[] = [];
 
   ringCounts.forEach((count, ringIndex) => {
-    const y = 0.035 + ringIndex * 0.065;
-    const radius = baseRadius * (1 - y / height);
+    const slantDistance = (ringIndex + 0.5) * slantPitch;
+    const radius = baseRadius * (1 - slantDistance / slantHeight);
+    const y = -height / 2 + slantDistance * (height / slantHeight);
     for (let column = 0; column < count; column += 1) {
       const angle = (column / count) * Math.PI * 2 + (ringIndex % 2 ? Math.PI / count : 0);
       const normal = normalize3([Math.sin(angle), slope, Math.cos(angle)]);
+      const vertical = normalize3([
+        -Math.sin(angle) * baseRadius,
+        height,
+        -Math.cos(angle) * baseRadius,
+      ]);
       panels.push(
-        panel(
-          `cone-panel-${panels.length + 1}`,
-          [Math.sin(angle) * radius, y - height / 2, Math.cos(angle) * radius],
-          normal,
+        alignPanelVertical(
+          panel(
+            `cone-panel-${panels.length + 1}`,
+            [Math.sin(angle) * radius, y, Math.cos(angle) * radius],
+            normal,
+          ),
+          vertical,
         ),
       );
     }
@@ -146,7 +215,7 @@ function generateCone(): Panel[] {
 }
 
 export function generatePreset(name: PresetName, options: PresetOptions = {}): Panel[] {
-  const gapM = options.gapM ?? 0.01;
+  const gapM = options.gapM ?? 0.001;
   if (!Number.isFinite(gapM) || gapM < 0) {
     throw new RangeError("패널 간격은 0 이상의 유한한 값이어야 합니다.");
   }
@@ -163,10 +232,10 @@ export function generatePreset(name: PresetName, options: PresetOptions = {}): P
       panels = generateCylinder(gapM);
       break;
     case "sphere":
-      panels = generateSphere();
+      panels = generateSphere(gapM);
       break;
     case "cone":
-      panels = generateCone();
+      panels = generateCone(gapM);
       break;
     case "free":
       panels = generatePlane({ ...options, planeRows: 4 }, gapM);
