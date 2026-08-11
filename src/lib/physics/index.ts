@@ -13,3 +13,4 @@ export * from "./rotation";
 export * from "./integration";
 export * from "./registry";
 export * from "./pipeline";
+export * from "./continuous-surface";

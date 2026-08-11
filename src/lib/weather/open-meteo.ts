@@ -47,12 +47,18 @@ export function buildOpenMeteoUrl(
   return url.toString();
 }
 
-function numericArray(hourly: Record<string, unknown>, key: string, count: number, fallback = 0): number[] {
+function numericArray(hourly: Record<string, unknown>, key: string, count: number, fallback?: number): number[] {
   const value = hourly[key];
-  if (value === undefined) return Array(count).fill(fallback);
+  if (value === undefined) {
+    if (fallback === undefined) throw new WeatherFetchError(`Open-Meteo hourly.${key}가 없습니다.`);
+    return Array(count).fill(fallback);
+  }
   if (!Array.isArray(value) || value.length !== count) throw new WeatherFetchError(`Open-Meteo hourly.${key} 길이가 time과 다릅니다.`);
   return value.map((entry, index) => {
-    if (entry === null) return fallback;
+    if (entry === null) {
+      if (fallback === undefined) throw new WeatherFetchError(`Open-Meteo hourly.${key}[${index}]가 누락되었습니다.`);
+      return fallback;
+    }
     const number = Number(entry);
     if (!Number.isFinite(number)) throw new WeatherFetchError(`Open-Meteo hourly.${key}[${index}]가 숫자가 아닙니다.`);
     return number;
@@ -70,17 +76,18 @@ export function normalizeOpenMeteoResponse(raw: unknown, requestUrl?: string, no
   const dni = numericArray(hourly, "direct_normal_irradiance", count);
   const dhi = numericArray(hourly, "diffuse_radiation", count);
   const ambient = numericArray(hourly, "temperature_2m", count, 20);
-  const wind = numericArray(hourly, "wind_speed_10m", count);
-  const direction = numericArray(hourly, "wind_direction_10m", count);
-  const gust = numericArray(hourly, "wind_gusts_10m", count);
-  const cloud = numericArray(hourly, "cloud_cover", count);
-  const precipitation = numericArray(hourly, "precipitation", count);
+  const wind = numericArray(hourly, "wind_speed_10m", count, 0);
+  const direction = numericArray(hourly, "wind_direction_10m", count, 0);
+  const gust = numericArray(hourly, "wind_gusts_10m", count, 0);
+  const cloud = numericArray(hourly, "cloud_cover", count, 0);
+  const precipitation = numericArray(hourly, "precipitation", count, 0);
   const points: WeatherPoint[] = hourly.time.map((value, index) => {
     const normalizedTime = typeof value === "string" && !/[zZ]|[+-]\d\d:?\d\d$/.test(value) ? `${value}Z` : String(value);
     const timeUtcMs = Date.parse(normalizedTime);
     if (!Number.isFinite(timeUtcMs)) throw new WeatherFetchError(`Open-Meteo hourly.time[${index}]가 올바르지 않습니다.`);
     return {
       timeUtcMs,
+      sourceTimestamp: String(value),
       ghiWm2: Math.max(0, ghi[index]),
       dniWm2: Math.max(0, dni[index]),
       dhiWm2: Math.max(0, dhi[index]),

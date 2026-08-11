@@ -136,6 +136,7 @@ export function getOfflineWeather(
     const windNoise = deterministicUnit(seed, timeUtcMs, "wind");
     points.push({
       timeUtcMs,
+      sourceTimestamp: new Date(timeUtcMs).toISOString(),
       ghiWm2: components.ghiWm2,
       dniWm2: components.dniWm2,
       dhiWm2: components.dhiWm2,

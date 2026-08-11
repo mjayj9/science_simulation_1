@@ -26,13 +26,13 @@ export async function generateMetadata(): Promise<Metadata> {
       locale: "ko_KR",
       title,
       description,
-      images: [{ url: "/solarform-og.png", width: 1728, height: 908, alt: "솔라폼 태양광 공학 시뮬레이션" }],
+      images: [{ url: "/solarform-continuous-og.png", width: 1536, height: 1024, alt: "솔라폼 연속 PV 스킨 형상 비교" }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/solarform-og.png"],
+      images: ["/solarform-continuous-og.png"],
     },
   };
 }

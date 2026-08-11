@@ -9,20 +9,24 @@ import {
 import {
   add3,
   cross3,
-  dot3,
-  multiplyQuaternion,
   normalize3,
-  quaternionFromAxisAngle,
   quaternionFromNormal,
   scale3,
-  tangentAxes,
 } from "./math";
+import {
+  createContinuousSurface,
+  isContinuousSurfacePreset,
+  type ContinuousSurfaceOptions,
+  type ContinuousSurfaceKind,
+} from "./continuous-surfaces";
 
-export interface PresetOptions {
+export interface PresetOptions extends ContinuousSurfaceOptions {
   planeRows?: 4 | 5;
   planeTiltDeg?: number;
   planeAzimuthDeg?: number;
   gapM?: number;
+  /** Physics quadrature density for continuous curved skins; render tessellation is independent. */
+  azimuthSamples?: number;
 }
 
 function panel(id: string, position: Vec3, normal: Vec3): Panel {
@@ -35,22 +39,6 @@ function panel(id: string, position: Vec3, normal: Vec3): Panel {
     position,
     quaternion: quaternionFromNormal(unitNormal),
     normal: unitNormal,
-  };
-}
-
-function alignPanelVertical(generated: Panel, vertical: Vec3): Panel {
-  const [localHorizontal, localVertical] = tangentAxes(generated.quaternion);
-  const unitVertical = normalize3(vertical);
-  const roll = Math.atan2(
-    -dot3(unitVertical, localHorizontal),
-    dot3(unitVertical, localVertical),
-  );
-  return {
-    ...generated,
-    quaternion: multiplyQuaternion(
-      generated.quaternion,
-      quaternionFromAxisAngle([0, 0, 1], roll),
-    ),
   };
 }
 
@@ -112,106 +100,22 @@ function generatePlane(options: PresetOptions, gapM: number): Panel[] {
   return panels;
 }
 
-function generateCylinder(gapM: number): Panel[] {
-  const columns = 10;
-  const rings = 2;
-  const circumferentialPitch = PANEL_WIDTH_M + gapM;
-  const radius = circumferentialPitch / (2 * Math.tan(Math.PI / columns));
-  const verticalPitch = PANEL_HEIGHT_M + gapM;
-  const panels: Panel[] = [];
-  for (let ring = 0; ring < rings; ring += 1) {
-    const y = (ring - (rings - 1) / 2) * verticalPitch;
-    for (let column = 0; column < columns; column += 1) {
-      const angle = (column / columns) * Math.PI * 2;
-      const normal: Vec3 = [Math.sin(angle), 0, Math.cos(angle)];
-      panels.push(panel(`cylinder-panel-${panels.length + 1}`, [normal[0] * radius, y, normal[2] * radius], normal));
-    }
-  }
-  return panels;
-}
-
-function generateSphere(gapM: number): Panel[] {
-  const phi = (1 + Math.sqrt(5)) / 2;
-  const inversePhi = 1 / phi;
-  const rawDirections: Vec3[] = [];
-
-  for (const x of [-1, 1]) {
-    for (const y of [-1, 1]) {
-      for (const z of [-1, 1]) rawDirections.push([x, y, z]);
-    }
-  }
-  for (const y of [-inversePhi, inversePhi]) {
-    for (const z of [-phi, phi]) rawDirections.push([0, y, z]);
-  }
-  for (const x of [-inversePhi, inversePhi]) {
-    for (const y of [-phi, phi]) rawDirections.push([x, y, 0]);
-  }
-  for (const x of [-phi, phi]) {
-    for (const z of [-inversePhi, inversePhi]) rawDirections.push([x, 0, z]);
-  }
-
-  // 정십이면체 꼭짓점 사이의 최소 각도에 패널 pitch를 맞춘다. 구면은
-  // 정사각형으로 완전 타일링할 수 없으므로 작은 대각선 여유만 남긴다.
-  const minimumAngularSeparation = Math.acos(Math.sqrt(5) / 3);
-  const pitch = PANEL_WIDTH_M + gapM;
-  const radius = (pitch / (2 * Math.sin(minimumAngularSeparation / 2))) * 1.05;
-  // 정사각형 모서리가 이웃 접평면을 침범하지 않도록 계산한 결정적 면내 회전값.
-  const rollDegrees = [
-    46.9, 14.3, 71.2, 24.7, 70.2, 25.3, 53.9, 19.7, 38.7, 74.1,
-    20.7, 59.0, 45.6, 7.1, 85.0, 26.3, 33.4, 15.2, 64.1, 4.8,
-  ] as const;
-  return rawDirections.map((direction, index) => {
-    const normal = normalize3(direction);
-    const generated = panel(`sphere-panel-${index + 1}`, scale3(normal, radius), normal);
-    return {
-      ...generated,
-      quaternion: multiplyQuaternion(
-        generated.quaternion,
-        quaternionFromAxisAngle([0, 0, 1], rollDegrees[index] * Math.PI / 180),
-      ),
-    };
+function generateContinuousSkinPreset(
+  kind: ContinuousSurfaceKind,
+  options: PresetOptions,
+): Panel[] {
+  const surface = createContinuousSurface(kind, options.azimuthSamples, {
+    cylinderAspectRatio: options.cylinderAspectRatio,
+    coneAspectRatio: options.coneAspectRatio,
+    groundClearanceM: options.groundClearanceM,
   });
-}
-
-function generateCone(gapM: number): Panel[] {
-  const ringCounts = [8, 6, 4, 2] as const;
-  // 위쪽 모서리가 더 작은 원주로 모이는 정사각형의 특성상 단순 pitch만
-  // 쓰면 패널이 겹친다. 최소 무충돌 배율을 적용해 taper 여유를 확보한다.
-  const taperPackingScale = 1.3;
-  const slantPitch = (PANEL_HEIGHT_M + gapM) * taperPackingScale;
-  const slantHeight = ringCounts.length * slantPitch;
-  const firstRingRadius = ((PANEL_WIDTH_M + gapM) * taperPackingScale)
-    / (2 * Math.tan(Math.PI / ringCounts[0]));
-  const baseRadius = firstRingRadius / (1 - 0.5 / ringCounts.length);
-  const height = Math.sqrt(Math.max(0, slantHeight * slantHeight - baseRadius * baseRadius));
-  const slope = baseRadius / height;
-  const panels: Panel[] = [];
-
-  ringCounts.forEach((count, ringIndex) => {
-    const slantDistance = (ringIndex + 0.5) * slantPitch;
-    const radius = baseRadius * (1 - slantDistance / slantHeight);
-    const y = -height / 2 + slantDistance * (height / slantHeight);
-    for (let column = 0; column < count; column += 1) {
-      const angle = (column / count) * Math.PI * 2 + (ringIndex % 2 ? Math.PI / count : 0);
-      const normal = normalize3([Math.sin(angle), slope, Math.cos(angle)]);
-      const vertical = normalize3([
-        -Math.sin(angle) * baseRadius,
-        height,
-        -Math.cos(angle) * baseRadius,
-      ]);
-      panels.push(
-        alignPanelVertical(
-          panel(
-            `cone-panel-${panels.length + 1}`,
-            [Math.sin(angle) * radius, y, Math.cos(angle) * radius],
-            normal,
-          ),
-          vertical,
-        ),
-      );
-    }
-  });
-  return panels;
+  // These are electrical/scene anchors, not 5 cm facets. The legacy Panel
+  // dimensions remain compatibility metadata while optics uses zone samples.
+  return surface.zones.map((zone) => panel(
+    zone.id,
+    zone.representativePosition,
+    zone.representativeNormal,
+  ));
 }
 
 export function generatePreset(name: PresetName, options: PresetOptions = {}): Panel[] {
@@ -221,33 +125,28 @@ export function generatePreset(name: PresetName, options: PresetOptions = {}): P
   }
 
   let panels: Panel[];
-  switch (name) {
-    case "cube":
-      panels = generateCube(gapM);
-      break;
-    case "plane":
-      panels = generatePlane(options, gapM);
-      break;
-    case "cylinder":
-      panels = generateCylinder(gapM);
-      break;
-    case "sphere":
-      panels = generateSphere(gapM);
-      break;
-    case "cone":
-      panels = generateCone(gapM);
-      break;
-    case "free":
-      panels = generatePlane({ ...options, planeRows: 4 }, gapM);
-      break;
-    default: {
-      const exhaustive: never = name;
-      throw new RangeError(`지원하지 않는 프리셋: ${String(exhaustive)}`);
+  if (isContinuousSurfacePreset(name)) {
+    panels = generateContinuousSkinPreset(name, options);
+  } else {
+    switch (name) {
+      case "cube":
+        panels = generateCube(gapM);
+        break;
+      case "plane":
+        panels = generatePlane(options, gapM);
+        break;
+      case "free":
+        panels = generatePlane({ ...options, planeRows: 4 }, gapM);
+        break;
+      default: {
+        const exhaustive: never = name;
+        throw new RangeError(`지원하지 않는 프리셋: ${String(exhaustive)}`);
+      }
     }
   }
 
   if (panels.length !== 20) {
-    throw new Error(`${name} 프리셋은 정확히 20개 패널이어야 합니다.`);
+    throw new Error(`${name} 프리셋은 정확히 20개 PV 전기 구역이어야 합니다.`);
   }
   return panels;
 }

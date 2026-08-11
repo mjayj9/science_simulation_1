@@ -26,6 +26,24 @@ export type SimulationPanelDefaults = Omit<
 >;
 
 /**
+ * One quadrature point on a curved electrical zone. `areaWeight` is a
+ * positive relative area and is normalized across the zone by the kernel.
+ */
+export interface SimulationSurfaceSample {
+  /** World-space position before the variant's +Y rotation is applied. */
+  positionM: Vec3;
+  /** World-space outward normal before the variant's +Y rotation is applied. */
+  normal: Vec3;
+  areaWeight: number;
+}
+
+/** Static world-space axis-aligned shadow caster. */
+export interface SimulationObstacleBounds {
+  min: Vec3;
+  max: Vec3;
+}
+
+/**
  * A structured-clone-safe panel description. Dynamic visibility arrays are
  * indexed exactly like `SimulationKernelInput.weather`.
  */
@@ -41,6 +59,11 @@ export type SimulationPanelWorkItem = SimulationPanelDefaults & {
   areaM2?: number;
   efficiency?: number;
   electrical?: InstantElectricalInput;
+  /**
+   * Optional curved-surface quadrature. Samples are integrated optically and
+   * thermally before one zone-level I-V curve is supplied to the circuit.
+   */
+  surfaceSamples?: readonly SimulationSurfaceSample[];
   visibilityByStep?: readonly number[];
   diffuseVisibilityByStep?: readonly number[];
   groundVisibilityByStep?: readonly number[];
@@ -54,6 +77,11 @@ export interface SimulationVariantWorkItem {
   /** Optional multiplier applied once to GHI, DNI and DHI. */
   irradianceScale?: number;
   irradianceScaleByStep?: readonly number[];
+  /**
+   * Static world-space AABBs used for direct-beam shadow rays. Terrain and
+   * water surfaces must be excluded by the producer.
+   */
+  obstacleBounds?: readonly SimulationObstacleBounds[];
   /** Omit panels for a fast aggregate panel with `totalPanelAreaM2`. */
   panels?: readonly SimulationPanelWorkItem[];
   topology?: "series" | "parallel";
@@ -96,6 +124,11 @@ export interface SimulationKernelInput {
   chunkSize?: number;
   /** Maximum allowed weather gap in annual mode. Defaults to six hours. */
   maximumGapHours?: number;
+  /**
+   * Fixed offset used only for calendar-month energy buckets. UTC remains the
+   * internal timestamp authority; omit this field for UTC reporting.
+   */
+  reportingOffsetMinutes?: number;
 }
 
 export interface SimulationRunRequest {
@@ -176,7 +209,7 @@ export interface SimulationChunkEvent {
 }
 
 export interface SimulationMonthlyEnergy {
-  /** UTC calendar month, `YYYY-MM`. */
+  /** Calendar month at `SimulationCompleteEvent.reportingOffsetMinutes`, `YYYY-MM`. */
   monthUtc: string;
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
@@ -193,6 +226,8 @@ export interface SimulationCompleteEvent {
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
   monthlyEnergy: SimulationMonthlyEnergy[];
+  /** Fixed offset used for `monthlyEnergy`; zero preserves the legacy UTC contract. */
+  reportingOffsetMinutes: number;
   /** Weather point count. There are `intervals = steps - 1` integration intervals. */
   steps: number;
   intervals: number;

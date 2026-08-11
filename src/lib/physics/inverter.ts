@@ -39,7 +39,14 @@ export interface InverterResult {
   clippingLossW: number;
   wiringLossW: number;
   standbyConsumptionW: number;
-  status: "off" | "running" | "clipped" | "mppt-voltage-limited" | "over-voltage" | "current-limited";
+  status:
+    | "off"
+    | "low-load-cutoff"
+    | "running"
+    | "clipped"
+    | "mppt-voltage-limited"
+    | "over-voltage"
+    | "current-limited";
 }
 
 export function pvWattsV5Efficiency(loadRatio: number, nominalEfficiency = 0.96): number {
@@ -92,6 +99,11 @@ export function calculateInverter(input: InverterInput): InverterResult {
     );
   }
   if (acceptedDcPowerW <= config.startPowerW) {
+    const stoppedStatus: InverterResult["status"] = requestedDc <= 0
+      ? "off"
+      : status === "running"
+        ? "low-load-cutoff"
+        : status;
     return {
       acceptedDcPowerW,
       acPowerW: 0,
@@ -100,7 +112,7 @@ export function calculateInverter(input: InverterInput): InverterResult {
       clippingLossW: 0,
       wiringLossW,
       standbyConsumptionW: config.nightConsumptionW,
-      status: acceptedDcPowerW > 0 ? status : "off",
+      status: stoppedStatus,
     };
   }
 
@@ -110,7 +122,8 @@ export function calculateInverter(input: InverterInput): InverterResult {
   const grossAcPowerW = Math.max(0, acceptedDcPowerW * efficiency);
   const acPowerW = Math.min(config.ratedAcPowerW, grossAcPowerW);
   const clippingLossW = Math.max(0, grossAcPowerW - acPowerW);
-  if (clippingLossW > 0) status = "clipped";
+  if (grossAcPowerW <= 0 && status === "running") status = "low-load-cutoff";
+  else if (clippingLossW > 0) status = "clipped";
   return {
     acceptedDcPowerW,
     acPowerW,

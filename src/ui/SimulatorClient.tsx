@@ -77,17 +77,26 @@ import {
   MODEL_REGISTRY,
   calculateCircuit,
   calculateInverter,
+  simulateContinuousSurface,
   simulateInstant,
   solarPosition as calculatePhysicsSolarPosition,
   sunVector as physicsSunVector,
   type CircuitDevice,
+  type FairnessModeResult,
   type ElectricalConfig as PhysicsElectricalConfig,
   type GHIClosureResult,
   type InverterConfig as PhysicsInverterConfig,
   type ThermalConfig as PhysicsThermalConfig,
   type TraceStage,
 } from "../lib/physics";
-import { generatePreset as generateGeometryPreset } from "../lib/geometry";
+import {
+  createContinuousSurface,
+  generatePreset as generateGeometryPreset,
+  isContinuousSurfacePreset,
+  rayPanelDistance,
+  type ContinuousSurfaceKind,
+  type ContinuousSurfaceModel,
+} from "../lib/geometry";
 import {
   assertWeatherSeries,
   fetchOpenMeteo,
@@ -108,6 +117,13 @@ import {
   type SimulationVariantWorkItem,
   type SimulationWorkerEvent,
 } from "../workers";
+import SimulationWorker from "../workers/simulation.worker?worker";
+import {
+  DIAGNOSTIC_REASON_LABELS,
+  classifyTimePoint,
+  type DiagnosticReasonCode,
+  type DiagnosticSignal,
+} from "../lib/diagnostics/time-series";
 
 type Screen = "assembly" | "environment" | "circuit" | "simulation" | "compare" | "evidence" | "export";
 type PresetName = "cube" | "plane" | "cylinder" | "sphere" | "cone" | "free";
@@ -203,6 +219,8 @@ interface PanelResult extends ScenePanel {
   cosineIncidence: number;
   etaCos: number;
   visibility: number;
+  selfVisibility: number;
+  externalVisibility: number;
   iam: number;
   etaAngle: number;
   ghiClosure: GHIClosureResult;
@@ -240,11 +258,53 @@ interface SystemResult {
   losses: { name: string; value: number; color: string }[];
   modelTrace: TraceStage[];
   ivPoints: { voltage: number; current: number; power: number }[];
+  inverterStatus: string;
+  modelClass: "rigid-panels" | "ideal-flexible-skin";
+  activeAreaM2: number;
+  projectedAreaM2: number;
+  maximumProjectedAreaM2: number;
+  footprintM2: number;
+  independentMppt: FairnessModeResult;
+  sharedCircuit: FairnessModeResult;
+  lossBreakdown: {
+    projectionW: number;
+    iamW: number;
+    selfShadingW: number;
+    occlusionW: number;
+    soilingW: number;
+    temperatureW: number;
+    mismatchW: number;
+    bypassW: number;
+    inverterW: number;
+  };
+}
+
+interface ZoneDiagnosticState {
+  id: string;
+  label: string;
+  aoiDeg: number;
+  cosineIncidence: number;
+  iam: number;
+  directWm2: number;
+  diffuseWm2: number;
+  groundWm2: number;
+  poaWm2: number;
+  effectiveWm2: number;
+  temperatureC: number;
+  voltageV: number;
+  currentA: number;
+  powerW: number;
+  visibility: number;
+  bypassActive: boolean;
 }
 
 interface DailyPoint {
   time: string;
   minute: number;
+  timestampOriginal: string;
+  timeUtcIso: string;
+  localDateTime: string;
+  weatherSource: string;
   /** True when power is already the weighted mean over [minute, next minute]. */
   intervalMean: boolean;
   dc: number;
@@ -259,6 +319,21 @@ interface DailyPoint {
   ghi: number;
   dni: number;
   dhi: number;
+  azimuth: number;
+  zenith: number;
+  voltage: number;
+  current: number;
+  visibility: number;
+  bypassCount: number;
+  inverterStatus: string;
+  sharedDc: number;
+  sharedAc: number;
+  independentDc: number;
+  independentAc: number;
+  representativePhaseDeg: number;
+  zones: ZoneDiagnosticState[];
+  reasonCodes: DiagnosticReasonCode[];
+  diagnosticSeverity: "normal" | "attention" | "error";
 }
 
 type DiagnosticSeriesKey =
@@ -554,8 +629,31 @@ function renderPanelsFromBase(basePanels: ScenePanel[], results: PanelResult[]):
   });
 }
 
-function generatePreset(name: PresetName, tiltDeg = 30, azimuthDeg = 180): ScenePanel[] {
+interface SurfaceShapeOptions {
+  cylinderAspectRatio?: number;
+  coneAspectRatio?: number;
+  azimuthSamples?: number;
+}
+
+function generatePreset(
+  name: PresetName,
+  tiltDeg = 30,
+  azimuthDeg = 180,
+  surfaceOptions: SurfaceShapeOptions = {},
+): ScenePanel[] {
   if (name === "free") return [panel("free-1", "P-01", [0, 0.055, 0], [0, 1, 0])];
+  if (isContinuousSurfacePreset(name)) {
+    const surface = createContinuousSurface(name, surfaceOptions.azimuthSamples ?? 32, {
+      cylinderAspectRatio: surfaceOptions.cylinderAspectRatio,
+      coneAspectRatio: surfaceOptions.coneAspectRatio,
+    });
+    return surface.zones.map((zone, index) => ({
+      id: zone.id,
+      label: `Z-${String(index + 1).padStart(2, "0")}`,
+      position: [...zone.representativePosition] as Vec3Tuple,
+      quaternion: quaternionFromNormal([...zone.representativeNormal] as Vec3Tuple),
+    }));
+  }
   const generated = generateGeometryPreset(name, {
     planeTiltDeg: tiltDeg,
     planeAzimuthDeg: azimuthDeg,
@@ -659,6 +757,7 @@ function interpolateWeatherPoint(
   const directionDelta = ((right.windDirectionDeg - left.windDirectionDeg + 540) % 360) - 180;
   return {
     timeUtcMs,
+    sourceTimestamp: `${left.sourceTimestamp ?? new Date(left.timeUtcMs).toISOString()} → ${right.sourceTimestamp ?? new Date(right.timeUtcMs).toISOString()}`,
     ghiWm2: Math.max(0, linear(left.ghiWm2, right.ghiWm2)),
     dniWm2: Math.max(0, linear(left.dniWm2, right.dniWm2)),
     dhiWm2: Math.max(0, linear(left.dhiWm2, right.dhiWm2)),
@@ -713,16 +812,20 @@ function mergePreferredWeather(
   fallback: WeatherSeries,
 ): WeatherSeries {
   if (!preferred) return fallback;
-  let preferredCount = 0;
-  const points = fallback.points.map((point) => {
-    const resolved = preferredWeatherPointAt(preferred, point.timeUtcMs);
-    if (!resolved) return point;
-    preferredCount += 1;
-    return resolved;
-  });
+  const resolved = fallback.points.map((point) => preferredWeatherPointAt(preferred, point.timeUtcMs));
+  // Never splice measured/API data and clear-sky fallback point by point. A
+  // source boundary looked exactly like a physical dropout followed by an
+  // evening spike while the provenance still claimed one source. Use the
+  // preferred series only when it covers the entire requested clock.
+  if (resolved.every((point): point is WeatherPoint => point !== null)) {
+    return { points: resolved, provenance: preferred.provenance };
+  }
   return {
-    points,
-    provenance: preferredCount > 0 ? preferred.provenance : fallback.provenance,
+    ...fallback,
+    provenance: {
+      ...fallback.provenance,
+      fallbackReason: `${preferred.provenance.labelKo}가 요청 시간축 전체를 덮지 않아 단일 오프라인 시계열을 사용했습니다.`,
+    },
   };
 }
 
@@ -839,15 +942,70 @@ function rayAabb(origin: Vec3Tuple, direction: Vec3Tuple, min: Vec3Tuple, max: V
   return far >= near && far > 0;
 }
 
-function obstacleBounds(obstacle: SceneObstacle): { min: Vec3Tuple; max: Vec3Tuple } {
+function quaternionFromEulerXyz([x, y, z]: Vec3Tuple): QuaternionTuple {
+  const c1 = Math.cos(x / 2);
+  const c2 = Math.cos(y / 2);
+  const c3 = Math.cos(z / 2);
+  const s1 = Math.sin(x / 2);
+  const s2 = Math.sin(y / 2);
+  const s3 = Math.sin(z / 2);
+  return [
+    s1 * c2 * c3 + c1 * s2 * s3,
+    c1 * s2 * c3 - s1 * c2 * s3,
+    c1 * c2 * s3 + s1 * s2 * c3,
+    c1 * c2 * c3 - s1 * s2 * s3,
+  ];
+}
+
+function rotateVectorPreservingLength(
+  [x, y, z, w]: QuaternionTuple,
+  vector: Vec3Tuple,
+): Vec3Tuple {
+  const uv: Vec3Tuple = [
+    y * vector[2] - z * vector[1],
+    z * vector[0] - x * vector[2],
+    x * vector[1] - y * vector[0],
+  ];
+  const uuv: Vec3Tuple = [
+    y * uv[2] - z * uv[1],
+    z * uv[0] - x * uv[2],
+    x * uv[1] - y * uv[0],
+  ];
+  return [
+    vector[0] + 2 * (w * uv[0] + uuv[0]),
+    vector[1] + 2 * (w * uv[1] + uuv[1]),
+    vector[2] + 2 * (w * uv[2] + uuv[2]),
+  ];
+}
+
+/** Conservative world AABB for the same scaled and XYZ-Euler-rotated pose rendered by ThreeWorkspace. */
+export function obstacleBounds(obstacle: SceneObstacle): { min: Vec3Tuple; max: Vec3Tuple } {
   const bases: Record<SceneObstacle["type"], Vec3Tuple> = {
-    mountain: [0.09, 0.18, 0.09], building: [0.1, 0.13, 0.09], tree: [0.09, 0.15, 0.09], wall: [0.16, 0.09, 0.012], ground: [0.22, 0.006, 0.22], water: [0.22, 0.006, 0.22], other: [0.13, 0.13, 0.13],
+    mountain: [0.18, 0.18, 0.18], building: [0.1, 0.13, 0.09], tree: [0.09, 0.12, 0.09], wall: [0.16, 0.09, 0.012], ground: [0.22, 0.006, 0.22], water: [0.22, 0.006, 0.22], other: [0.13, 0.13, 0.13],
   };
   const baseSize: Vec3Tuple = obstacle.label.startsWith("GLB 차폐 경계") ? [0.35, 0.35, 0.35] : bases[obstacle.type];
-  const size = baseSize.map((value, index) => value * obstacle.scale[index]) as Vec3Tuple;
+  const halfSize = baseSize.map((value, index) => Math.abs(value * obstacle.scale[index]) / 2) as Vec3Tuple;
+  const rotation = quaternionFromEulerXyz(obstacle.rotation ?? [0, 0, 0]);
+  const corners: Vec3Tuple[] = [];
+  for (const x of [-halfSize[0], halfSize[0]]) {
+    for (const y of [-halfSize[1], halfSize[1]]) {
+      for (const z of [-halfSize[2], halfSize[2]]) {
+        const rotated = rotateVectorPreservingLength(rotation, [x, y, z]);
+        corners.push(add(obstacle.position, rotated));
+      }
+    }
+  }
   return {
-    min: [obstacle.position[0] - size[0] / 2, obstacle.position[1] - size[1] / 2, obstacle.position[2] - size[2] / 2],
-    max: [obstacle.position[0] + size[0] / 2, obstacle.position[1] + size[1] / 2, obstacle.position[2] + size[2] / 2],
+    min: [
+      Math.min(...corners.map((corner) => corner[0])),
+      Math.min(...corners.map((corner) => corner[1])),
+      Math.min(...corners.map((corner) => corner[2])),
+    ],
+    max: [
+      Math.max(...corners.map((corner) => corner[0])),
+      Math.max(...corners.map((corner) => corner[1])),
+      Math.max(...corners.map((corner) => corner[2])),
+    ],
   };
 }
 
@@ -857,21 +1015,195 @@ function sampleVisibility(target: ScenePanel, allPanels: ScenePanel[], obstacles
   const localX = rotateVectorByQuaternion(target.quaternion, [1, 0, 0]);
   const localY = rotateVectorByQuaternion(target.quaternion, [0, 1, 0]);
   const bounds = obstacles.filter((item) => item.type !== "ground" && item.type !== "water").map(obstacleBounds);
-  const panelBounds = allPanels.filter((item) => item.id !== target.id).map((item) => ({
-    min: [item.position[0] - 0.0245, item.position[1] - 0.0245, item.position[2] - 0.002] as Vec3Tuple,
-    max: [item.position[0] + 0.0245, item.position[1] + 0.0245, item.position[2] + 0.002] as Vec3Tuple,
+  const targetNormal = normalFromQuaternion(target.quaternion);
+  const panelOccluders = allPanels.filter((item) => item.id !== target.id).map((item) => ({
+    id: item.id,
+    widthM: 0.05 as const,
+    heightM: 0.05 as const,
+    areaM2: 0.0025 as const,
+    position: item.position,
+    quaternion: item.quaternion,
+    normal: normalFromQuaternion(item.quaternion),
   }));
   let visible = 0;
+  let panelVisible = 0;
+  let obstacleVisible = 0;
   const total = samples * samples;
   for (let row = 0; row < samples; row += 1) {
     for (let col = 0; col < samples; col += 1) {
       const u = ((col + 0.5) / samples - 0.5) * PANEL_SIZE_M * 0.94;
       const v = ((row + 0.5) / samples - 0.5) * PANEL_SIZE_M * 0.94;
-      const origin = add(target.position, add(scale(localX, u), scale(localY, v)));
-      if (![...bounds, ...panelBounds].some((box) => rayAabb(origin, sun, box.min, box.max))) visible += 1;
+      const origin = add(
+        add(target.position, add(scale(localX, u), scale(localY, v))),
+        scale(targetNormal, 1e-5),
+      );
+      const obstacleBlocked = bounds.some((box) => rayAabb(origin, sun, box.min, box.max));
+      const panelBlocked = panelOccluders.some((panel) => rayPanelDistance(origin, sun, panel) !== null);
+      if (!panelBlocked) panelVisible += 1;
+      if (!obstacleBlocked) obstacleVisible += 1;
+      if (!obstacleBlocked && !panelBlocked) visible += 1;
     }
   }
-  return visible / total;
+  return {
+    total: visible / total,
+    self: panelVisible / total,
+    external: obstacleVisible / total,
+  };
+}
+
+function simulateIdealSkinSystem(
+  surface: ContinuousSurfaceModel,
+  obstacles: SceneObstacle[],
+  solar: SolarPosition,
+  weatherInput: WeatherState,
+  environment: EnvironmentSettings,
+  electrical: ElectricalSettings,
+  thermal: ThermalSettings,
+  inverter: InverterSettings,
+  rotationAngle: number,
+  topology: "series" | "parallel",
+  iamB0: number,
+  bypassEnabled: boolean,
+): SystemResult {
+  const daylight = solar.elevationDeg > 0;
+  const weather = daylight ? weatherInput : { ...weatherInput, ghi: 0, dni: 0, dhi: 0 };
+  const physicsElectrical = toPhysicsElectrical(electrical);
+  const physicsThermal = toPhysicsThermal(thermal);
+  const physicsInverter = toPhysicsInverter(inverter);
+  const obstacleBoxes = obstacles
+    .filter((item) => item.type !== "ground" && item.type !== "water")
+    .map(obstacleBounds);
+  const continuous = simulateContinuousSurface({
+    surface,
+    timestamp: solar.timeUtcMs,
+    solarOverride: { azimuthDeg: solar.azimuthDeg, elevationDeg: solar.elevationDeg },
+    irradiance: { ghiWm2: weather.ghi, dniWm2: weather.dni, dhiWm2: weather.dhi },
+    weather: {
+      ambientTemperatureC: weather.ambientC,
+      referenceWindSpeedMS: weather.windMs,
+      referenceWindHeightM: Math.max(10, environment.displacementM + environment.roughnessM + 0.02),
+      roughnessLengthM: Math.max(0.0001, environment.roughnessM),
+      displacementHeightM: Math.max(0, environment.displacementM),
+    },
+    electricalConfig: physicsElectrical,
+    thermal: physicsThermal,
+    inverterConfig: physicsInverter,
+    topology,
+    bypassEnabled,
+    rotationAngleRad: rotationAngle,
+    albedo: weather.albedo,
+    iam: { model: "ashrae", b0: clamp(iamB0, 0, 1) },
+    diffuseModel: "hay-davies",
+    soilingLossFraction: clamp(weather.soilingPct / 100, 0, 1),
+    visibilityAtSample: obstacleBoxes.length
+      ? (sample, sunDirection) => {
+          const origin: Vec3Tuple = [
+            sample.position[0] + sample.normal[0] * 1e-5,
+            sample.position[1] + sample.normal[1] * 1e-5,
+            sample.position[2] + sample.normal[2] * 1e-5,
+          ];
+          const direction: Vec3Tuple = [sunDirection.x, sunDirection.y, sunDirection.z];
+          return obstacleBoxes.some((box) => rayAabb(origin, direction, box.min, box.max)) ? 0 : 1;
+        }
+      : undefined,
+  });
+  const panelResults: PanelResult[] = continuous.zones.map((zone) => {
+    const first = zone.samples[0]?.simulation;
+    const orientation = panelOrientation([...zone.normal] as Vec3Tuple);
+    const averageWind = zone.samples.length
+      ? zone.samples.reduce((sum, sample) => sum + sample.simulation.moduleWindSpeedMS, 0) / zone.samples.length
+      : weather.windMs;
+    return {
+      id: zone.id,
+      label: zone.label,
+      position: [...zone.position] as Vec3Tuple,
+      quaternion: quaternionFromNormal([...zone.normal] as Vec3Tuple),
+      irradianceWm2: zone.averageEffectivePoaWm2,
+      temperatureC: zone.averageTemperatureC,
+      powerW: zone.operatingPowerW,
+      bypassActive: zone.bypassActive,
+      normal: [...zone.normal] as Vec3Tuple,
+      incidenceDeg: zone.averageAoiDeg,
+      panelTiltDeg: orientation.tiltDeg,
+      panelAzimuthDeg: orientation.azimuthDeg,
+      cosineIncidence: zone.averageEtaCos,
+      etaCos: zone.averageEtaCos,
+      visibility: zone.averageVisibility,
+      selfVisibility: 1,
+      externalVisibility: zone.averageVisibility,
+      iam: zone.averageIam,
+      etaAngle: zone.averageEtaAngle,
+      ghiClosure: first?.poa.ghiClosure ?? {
+        reconstructedGhiWm2: 0,
+        residualWm2: 0,
+        relativeResidual: 0,
+        toleranceWm2: 1,
+        isClosed: true,
+      },
+      beamWm2: zone.averageDirectPoaWm2,
+      skyWm2: zone.averageDiffusePoaWm2,
+      groundWm2: zone.averageGroundPoaWm2,
+      poaWm2: zone.averagePoaWm2,
+      effectiveWm2: zone.averageEffectivePoaWm2,
+      localWindMs: averageWind,
+      voltageV: zone.operatingVoltageV,
+      currentA: zone.operatingCurrentA,
+      modelTrace: zone.trace,
+    };
+  });
+  const ledger = continuous.lossLedger;
+  return {
+    panels: panelResults,
+    dcW: continuous.sharedCircuit.dcPowerW,
+    acW: continuous.sharedCircuit.acPowerW,
+    grossW: continuous.zones.reduce((sum, zone) => sum + zone.independentMppPowerW, 0),
+    voltageV: continuous.sharedCircuit.dcVoltageV,
+    currentA: continuous.sharedCircuit.dcCurrentA,
+    inverterEfficiency: continuous.sharedCircuit.inverter.efficiency,
+    clippingW: continuous.sharedCircuit.inverter.clippingLossW,
+    mismatchW: ledger.mismatchLossW + ledger.bypassLossW,
+    wiringW: continuous.sharedCircuit.inverter.wiringLossW,
+    bypassCount: continuous.sharedCircuit.bypassCount,
+    areaWeightedAoiDeg: panelResults.reduce((sum, item) => sum + item.incidenceDeg, 0) / Math.max(1, panelResults.length),
+    areaWeightedEtaCos: panelResults.reduce((sum, item) => sum + item.etaCos, 0) / Math.max(1, panelResults.length),
+    areaWeightedIam: panelResults.reduce((sum, item) => sum + item.iam, 0) / Math.max(1, panelResults.length),
+    areaWeightedEtaAngle: panelResults.reduce((sum, item) => sum + item.etaAngle, 0) / Math.max(1, panelResults.length),
+    areaWeightedVisibility: panelResults.reduce((sum, item) => sum + item.visibility, 0) / Math.max(1, panelResults.length),
+    losses: [
+      { name: "태양 직달 자원", value: ledger.solarResourceDcW, color: "#f5b942" },
+      { name: "투영면적", value: -ledger.projectionLossW, color: "#d9914f" },
+      { name: "입사각 · IAM", value: -ledger.iamLossW, color: "#b786d8" },
+      { name: "자체 차폐", value: -ledger.selfShadingLossW, color: "#88715e" },
+      { name: "외부 차폐", value: -ledger.externalOcclusionLossW, color: "#6d8291" },
+      { name: "오염", value: -ledger.soilingLossW, color: "#927a55" },
+      { name: "온도 · PV 모델", value: -ledger.temperatureAndModelLossW, color: "#df8a78" },
+      { name: "직렬 불일치", value: -ledger.mismatchLossW, color: "#d96957" },
+      { name: "바이패스(불일치 부분)", value: -ledger.bypassLossW, color: "#e8a35b" },
+      { name: "인버터 · 배선", value: -ledger.inverterLossW, color: "#579bbd" },
+      { name: "AC", value: continuous.sharedCircuit.acPowerW, color: "#42c6a5" },
+    ],
+    modelTrace: panelResults[0]?.modelTrace ?? [],
+    ivPoints: continuous.circuitPoints.map((point) => ({ voltage: point.voltageV, current: point.currentA, power: point.powerW })),
+    inverterStatus: continuous.sharedCircuit.inverter.status,
+    modelClass: "ideal-flexible-skin",
+    activeAreaM2: continuous.activeAreaM2,
+    projectedAreaM2: continuous.projectedAreaM2,
+    maximumProjectedAreaM2: continuous.maximumProjectedAreaM2,
+    footprintM2: continuous.footprintM2,
+    independentMppt: continuous.independentMppt,
+    sharedCircuit: continuous.sharedCircuit,
+    lossBreakdown: {
+      projectionW: ledger.projectionLossW,
+      iamW: ledger.iamLossW,
+      selfShadingW: ledger.selfShadingLossW,
+      occlusionW: ledger.externalOcclusionLossW,
+      soilingW: ledger.soilingLossW,
+      temperatureW: ledger.temperatureAndModelLossW,
+      mismatchW: ledger.mismatchLossW,
+      bypassW: ledger.bypassLossW,
+      inverterW: ledger.inverterLossW,
+    },
+  };
 }
 
 function evaluateSystem(
@@ -889,7 +1221,24 @@ function evaluateSystem(
   sampleCount = 3,
   circuitMode: "simple" | "single-diode" = "single-diode",
   bypassEnabled = true,
+  continuousSurface?: ContinuousSurfaceModel | null,
 ): SystemResult {
+  if (continuousSurface) {
+    return simulateIdealSkinSystem(
+      continuousSurface,
+      obstacles,
+      solar,
+      weatherInput,
+      environment,
+      electrical,
+      thermal,
+      inverter,
+      rotationAngle,
+      topology,
+      iamB0,
+      bypassEnabled,
+    );
+  }
   // Daylight is geometric. Preserve a supplied GHI/DNI/DHI triplet so the
   // shared closure audit can expose inconsistent data instead of hiding it.
   const daylight = solar.elevationDeg > 0;
@@ -901,7 +1250,10 @@ function evaluateSystem(
   const evaluatedPanels = rotatedPanels.map((item): { result: PanelResult; device: CircuitDevice } => {
     const normal = normalFromQuaternion(item.quaternion);
     const mu = dot(normal, solar.vector);
-    const visibility = mu > 0 && daylight ? sampleVisibility(item, rotatedPanels, obstacles, solar.vector, sampleCount) : 0;
+    const visibilityAudit = mu > 0 && daylight
+      ? sampleVisibility(item, rotatedPanels, obstacles, solar.vector, sampleCount)
+      : { total: 0, self: 1, external: 1 };
+    const visibility = visibilityAudit.total;
     const minimumLogHeight = environment.displacementM + environment.roughnessM + 0.01;
     const instant = simulateInstant({
       timestamp: solar.timeUtcMs,
@@ -970,6 +1322,8 @@ function evaluateSystem(
       cosineIncidence: instant.poa.cosineIncidence,
       etaCos: instant.poa.etaCos,
       visibility,
+      selfVisibility: visibilityAudit.self,
+      externalVisibility: visibilityAudit.external,
       iam: instant.poa.iamFactor,
       etaAngle: instant.poa.etaAngle,
       ghiClosure: instant.poa.ghiClosure,
@@ -1015,11 +1369,72 @@ function evaluateSystem(
     config: physicsInverter,
   });
   const mismatchW = Math.max(0, grossW - circuit.mpp.powerW);
+  const bypassLossW = Math.min(mismatchW, evaluatedPanels.reduce((sum, item) => (
+    stateByPanel.get(item.result.id)?.bypassConducting ? sum + item.device.curve.mpp.powerW : sum
+  ), 0));
+  const exclusiveMismatchW = Math.max(0, mismatchW - bypassLossW);
   const wiringW = systemInverter.wiringLossW;
   const dcW = systemInverter.acceptedDcPowerW;
-  const rawAc = systemInverter.grossAcPowerW;
   const acW = systemInverter.acPowerW;
   const clippingW = systemInverter.clippingLossW;
+  const independentVoltageV = Math.max(circuit.mpp.voltageV, physicsInverter.mpptMinVoltageV, 1e-6);
+  const independentInverter = calculateInverter({
+    dcPowerW: grossW,
+    dcVoltageV: independentVoltageV,
+    dcCurrentA: grossW / independentVoltageV,
+    config: physicsInverter,
+  });
+  const sharedCircuit: FairnessModeResult = {
+    mode: "shared-circuit",
+    dcPowerW: systemInverter.acceptedDcPowerW,
+    acPowerW: systemInverter.acPowerW,
+    dcVoltageV: circuit.mpp.voltageV,
+    dcCurrentA: circuit.mpp.currentA,
+    inverter: systemInverter,
+    mismatchLossW: exclusiveMismatchW,
+    bypassLossW,
+    bypassCount: panelResults.filter((item) => item.bypassActive).length,
+  };
+  const independentMppt: FairnessModeResult = {
+    mode: "independent-mppt",
+    dcPowerW: independentInverter.acceptedDcPowerW,
+    acPowerW: independentInverter.acPowerW,
+    dcVoltageV: independentVoltageV,
+    dcCurrentA: grossW / independentVoltageV,
+    inverter: independentInverter,
+    mismatchLossW: 0,
+    bypassLossW: 0,
+    bypassCount: 0,
+  };
+  const projectedAreaM2 = panelResults.reduce(
+    (sum, item) => sum + PANEL_AREA_M2 * Math.max(0, dot(item.normal, solar.vector)),
+    0,
+  );
+  const footprintBounds = panelResults.reduce(
+    (bounds, item) => ({
+      minX: Math.min(bounds.minX, item.position[0] - PANEL_SIZE_M / 2),
+      maxX: Math.max(bounds.maxX, item.position[0] + PANEL_SIZE_M / 2),
+      minZ: Math.min(bounds.minZ, item.position[2] - PANEL_SIZE_M / 2),
+      maxZ: Math.max(bounds.maxZ, item.position[2] + PANEL_SIZE_M / 2),
+    }),
+    { minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity },
+  );
+  const footprintM2 = Number.isFinite(footprintBounds.minX)
+    ? Math.max(0, footprintBounds.maxX - footprintBounds.minX) * Math.max(0, footprintBounds.maxZ - footprintBounds.minZ)
+    : 0;
+  const activeAreaM2 = panelResults.length * PANEL_AREA_M2;
+  const conversionEfficiency = physicsElectrical.efficiency;
+  const projectionLossW = Math.max(0, weather.dni * (activeAreaM2 - projectedAreaM2) * conversionEfficiency);
+  const iamLossW = panelResults.reduce((sum, item) => sum + weather.dni * item.etaCos * (1 - item.iam) * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const selfShadingLossW = panelResults.reduce((sum, item) => sum + weather.dni * item.etaAngle * (1 - item.selfVisibility) * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const occlusionLossW = panelResults.reduce((sum, item) => sum + weather.dni * item.etaAngle * Math.max(0, item.selfVisibility - item.visibility) * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const beforeSoilingDcW = panelResults.reduce((sum, item) => sum + item.poaWm2 * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const opticalDcW = panelResults.reduce((sum, item) => sum + item.effectiveWm2 * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const soilingLossW = Math.max(0, beforeSoilingDcW - opticalDcW);
+  // Signed so cold-weather conversion gain closes the same exclusive ledger.
+  const temperatureLossW = opticalDcW - grossW;
+  const diffuseAndGroundDcW = panelResults.reduce((sum, item) => sum + (item.skyWm2 + item.groundWm2) * PANEL_AREA_M2 * conversionEfficiency, 0);
+  const solarResourceDcW = weather.dni * activeAreaM2 * conversionEfficiency + diffuseAndGroundDcW;
   const modelTrace: TraceStage[] = [
     ...(panelResults[0]?.modelTrace.filter((stage) => stage.modelId !== "inverter.pvwatts-v5") ?? []),
     {
@@ -1056,19 +1471,46 @@ function evaluateSystem(
     areaWeightedEtaAngle: areaWeighted((item) => item.etaAngle),
     areaWeightedVisibility: areaWeighted((item) => item.visibility),
     losses: [
-      { name: "가용 DC", value: grossW, color: "#f5b942" },
-      { name: "회로 불일치", value: -mismatchW, color: "#d96957" },
-      { name: "배선", value: -wiringW, color: "#9a7bd2" },
-      { name: "인버터", value: -Math.max(0, circuit.mpp.powerW - wiringW - rawAc), color: "#579bbd" },
-      { name: "클리핑", value: -clippingW, color: "#d9914f" },
+      { name: "태양 자원", value: solarResourceDcW, color: "#f5b942" },
+      { name: "투영면적", value: -projectionLossW, color: "#d9914f" },
+      { name: "입사각 · IAM", value: -iamLossW, color: "#b786d8" },
+      { name: "자체 차폐", value: -selfShadingLossW, color: "#88715e" },
+      { name: "외부 차폐", value: -occlusionLossW, color: "#6d8291" },
+      { name: "오염", value: -soilingLossW, color: "#927a55" },
+      { name: "온도 · PV 모델", value: -temperatureLossW, color: "#df8a78" },
+      { name: "회로 불일치", value: -exclusiveMismatchW, color: "#d96957" },
+      { name: "바이패스(불일치 부분)", value: -bypassLossW, color: "#e8a35b" },
+      { name: "인버터 · 배선 · 클리핑", value: -Math.max(0, circuit.mpp.powerW - acW), color: "#579bbd" },
       { name: "AC", value: acW, color: "#42c6a5" },
     ],
     modelTrace,
     ivPoints: circuit.points.map((point) => ({ voltage: point.voltageV, current: point.currentA, power: point.powerW })),
+    inverterStatus: systemInverter.status,
+    modelClass: "rigid-panels",
+    activeAreaM2,
+    projectedAreaM2,
+    maximumProjectedAreaM2: activeAreaM2,
+    footprintM2,
+    independentMppt,
+    sharedCircuit,
+    lossBreakdown: {
+      projectionW: projectionLossW,
+      iamW: iamLossW,
+      selfShadingW: selfShadingLossW,
+      occlusionW: occlusionLossW,
+      soilingW: soilingLossW,
+      temperatureW: temperatureLossW,
+      mismatchW: exclusiveMismatchW,
+      bypassW: bypassLossW,
+      inverterW: Math.max(0, circuit.mpp.powerW - acW),
+    },
   };
 }
 
-export function integrateWh(points: { minute: number; ac: number; intervalMean?: boolean }[]) {
+function integrateSelectedWh<T extends { minute: number; intervalMean?: boolean }>(
+  points: T[],
+  power: (point: T) => number,
+) {
   let energy = 0;
   for (let index = 1; index < points.length; index += 1) {
     const dtHours = (points[index].minute - points[index - 1].minute) / 60;
@@ -1077,11 +1519,15 @@ export function integrateWh(points: { minute: number; ac: number; intervalMean?:
     // forward interval. Trapezoid-integrating two adjacent interval means
     // would shift half of the next interval into the current one.
     const intervalPowerW = previous.intervalMean
-      ? previous.ac
-      : 0.5 * (previous.ac + points[index].ac);
+      ? power(previous)
+      : 0.5 * (power(previous) + power(points[index]));
     energy += intervalPowerW * dtHours;
   }
   return energy;
+}
+
+export function integrateWh(points: { minute: number; ac: number; intervalMean?: boolean }[]) {
+  return integrateSelectedWh(points, (point) => point.ac);
 }
 
 function formatPower(value: number) {
@@ -1163,7 +1609,7 @@ export default function SimulatorClient() {
   const [scenarioName, setScenarioName] = useState("서울 · 하지 형상 비교");
   const [preset, setPreset] = useState<PresetName>("sphere");
   const [panels, setPanels] = useState<ScenePanel[]>(() => generatePreset("sphere"));
-  const [selectedPanelId, setSelectedPanelId] = useState<string | null>("sphere-1");
+  const [selectedPanelId, setSelectedPanelId] = useState<string | null>("sphere-zone-1");
   const [tiltDeg, setTiltDeg] = useState(30);
   const [panelAzimuthDeg, setPanelAzimuthDeg] = useState(180);
   const [transformMode, setTransformMode] = useState<"translate" | "rotate" | "scale">("translate");
@@ -1172,6 +1618,10 @@ export default function SimulatorClient() {
   const [showNormals, setShowNormals] = useState(true);
   const [showRays, setShowRays] = useState(true);
   const [quality, setQuality] = useState<"fast" | "balanced" | "precise">("balanced");
+  const [cylinderAspectRatio, setCylinderAspectRatio] = useState(1);
+  const [coneAspectRatio, setConeAspectRatio] = useState(2);
+  const [showZoneBoundaries, setShowZoneBoundaries] = useState(true);
+  const [showSurfaceSamples, setShowSurfaceSamples] = useState(false);
   const [past, setPast] = useState<ScenePanel[][]>([]);
   const [future, setFuture] = useState<ScenePanel[][]>([]);
 
@@ -1212,6 +1662,7 @@ export default function SimulatorClient() {
     dc: true,
     ac: true,
   });
+  const [selectedDiagnosticMinute, setSelectedDiagnosticMinute] = useState(18 * 60);
 
   const [environmentName, setEnvironmentName] = useState<EnvironmentName>("plain");
   const [environment, setEnvironment] = useState<EnvironmentSettings>(ENVIRONMENTS.plain);
@@ -1245,8 +1696,10 @@ export default function SimulatorClient() {
   const [annualEnergyWhByVariant, setAnnualEnergyWhByVariant] = useState<Record<string, number>>({});
   const [annualMonthlyByVariant, setAnnualMonthlyByVariant] = useState<Record<string, { month: string; energy: number; normalized: number }[]>>({});
   const [annualScope, setAnnualScope] = useState<"current" | "compare" | null>(null);
+  const [annualAuditCode, setAnnualAuditCode] = useState<DiagnosticReasonCode | null>(null);
   const annualWorker = useRef<Worker | null>(null);
   const annualRequest = useRef<SimulationRunRequest | null>(null);
+  const lastAnnualScenarioKey = useRef<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
   const [toast, setToast] = useState<string | null>(null);
   const hydrated = useRef(false);
@@ -1285,8 +1738,11 @@ export default function SimulatorClient() {
       seed: String(seed),
       offlinePreset: offlinePresetFor(weatherPreset),
     });
-    return mergePreferredWeather(automaticWeatherSeries, fallback);
-  }, [automaticWeatherSeries, elevationM, latitude, longitude, seed, weatherPreset]);
+    const preferred = dataMode === "open-meteo" || dataMode === "pvgis-file" || dataMode === "nasa-file"
+      ? automaticWeatherSeries
+      : null;
+    return mergePreferredWeather(preferred, fallback);
+  }, [automaticWeatherSeries, dataMode, elevationM, latitude, longitude, seed, weatherPreset]);
 
   const instantWeather = useMemo(() => {
     if (dataMode === "manual") return weather;
@@ -1301,6 +1757,14 @@ export default function SimulatorClient() {
   }, [automaticWeatherSeries, buildAutomaticWeather, instantUtcMs]);
 
   const sampleGrid = quality === "fast" ? 1 : quality === "precise" ? 5 : 3;
+  const surfaceAzimuthSamples = quality === "fast" ? 16 : quality === "precise" ? 64 : 32;
+  const currentSurface = useMemo<ContinuousSurfaceModel | null>(() => (
+    isContinuousSurfacePreset(preset)
+      ? createContinuousSurface(preset, surfaceAzimuthSamples, { cylinderAspectRatio, coneAspectRatio })
+      : null
+  ), [preset, surfaceAzimuthSamples, cylinderAspectRatio, coneAspectRatio]);
+  const isFlexibleSkin = currentSurface !== null;
+  const modelClassLabel = isFlexibleSkin ? "이상적 유연 PV 스킨" : "강체 패널";
   const simulationYear = Number(dateTime.slice(0, 4));
   const activeRotationAngle = rotation.mode === "static" ? 0 : rotationAngle;
   const circuitValidation = useMemo(() => validateCircuitEdges(
@@ -1310,7 +1774,7 @@ export default function SimulatorClient() {
   ), [panels, topology, circuitEdges]);
   const result = useMemo(
     () => {
-      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled);
+      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, currentSurface);
       if (circuitValidation.isValid) return computed;
       return {
         ...computed,
@@ -1321,7 +1785,7 @@ export default function SimulatorClient() {
         losses: [...computed.losses, { name: "배선 검증 실패", value: -computed.dcW, color: "#d64f61" }],
       };
     },
-    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
+    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, currentSurface, circuitValidation.isValid],
   );
   const renderPanels = useMemo(
     () => renderPanelsFromBase(panels, result.panels),
@@ -1330,17 +1794,20 @@ export default function SimulatorClient() {
 
   const staticResult = useMemo(
     () => {
-      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, 0, topology, iamB0, sampleGrid, circuitMode, bypassEnabled);
+      const computed = evaluateSystem(panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, 0, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, currentSurface);
       return circuitValidation.isValid ? computed : { ...computed, dcW: 0, acW: 0, currentA: 0, inverterEfficiency: 0 };
     },
-    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, circuitValidation.isValid],
+    [panels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, currentSurface, circuitValidation.isValid],
   );
 
-  const buildDaySeries = useCallback((targetPanels: ScenePanel[], day: string, stepMinutes: number, modelMode: "simple" | "single-diode") => {
+  const buildDaySeries = useCallback((targetPanels: ScenePanel[], day: string, stepMinutes: number, modelMode: "simple" | "single-diode", targetPreset: PresetName = preset) => {
     const points: DailyPoint[] = [];
     const dayStart = localDayStartUtcMs(day, timezoneHours);
     const weatherSeries = buildAutomaticWeather(dayStart, dayStart + 86_400_000, stepMinutes);
     const samplesPerTurn = quality === "precise" ? 72 : quality === "balanced" ? 24 : 12;
+    const targetSurface = isContinuousSurfacePreset(targetPreset)
+      ? createContinuousSurface(targetPreset, surfaceAzimuthSamples, { cylinderAspectRatio, coneAspectRatio })
+      : null;
     const phaseVariant: SimulationVariantWorkItem | null = rotation.mode === "fixed"
       ? {
           variantId: "ui-daily-rotation",
@@ -1390,8 +1857,20 @@ export default function SimulatorClient() {
       let etaCos = 0;
       let iam = 0;
       let etaAngle = 0;
+      let voltage = 0;
+      let current = 0;
+      let visibility = 0;
+      let bypassCount = 0;
+      let sharedDc = 0;
+      let sharedAc = 0;
+      let independentDc = 0;
+      let independentAc = 0;
+      let representative: SystemResult | null = null;
+      let representativePhaseDeg = 0;
+      let representativeWeight = -1;
+      const inverterStatuses = new Map<string, number>();
       for (const phase of phaseSamples) {
-        const calculated = evaluateSystem(targetPanels, obstacles, sunAtTime, weatherAtTime, environment, electrical, thermal, inverter, phase.angleRad, topology, iamB0, quality === "precise" ? 3 : 1, modelMode, bypassEnabled);
+        const calculated = evaluateSystem(targetPanels, obstacles, sunAtTime, weatherAtTime, environment, electrical, thermal, inverter, phase.angleRad, topology, iamB0, sampleGrid, modelMode, bypassEnabled, targetSurface);
         const sample = targetPanels === panels && !circuitValidation.isValid
           ? { ...calculated, dcW: 0, acW: 0 }
           : calculated;
@@ -1405,10 +1884,32 @@ export default function SimulatorClient() {
         etaCos += (diagnosticPanel?.etaCos ?? 0) * phase.weight;
         iam += (diagnosticPanel?.iam ?? 0) * phase.weight;
         etaAngle += (diagnosticPanel?.etaAngle ?? 0) * phase.weight;
+        voltage += sample.voltageV * phase.weight;
+        current += sample.currentA * phase.weight;
+        visibility += sample.areaWeightedVisibility * phase.weight;
+        bypassCount += sample.bypassCount * phase.weight;
+        sharedDc += sample.sharedCircuit.dcPowerW * phase.weight;
+        sharedAc += sample.sharedCircuit.acPowerW * phase.weight;
+        independentDc += sample.independentMppt.dcPowerW * phase.weight;
+        independentAc += sample.independentMppt.acPowerW * phase.weight;
+        inverterStatuses.set(sample.inverterStatus, (inverterStatuses.get(sample.inverterStatus) ?? 0) + phase.weight);
+        if (phase.weight > representativeWeight) {
+          representative = sample;
+          representativePhaseDeg = ((deg(phase.angleRad) % 360) + 360) % 360;
+          representativeWeight = phase.weight;
+        }
       }
+      const representativeResult = representative as SystemResult | null;
+      const inverterStatus = [...inverterStatuses.entries()].sort((left, right) => right[1] - left[1])[0]?.[0] ?? "unknown";
+      const normalizedUtc = new Date(weatherPoint.timeUtcMs).toISOString();
+      const localDateTime = new Date(weatherPoint.timeUtcMs + timezoneHours * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
       points.push({
         time: minute === 1440 ? "24:00" : `${String(displayHour).padStart(2, "0")}:${String(displayMinute).padStart(2, "0")}`,
         minute,
+        timestampOriginal: weatherPoint.sourceTimestamp ?? normalizedUtc,
+        timeUtcIso: normalizedUtc,
+        localDateTime,
+        weatherSource: `${weatherSeries.provenance.provider}/${weatherSeries.provenance.kind}`,
         intervalMean: phaseSamples[0]?.intervalAveraged ?? false,
         dc,
         ac,
@@ -1422,56 +1923,142 @@ export default function SimulatorClient() {
         ghi: weatherPoint.ghiWm2,
         dni: weatherPoint.dniWm2,
         dhi: weatherPoint.dhiWm2,
+        azimuth: sunAtTime.azimuthDeg,
+        zenith: 90 - sunAtTime.elevationDeg,
+        voltage,
+        current,
+        visibility,
+        bypassCount: Math.round(bypassCount),
+        inverterStatus,
+        sharedDc,
+        sharedAc,
+        independentDc,
+        independentAc,
+        representativePhaseDeg,
+        zones: (representativeResult?.panels ?? []).map((panelState) => ({
+          id: panelState.id,
+          label: panelState.label,
+          aoiDeg: panelState.incidenceDeg,
+          cosineIncidence: panelState.cosineIncidence,
+          iam: panelState.iam,
+          directWm2: panelState.beamWm2,
+          diffuseWm2: panelState.skyWm2,
+          groundWm2: panelState.groundWm2,
+          poaWm2: panelState.poaWm2,
+          effectiveWm2: panelState.effectiveWm2,
+          temperatureC: panelState.temperatureC,
+          voltageV: panelState.voltageV,
+          currentA: panelState.currentA,
+          powerW: panelState.powerW,
+          visibility: panelState.visibility,
+          bypassActive: panelState.bypassActive,
+        })),
+        reasonCodes: [],
+        diagnosticSeverity: "normal",
       });
     }
-    return points;
-  }, [buildAutomaticWeather, timezoneHours, latitude, longitude, elevationM, weather, rotation, quality, obstacles, environment, electrical, thermal, inverter, topology, iamB0, bypassEnabled, panels, circuitValidation.isValid, selectedPanelId]);
+    return points.map((point, index) => {
+      const toSignal = (value: DailyPoint): DiagnosticSignal => ({
+        minute: value.minute,
+        solarElevationDeg: value.elevation,
+        ghiWm2: value.ghi,
+        dcPowerW: value.dc,
+        acPowerW: value.ac,
+        visibility: value.visibility,
+        bypassCount: value.bypassCount,
+        inverterStatus: value.inverterStatus,
+        intervalAveraged: value.intervalMean,
+      });
+      const classified = classifyTimePoint(toSignal(point), index > 0 ? toSignal(points[index - 1]) : undefined);
+      return { ...point, reasonCodes: classified.reasonCodes, diagnosticSeverity: classified.severity };
+    });
+  }, [buildAutomaticWeather, timezoneHours, latitude, longitude, elevationM, weather, rotation, quality, obstacles, environment, electrical, thermal, inverter, topology, iamB0, bypassEnabled, panels, preset, circuitValidation.isValid, selectedPanelId, sampleGrid, surfaceAzimuthSamples, cylinderAspectRatio, coneAspectRatio]);
 
   const dailySeries = useMemo<DailyPoint[]>(
-    () => buildDaySeries(panels, dateTime.slice(0, 10), 15, circuitMode),
-    [buildDaySeries, panels, dateTime, circuitMode],
+    () => screen === "simulation" || screen === "export"
+      ? buildDaySeries(panels, dateTime.slice(0, 10), 10, circuitMode, preset)
+      : [],
+    [buildDaySeries, panels, dateTime, circuitMode, preset, screen],
   );
+  const selectedDiagnosticPoint = useMemo(() => (
+    dailySeries.length
+      ? dailySeries.find((point) => point.minute === selectedDiagnosticMinute)
+        ?? dailySeries.reduce((closest, point) => (
+          Math.abs(point.minute - selectedDiagnosticMinute) < Math.abs(closest.minute - selectedDiagnosticMinute) ? point : closest
+        ), dailySeries[0])
+      : undefined
+  ), [dailySeries, selectedDiagnosticMinute]);
+  const selectedDiagnosticCumulativeWh = useMemo(() => (
+    selectedDiagnosticPoint
+      ? integrateWh(dailySeries.filter((point) => point.minute <= selectedDiagnosticPoint.minute))
+      : 0
+  ), [dailySeries, selectedDiagnosticPoint]);
+  const handleDailyChartClick = useCallback((chartState: unknown) => {
+    if (!chartState || typeof chartState !== "object") return;
+    const state = chartState as { activeTooltipIndex?: unknown; activeIndex?: unknown; activeLabel?: unknown };
+    const index = Number(state.activeTooltipIndex ?? state.activeIndex);
+    const indexedPoint = Number.isInteger(index) ? dailySeries[index] : undefined;
+    const labelledPoint = typeof state.activeLabel === "string"
+      ? dailySeries.find((point) => point.time === state.activeLabel)
+      : undefined;
+    const point = indexedPoint ?? labelledPoint;
+    if (point) setSelectedDiagnosticMinute(point.minute);
+  }, [dailySeries]);
 
   const dailyWh = useMemo(() => integrateWh(dailySeries), [dailySeries]);
   const representativeMonthlyData = useMemo(() => {
+    if (screen !== "simulation") return [];
     return Array.from({ length: 12 }, (_, index) => {
       const month = index + 1;
       const day = `${simulationYear}-${String(month).padStart(2, "0")}-15`;
       const daysInMonth = new Date(Date.UTC(simulationYear, month, 0)).getUTCDate();
-      const energy = integrateWh(buildDaySeries(panels, day, 60, "simple")) * daysInMonth;
+      const energy = integrateWh(buildDaySeries(panels, day, 60, circuitMode, preset)) * daysInMonth;
       return {
         month: `${month}월`,
         energy,
         normalized: energy / Math.max(PANEL_AREA_M2 * panels.length, 1e-6),
       };
     });
-  }, [simulationYear, buildDaySeries, panels]);
+  }, [simulationYear, buildDaySeries, panels, preset, circuitMode, screen]);
   const monthlyData = annualMonthlyByVariant.current ?? representativeMonthlyData;
   const annualWh = annualEnergyWhByVariant.current ?? monthlyData.reduce((sum, item) => sum + item.energy, 0);
-  const compareEnergyByShape = useMemo(() => {
+  const compareEnergyModesByShape = useMemo(() => {
+    if (screen !== "compare") return {};
     return Object.fromEntries(compareShapes.map((shapeName) => {
       const workerEnergy = annualEnergyWhByVariant[`compare:${shapeName}`];
-      if (workerEnergy !== undefined) return [shapeName, workerEnergy];
-      const targetPanels = generatePreset(shapeName, tiltDeg, panelAzimuthDeg);
-      let energy = 0;
+      const targetPanels = generatePreset(shapeName, tiltDeg, panelAzimuthDeg, { cylinderAspectRatio, coneAspectRatio, azimuthSamples: surfaceAzimuthSamples });
+      let sharedRepresentativeWh = 0;
+      let independentRepresentativeWh = 0;
       for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
         const month = monthIndex + 1;
         const day = `${simulationYear}-${String(month).padStart(2, "0")}-15`;
         const daysInMonth = new Date(Date.UTC(simulationYear, month, 0)).getUTCDate();
-        energy += integrateWh(buildDaySeries(targetPanels, day, 60, "simple")) * daysInMonth;
+        const series = buildDaySeries(targetPanels, day, 60, circuitMode, shapeName);
+        sharedRepresentativeWh += integrateSelectedWh(series, (point) => point.sharedAc) * daysInMonth;
+        independentRepresentativeWh += integrateSelectedWh(series, (point) => point.independentAc) * daysInMonth;
       }
-      return [shapeName, energy];
+      return [shapeName, {
+        sharedWh: workerEnergy ?? sharedRepresentativeWh,
+        independentWh: independentRepresentativeWh,
+        sharedIsWorker: workerEnergy !== undefined,
+      }];
     }));
-  }, [annualEnergyWhByVariant, buildDaySeries, compareShapes, simulationYear, tiltDeg, panelAzimuthDeg]);
-  const compareInstantByShape = useMemo(() => Object.fromEntries(compareShapes.map((shapeName) => {
-    const targetPanels = generatePreset(shapeName, tiltDeg, panelAzimuthDeg);
-    return [shapeName, evaluateSystem(targetPanels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, 1, circuitMode, bypassEnabled)];
-  })), [compareShapes, tiltDeg, panelAzimuthDeg, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, circuitMode, bypassEnabled]);
+  }, [annualEnergyWhByVariant, buildDaySeries, compareShapes, simulationYear, tiltDeg, panelAzimuthDeg, cylinderAspectRatio, coneAspectRatio, surfaceAzimuthSamples, circuitMode, screen]);
+  const compareEnergyByShape = useMemo(() => Object.fromEntries(
+    compareShapes.map((shapeName) => [shapeName, compareEnergyModesByShape[shapeName]?.sharedWh ?? 0]),
+  ), [compareEnergyModesByShape, compareShapes]);
+  const compareInstantByShape = useMemo(() => screen === "compare" ? Object.fromEntries(compareShapes.map((shapeName) => {
+    const targetPanels = generatePreset(shapeName, tiltDeg, panelAzimuthDeg, { cylinderAspectRatio, coneAspectRatio, azimuthSamples: surfaceAzimuthSamples });
+    const targetSurface = isContinuousSurfacePreset(shapeName)
+      ? createContinuousSurface(shapeName, surfaceAzimuthSamples, { cylinderAspectRatio, coneAspectRatio })
+      : null;
+    return [shapeName, evaluateSystem(targetPanels, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, sampleGrid, circuitMode, bypassEnabled, targetSurface)];
+  })) : {}, [compareShapes, tiltDeg, panelAzimuthDeg, obstacles, solar, instantWeather, environment, electrical, thermal, inverter, activeRotationAngle, topology, iamB0, circuitMode, bypassEnabled, cylinderAspectRatio, coneAspectRatio, surfaceAzimuthSamples, sampleGrid, screen]);
   const bestCompareEnergy = Math.max(0, ...compareShapes.map((shapeName) => compareEnergyByShape[shapeName] ?? 0));
   const compareChartData = compareShapes.map((shapeName) => ({
     name: PRESET_LABELS[shapeName],
-    absolute: compareEnergyByShape[shapeName] ?? 0,
-    normalized: (compareEnergyByShape[shapeName] ?? 0) / (20 * PANEL_AREA_M2),
+    modeA: compareEnergyModesByShape[shapeName]?.sharedWh ?? 0,
+    modeB: compareEnergyModesByShape[shapeName]?.independentWh ?? 0,
   }));
   const selectedPanel = result.panels.find((item) => item.id === selectedPanelId) ?? result.panels[0] ?? null;
   const selectedBasePanel = selectedPanel
@@ -1519,9 +2106,61 @@ export default function SimulatorClient() {
     circuitEdges,
     circuitMode,
     bypassEnabled,
+    surface: { cylinderAspectRatio, coneAspectRatio, showZoneBoundaries, showSurfaceSamples },
     gltfReference: gltfName ? { fileName: gltfName, embedded: false } : null,
     resultSettings: { quality, sampleGrid },
-  }), [scenarioName, preset, panels, obstacles, latitude, longitude, elevationM, timezoneHours, dateTime, sunMode, manualSun, weatherPreset, weather, dataMode, provenance, automaticWeatherSeries, iamB0, seed, environmentName, environment, electrical, thermal, inverter, rotation, topology, circuitEdges, circuitMode, bypassEnabled, gltfName, quality, sampleGrid]);
+  }), [scenarioName, preset, panels, obstacles, latitude, longitude, elevationM, timezoneHours, dateTime, sunMode, manualSun, weatherPreset, weather, dataMode, provenance, automaticWeatherSeries, iamB0, seed, environmentName, environment, electrical, thermal, inverter, rotation, topology, circuitEdges, circuitMode, bypassEnabled, cylinderAspectRatio, coneAspectRatio, showZoneBoundaries, showSurfaceSamples, gltfName, quality, sampleGrid]);
+  const annualScenarioKey = useMemo(() => JSON.stringify({
+    simulationYear,
+    preset,
+    panels,
+    compareShapes,
+    tiltDeg,
+    panelAzimuthDeg,
+    cylinderAspectRatio,
+    coneAspectRatio,
+    surfaceAzimuthSamples,
+    obstacles,
+    location: { latitude, longitude, elevationM, timezoneHours },
+    weather: { dataMode, automaticWeatherSeries, seed, weatherPreset },
+    environment,
+    electrical,
+    thermal,
+    inverter,
+    rotation,
+    topology,
+    circuitMode,
+    bypassEnabled,
+    iamB0,
+  }), [
+    simulationYear,
+    preset,
+    panels,
+    compareShapes,
+    tiltDeg,
+    panelAzimuthDeg,
+    cylinderAspectRatio,
+    coneAspectRatio,
+    surfaceAzimuthSamples,
+    obstacles,
+    latitude,
+    longitude,
+    elevationM,
+    timezoneHours,
+    dataMode,
+    automaticWeatherSeries,
+    seed,
+    weatherPreset,
+    environment,
+    electrical,
+    thermal,
+    inverter,
+    rotation,
+    topology,
+    circuitMode,
+    bypassEnabled,
+    iamB0,
+  ]);
 
   useEffect(() => {
     if (hydrated.current) return;
@@ -1574,6 +2213,10 @@ export default function SimulatorClient() {
         setRotation(parsed.rotation ?? rotation);
         setTopology(parsed.topology ?? topology);
         setCircuitEdges(parsed.circuitEdges ?? []);
+        if (Number.isFinite(parsed.surface?.cylinderAspectRatio)) setCylinderAspectRatio(clamp(Number(parsed.surface.cylinderAspectRatio), 0.25, 10));
+        if (Number.isFinite(parsed.surface?.coneAspectRatio)) setConeAspectRatio(clamp(Number(parsed.surface.coneAspectRatio), 0.25, 10));
+        if (typeof parsed.surface?.showZoneBoundaries === "boolean") setShowZoneBoundaries(parsed.surface.showZoneBoundaries);
+        if (typeof parsed.surface?.showSurfaceSamples === "boolean") setShowSurfaceSamples(parsed.surface.showSurfaceSamples);
       } catch {
         setSaveStatus("error");
       }
@@ -1595,6 +2238,27 @@ export default function SimulatorClient() {
     }, 550);
     return () => window.clearTimeout(timeout);
   }, [snapshot]);
+
+  useEffect(() => {
+    if (lastAnnualScenarioKey.current === null) {
+      lastAnnualScenarioKey.current = annualScenarioKey;
+      return;
+    }
+    if (lastAnnualScenarioKey.current === annualScenarioKey) return;
+    lastAnnualScenarioKey.current = annualScenarioKey;
+    const hadAnnualState = annualRequest.current !== null
+      || Object.keys(annualEnergyWhByVariant).length > 0
+      || Object.keys(annualMonthlyByVariant).length > 0;
+    annualWorker.current?.terminate();
+    annualWorker.current = null;
+    annualRequest.current = null;
+    setAnnualRunning(false);
+    setAnnualProgress(0);
+    setAnnualScope(null);
+    setAnnualEnergyWhByVariant({});
+    setAnnualMonthlyByVariant({});
+    if (hadAnnualState) setAnnualAuditCode("STALE_WORKER_RESULT");
+  }, [annualScenarioKey, annualEnergyWhByVariant, annualMonthlyByVariant]);
 
   useEffect(() => {
     if (!playing) return;
@@ -1658,7 +2322,26 @@ export default function SimulatorClient() {
 
   const changePreset = (next: PresetName) => {
     setPreset(next);
-    const generated = generatePreset(next, tiltDeg, panelAzimuthDeg);
+    const generated = generatePreset(next, tiltDeg, panelAzimuthDeg, {
+      cylinderAspectRatio,
+      coneAspectRatio,
+      azimuthSamples: surfaceAzimuthSamples,
+    });
+    commitPanels(generated);
+    setSelectedPanelId(generated[0]?.id ?? null);
+    setCircuitEdges(createAutoWireEdges(generated.map((item) => ({ id: item.id, label: item.label, irradianceWm2: 0, powerW: 0, bypassActive: false })), topology));
+  };
+
+  const rebuildContinuousPreset = (kind: "cylinder" | "cone", aspectRatio: number) => {
+    const bounded = clamp(aspectRatio, 0.25, 10);
+    if (kind === "cylinder") setCylinderAspectRatio(bounded);
+    else setConeAspectRatio(bounded);
+    if (preset !== kind) return;
+    const generated = generatePreset(kind, tiltDeg, panelAzimuthDeg, {
+      cylinderAspectRatio: kind === "cylinder" ? bounded : cylinderAspectRatio,
+      coneAspectRatio: kind === "cone" ? bounded : coneAspectRatio,
+      azimuthSamples: surfaceAzimuthSamples,
+    });
     commitPanels(generated);
     setSelectedPanelId(generated[0]?.id ?? null);
     setCircuitEdges(createAutoWireEdges(generated.map((item) => ({ id: item.id, label: item.label, irradianceWm2: 0, powerW: 0, bypassActive: false })), topology));
@@ -1844,17 +2527,31 @@ export default function SimulatorClient() {
       const physicsThermal = toPhysicsThermal(thermal);
       const physicsInverter = toPhysicsInverter(inverter);
       const variants = shapeNames.map((shapeName) => {
-        const sourcePanels = scope === "current" ? panels : generatePreset(shapeName, tiltDeg, panelAzimuthDeg);
+        const annualSurface = isContinuousSurfacePreset(shapeName)
+          ? createContinuousSurface(shapeName, surfaceAzimuthSamples, { cylinderAspectRatio, coneAspectRatio })
+          : null;
+        const zoneById = new Map(annualSurface?.zones.map((zone) => [zone.id, zone]) ?? []);
+        const sourcePanels = scope === "current"
+          ? panels
+          : generatePreset(shapeName, tiltDeg, panelAzimuthDeg, { cylinderAspectRatio, coneAspectRatio, azimuthSamples: surfaceAzimuthSamples });
         const variantId = scope === "current" ? "current" : `compare:${shapeName}`;
         return {
           variantId,
           panelCount: sourcePanels.length,
           totalPanelAreaM2: sourcePanels.length * PANEL_AREA_M2,
           referenceEfficiency: physicsElectrical.efficiency,
+          obstacleBounds: obstacles
+            .filter((item) => item.type !== "ground" && item.type !== "water")
+            .map((item) => obstacleBounds(item))
+            .map((bounds) => ({
+              min: { x: bounds.min[0], y: bounds.min[1], z: bounds.min[2] },
+              max: { x: bounds.max[0], y: bounds.max[1], z: bounds.max[2] },
+            })),
           panels: sourcePanels.map((item) => {
             const normal = normalFromQuaternion(item.quaternion);
             const sampleAxisU = rotateVectorByQuaternion(item.quaternion, [1, 0, 0]);
             const sampleAxisV = rotateVectorByQuaternion(item.quaternion, [0, 1, 0]);
+            const surfaceZone = zoneById.get(item.id);
             return {
               panelId: item.id,
               positionM: { x: item.position[0], y: item.position[1], z: item.position[2] },
@@ -1874,6 +2571,13 @@ export default function SimulatorClient() {
               diffuseModel: "hay-davies" as const,
               soilingLossFraction: clamp(weather.soilingPct / 100, 0, 1),
               heightM: Math.max(0.03, item.position[1]),
+              ...(surfaceZone ? {
+                surfaceSamples: surfaceZone.samples.map((sample) => ({
+                  positionM: { x: sample.position[0], y: sample.position[1], z: sample.position[2] },
+                  normal: { x: sample.normal[0], y: sample.normal[1], z: sample.normal[2] },
+                  areaWeight: sample.areaM2,
+                })),
+              } : {}),
             };
           }),
           topology,
@@ -1892,7 +2596,7 @@ export default function SimulatorClient() {
             : 1,
         };
       });
-      const input = {
+      const input: SimulationKernelInput = {
         variants,
         weather: weatherSeries.points,
         physics: {
@@ -1915,17 +2619,22 @@ export default function SimulatorClient() {
         mode: "annual" as const,
         chunkSize: 24,
         maximumGapHours: 2,
+        reportingOffsetMinutes: timezoneHours * 60,
       };
       const request = createSimulationRunRequest(`annual-${scope}`, input);
-      const worker = new Worker(new URL("../workers/simulation.worker.ts", import.meta.url), { type: "module" });
+      const worker = new SimulationWorker();
       annualWorker.current = worker;
       annualRequest.current = request;
       setAnnualScope(scope);
       setAnnualRunning(true);
       setAnnualProgress(0);
+      setAnnualAuditCode(null);
 
       worker.onmessage = ({ data: event }: MessageEvent<SimulationWorkerEvent>) => {
-        if (isSimulationEventStale(event, request)) return;
+        if (isSimulationEventStale(event, request)) {
+          setAnnualAuditCode("STALE_WORKER_RESULT");
+          return;
+        }
         if (event.type === "simulation/progress") {
           setAnnualProgress(Math.round(event.fraction * 100));
           return;
@@ -1947,6 +2656,7 @@ export default function SimulatorClient() {
           setAnnualMonthlyByVariant((current) => ({ ...current, ...monthly }));
           setAnnualProgress(100);
           setAnnualRunning(false);
+          setAnnualAuditCode(null);
           setToast(`연간 ${event.steps.toLocaleString("ko-KR")}시간점 계산 완료 · ${(event.elapsedMs / 1000).toFixed(1)}초`);
           worker.terminate();
           annualWorker.current = null;
@@ -2147,49 +2857,52 @@ export default function SimulatorClient() {
           {screen === "assembly" ? (
             <div className="workspace-screen">
               <div className="control-rail scroll-area">
-                <PanelHeader title="형상 프리셋" subtitle="모든 기본 형상은 정확히 20개 패널" />
+                <PanelHeader title="형상 프리셋" subtitle="강체 배열과 0.050 m² 연속 PV 스킨을 같은 활성면적으로 비교" />
                 <div className="preset-grid">
                   {(["cube", "plane", "cylinder", "sphere", "cone", "free"] as PresetName[]).map((name) => (
                     <button key={name} type="button" className={preset === name ? "active" : ""} onClick={() => changePreset(name)}>
                       {name === "cube" ? <Box /> : name === "plane" ? <Grid3X3 /> : name === "cylinder" ? <CircleGauge /> : name === "sphere" ? <Sparkles /> : name === "cone" ? <Mountain /> : <Move3D />}
-                      <span>{PRESET_LABELS[name]}</span><small>{name === "free" ? "1–20개" : "20개"}</small>
+                      <span>{PRESET_LABELS[name]}</span><small>{name === "free" ? "1–20개 강체" : isContinuousSurfacePreset(name) ? "연속 스킨 · 20구역" : "20개 강체"}</small>
                     </button>
                   ))}
                 </div>
 
                 {preset === "plane" ? <div className="control-section"><h4>평면 방향</h4><Field label="경사각" unit="°" value={tiltDeg} min={0} max={90} onChange={(value) => rebuildPlane(value, panelAzimuthDeg)} /><Field label="방위각" unit="°" value={panelAzimuthDeg} min={0} max={360} onChange={(value) => rebuildPlane(tiltDeg, value)} hint="진북 0°, 동 90°, 남 180°" /></div> : null}
 
-                <div className="control-section">
+                {preset === "cylinder" && currentSurface ? <div className="control-section"><h4>연속 원기둥 치수</h4><Field label="종횡비 h/(2r)" unit="—" step={0.05} value={cylinderAspectRatio} min={0.25} max={10} onChange={(value) => rebuildContinuousPreset("cylinder", value)} /><div className="dimension-note"><Info size={15} /><div><strong>옆면만 활성</strong><span>r {currentSurface.dimensions.radiusM.toFixed(4)} m · h {currentSurface.dimensions.heightM.toFixed(4)} m</span></div></div></div> : null}
+                {preset === "cone" && currentSurface ? <div className="control-section"><h4>연속 원뿔 치수</h4><Field label="종횡비 h/r" unit="—" step={0.05} value={coneAspectRatio} min={0.25} max={10} onChange={(value) => rebuildContinuousPreset("cone", value)} /><div className="dimension-note"><Info size={15} /><div><strong>밑면 제외 옆면만 활성</strong><span>r {currentSurface.dimensions.radiusM.toFixed(4)} m · h {currentSurface.dimensions.heightM.toFixed(4)} m · ℓ {currentSurface.dimensions.slantHeightM?.toFixed(4)} m</span></div></div></div> : null}
+
+                {!isFlexibleSkin ? <div className="control-section">
                   <h4>자유 조립</h4>
                   <div className="button-row"><button onClick={addPanel}><Plus size={15} /> 추가</button><button onClick={duplicatePanel} disabled={!selectedPanelId || panels.length >= 20}><Copy size={15} /> 복제</button><button onClick={deletePanel} disabled={!selectedPanelId || panels.length <= 1} className="danger"><Trash2 size={15} /> 삭제</button></div>
                   <div className="segmented"><button className={transformMode === "translate" ? "active" : ""} onClick={() => setTransformMode("translate")}><Move3D size={14} /> 이동</button><button className={transformMode === "rotate" ? "active" : ""} onClick={() => setTransformMode("rotate")}><Rotate3D size={14} /> 회전</button></div>
                   <Toggle checked={gridSnap} onChange={setGridSnap} label="격자 스냅" description="1 cm 이동 · 15° 회전" />
                   <Toggle checked={surfaceSnap} onChange={setSurfaceSnap} label="표면 스냅" description="드래그 종료 시 아래 표면에 맞춤" />
-                </div>
+                </div> : <div className="control-section"><h4>연속 표면</h4><Toggle checked={showZoneBoundaries} onChange={setShowZoneBoundaries} label="20개 구역 경계" description="각 구역 0.0025 m² · 전 둘레 등면적 band" /><Toggle checked={showSurfaceSamples} onChange={setShowSurfaceSamples} label="선택 구역 적분점" description={`GL2 × 방위 ${surfaceAzimuthSamples}점`} /></div>}
 
                 <div className="control-section">
                   <h4>시각화 정확도</h4>
-                  <select value={quality} onChange={(event) => setQuality(event.target.value as typeof quality)}><option value="fast">빠름 · 1점</option><option value="balanced">균형 · 3×3</option><option value="precise">정밀 · 5×5</option></select>
+                  <select value={quality} onChange={(event) => setQuality(event.target.value as typeof quality)}><option value="fast">빠름 · 강체 1점 / 곡면 φ16</option><option value="balanced">균형 · 강체 3×3 / 곡면 φ32</option><option value="precise">정밀 · 강체 5×5 / 곡면 φ64</option></select>
                   <Toggle checked={showNormals} onChange={setShowNormals} label="전면 법선 표시" />
                   <Toggle checked={showRays} onChange={setShowRays} label="태양 광선 표시" />
                 </div>
 
-                <div className="dimension-note"><Info size={15} /><div><strong>패널 규격 고정</strong><span>5 × 5 cm · 0.0025 m² · 단면 발전</span></div></div>
+                <div className="dimension-note"><Info size={15} /><div><strong>{modelClassLabel}</strong><span>{isFlexibleSkin ? "총 활성 0.050 m² · 20 × 0.0025 m² 전기 구역" : "5 × 5 cm 강체 · 0.0025 m² · 단면 발전"}</span></div></div>
               </div>
 
               <div className="scene-column">
                 <div className="scene-toolbar">
-                  <div><Pill tone="good"><span className="status-dot" /> 실시간</Pill><span>{PRESET_LABELS[preset]} · {panels.length}개 · {(panels.length * PANEL_AREA_M2).toFixed(4)} m²</span></div>
+                  <div><Pill tone="good"><span className="status-dot" /> 실시간</Pill><span>{PRESET_LABELS[preset]} · {modelClassLabel} · {isFlexibleSkin ? "20구역" : `${panels.length}개`} · {result.activeAreaM2.toFixed(4)} m²</span></div>
                   <div><button className={showNormals ? "active" : ""} onClick={() => setShowNormals(!showNormals)}><Move3D size={15} /> 법선</button><button className={showRays ? "active" : ""} onClick={() => setShowRays(!showRays)}><Sun size={15} /> 광선</button></div>
                 </div>
-                <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={selectedPanelId} selectedObstacleId={null} onSelectPanel={setSelectedPanelId} onPanelTransform={transformPanel} transformMode={transformMode === "scale" ? "translate" : transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
+                <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={selectedPanelId} selectedObstacleId={null} onSelectPanel={setSelectedPanelId} onPanelTransform={isFlexibleSkin ? () => undefined : transformPanel} transformMode={transformMode === "scale" ? "translate" : transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} continuousSurface={currentSurface ? { kind: currentSurface.kind, cylinderAspectRatio, coneAspectRatio } : null} showZoneBoundaries={showZoneBoundaries} showSurfaceSamples={showSurfaceSamples} gltfUrl={gltfUrl} quality={quality} />
                 <div className="scene-bottom-metrics">
                   <div><span>현재 DC</span><strong>{formatPower(result.dcW)}</strong></div><div><span>현재 AC</span><strong>{formatPower(result.acW)}</strong></div><div><span>평균 POA</span><strong>{(result.panels.reduce((sum, item) => sum + item.poaWm2, 0) / Math.max(1, result.panels.length)).toFixed(0)} W/m²</strong></div><div><span>회전 속도</span><strong>{rotationRpm.toFixed(2)} RPM</strong></div>
                 </div>
               </div>
 
               <div className="inspector-rail scroll-area">
-                <PanelHeader title="패널 검사기" subtitle={selectedPanel ? `${selectedPanel.label} · ${selectedPanel.id}` : "패널을 선택하세요"} action={selectedPanel ? <Pill tone={selectedPanel.bypassActive ? "warn" : "good"}>{selectedPanel.bypassActive ? "바이패스" : "정상"}</Pill> : null} />
+                <PanelHeader title={isFlexibleSkin ? "곡면 전기 구역 검사기" : "강체 패널 검사기"} subtitle={selectedPanel ? `${selectedPanel.label} · ${selectedPanel.id}` : "대상을 선택하세요"} action={selectedPanel ? <Pill tone={selectedPanel.bypassActive ? "warn" : "good"}>{selectedPanel.bypassActive ? "바이패스" : modelClassLabel}</Pill> : null} />
                 {selectedPanel ? <>
                   <div className="inspector-hero"><div className="panel-swatch" style={{ "--level": `${Math.min(100, Math.max(0, selectedPanel.effectiveWm2 / 10)).toFixed(4)}%` } as React.CSSProperties}><Sun size={22} /></div><div><span>패널 출력</span><strong>{formatPower(selectedPanel.powerW)}</strong><small>{selectedPanel.effectiveWm2.toFixed(0)} W/m² · {selectedPanel.temperatureC.toFixed(1)}°C</small></div></div>
                   <div className="trace-list compact-trace">
@@ -2209,10 +2922,10 @@ export default function SimulatorClient() {
                   </div>
                   {!selectedPanel.ghiClosure.isClosed ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>GHI 폐합 불일치</strong><span>잔차 {selectedPanel.ghiClosure.residualWm2.toFixed(1)} W/m² · 허용 {selectedPanel.ghiClosure.toleranceWm2.toFixed(1)} W/m²</span></div></div> : null}
                   {selectedPanel.incidenceDeg >= 80 ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>AOI 80° 진단 한계 초과</strong><span>ASHRAE IAM은 큰 입사각에서 실측 검증이 필요합니다.</span></div></div> : null}
-                  {selectedBasePanel ? <div className="control-section"><h4>선택 패널 기준 좌표</h4>{([0, 1, 2] as const).map((axis) => <Field key={axis} label={["X · 동", "Y · 높이", "Z · 북"][axis]} unit="m" step={0.001} value={selectedBasePanel.position[axis]} onChange={(value) => transformPanel(selectedBasePanel.id, selectedBasePanel.position.map((item, index) => index === axis ? value : item) as Vec3Tuple, selectedBasePanel.quaternion)} />)}</div> : null}
+                  {selectedBasePanel && !isFlexibleSkin ? <div className="control-section"><h4>선택 패널 기준 좌표</h4>{([0, 1, 2] as const).map((axis) => <Field key={axis} label={["X · 동", "Y · 높이", "Z · 북"][axis]} unit="m" step={0.001} value={selectedBasePanel.position[axis]} onChange={(value) => transformPanel(selectedBasePanel.id, selectedBasePanel.position.map((item, index) => index === axis ? value : item) as Vec3Tuple, selectedBasePanel.quaternion)} />)}</div> : null}
                   <button className="full secondary" onClick={() => setScreen("evidence")}><BookOpenCheck size={15} /> 이 패널 계산 전체 추적</button>
                 </> : <EmptyState icon={Move3D} title="선택된 패널 없음" text="3D 장면에서 패널을 클릭하세요." />}
-                {overlaps.length ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>겹침 {overlaps.length}건 감지</strong><span>{overlaps.slice(0, 3).join(", ")}</span></div></div> : <div className="ok-card"><Check size={16} /><span>패널 겹침이 없습니다.</span></div>}
+                {isFlexibleSkin ? <div className="ok-card"><Check size={16} /><span>볼록 연속 스킨 · 대표점은 충돌 판정에 사용하지 않음</span></div> : overlaps.length ? <div className="warning-card"><AlertTriangle size={17} /><div><strong>겹침 {overlaps.length}건 감지</strong><span>{overlaps.slice(0, 3).join(", ")}</span></div></div> : <div className="ok-card"><Check size={16} /><span>패널 겹침이 없습니다.</span></div>}
               </div>
             </div>
           ) : null}
@@ -2232,7 +2945,7 @@ export default function SimulatorClient() {
 
                 <section className="surface-card env-scene">
                   <div className="scene-toolbar"><div><Pill tone="data">광선 차폐 장면</Pill><span>렌더링 그림자와 수치 raycast 분리</span></div><label className="file-button"><Upload size={15} /> GLB/GLTF 불러오기<input type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" onChange={handleGltf} /></label></div>
-                  <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={null} selectedObstacleId={selectedObstacleId} onSelectPanel={setSelectedPanelId} onSelectObstacle={setSelectedObstacleId} onPanelTransform={transformPanel} onObstacleTransform={transformObstacle} transformMode={transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} gltfUrl={gltfUrl} quality={quality} />
+                  <ThreeWorkspace panels={renderPanels} obstacles={obstacles} selectedPanelId={null} selectedObstacleId={selectedObstacleId} onSelectPanel={setSelectedPanelId} onSelectObstacle={setSelectedObstacleId} onPanelTransform={isFlexibleSkin ? () => undefined : transformPanel} onObstacleTransform={transformObstacle} transformMode={transformMode} gridSnap={gridSnap} surfaceSnap={surfaceSnap} showNormals={showNormals} showRays={showRays} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} continuousSurface={currentSurface ? { kind: currentSurface.kind, cylinderAspectRatio, coneAspectRatio } : null} showZoneBoundaries={showZoneBoundaries} showSurfaceSamples={showSurfaceSamples} gltfUrl={gltfUrl} quality={quality} />
                   {gltfName ? <div className="asset-chip"><Box size={14} /> {gltfName}<button onClick={() => { if (gltfUrl) URL.revokeObjectURL(gltfUrl); setGltfUrl(null); setGltfName(null); setObstacles((items) => items.filter((item) => !item.label.startsWith("GLB 차폐 경계"))); setSelectedObstacleId(null); }} aria-label="가져온 모델 제거"><X size={13} /></button></div> : null}
                 </section>
 
@@ -2273,13 +2986,27 @@ export default function SimulatorClient() {
               <div className="metrics-row">
                 <Metric label="순간 DC" value={formatPower(result.dcW)} detail={`${result.voltageV.toFixed(2)} V · ${result.currentA.toFixed(2)} A`} icon={Zap} accent="amber" />
                 <Metric label="순간 AC" value={formatPower(result.acW)} detail={`인버터 ${(result.inverterEfficiency * 100).toFixed(1)}%`} icon={Activity} accent="teal" />
-                <Metric label="하루 누적" value={formatEnergy(dailyWh)} detail="15분 · 사다리꼴 적분" icon={Sun} accent="blue" />
-                <Metric label="연간 예상" value={formatEnergy(annualWh)} detail={`${automaticSourceLabel} 우선 · 부족 구간 모델 대체`} icon={BarChart3} accent="violet" />
+                <Metric label="하루 누적" value={formatEnergy(dailyWh)} detail="10분 · 실제 시각축 사다리꼴 적분" icon={Sun} accent="blue" />
+                <Metric
+                  label="연간 예상"
+                  value={formatEnergy(annualWh)}
+                  detail={annualEnergyWhByVariant.current !== undefined
+                    ? "8,760시간점 워커 완료 · 현지 월 경계"
+                    : `${automaticSourceLabel} 우선 · 부족 구간 모델 대체`}
+                  icon={BarChart3}
+                  accent="violet"
+                />
               </div>
               <div className="angle-summary-row" aria-label="시스템 입사각 및 음영 진단">
                 <div><span>면적가중 시스템 ηangle</span><strong>{result.areaWeightedEtaAngle.toFixed(4)}</strong><small>ηcos × IAM · 음영 제외</small></div>
                 <div><span>별도 직달 가시율</span><strong>{(result.areaWeightedVisibility * 100).toFixed(1)}%</strong><small>raycast 음영 · 각도 효율과 분리</small></div>
                 <div><span>ASHRAE b₀</span><strong>{iamB0.toFixed(3)}</strong><small>AOI 80° 이상은 경계 경고</small></div>
+              </div>
+              <div className="angle-summary-row" aria-label="면적 및 전기 공정성 모드">
+                <div><span>활성 / 순간 투영</span><strong>{result.activeAreaM2.toFixed(4)} / {result.projectedAreaM2.toFixed(4)} m²</strong><small>형상 배율 없이 표면 적분</small></div>
+                <div><span>최대 투영 / footprint</span><strong>{result.maximumProjectedAreaM2.toFixed(4)} / {result.footprintM2.toFixed(4)} m²</strong><small>태양 방향별 해석 투영</small></div>
+                <div><span>Mode A · 공용 회로</span><strong>{result.sharedCircuit.acPowerW.toFixed(3)} W AC</strong><small>{result.sharedCircuit.dcPowerW.toFixed(3)} W DC · bypass {result.sharedCircuit.bypassCount}</small></div>
+                <div><span>Mode B · 구역별 MPPT</span><strong>{result.independentMppt.acPowerW.toFixed(3)} W AC</strong><small>{result.independentMppt.dcPowerW.toFixed(3)} W DC · 동일 인버터</small></div>
               </div>
               {selectedPanel && (!selectedPanel.ghiClosure.isClosed || selectedPanel.incidenceDeg >= 80) ? <div className="diagnostic-alerts" role="status">
                 {!selectedPanel.ghiClosure.isClosed ? <span><AlertTriangle size={13} /> GHI 폐합 잔차 {selectedPanel.ghiClosure.residualWm2.toFixed(1)} W/m²</span> : null}
@@ -2314,7 +3041,7 @@ export default function SimulatorClient() {
 
                 <section className="sim-results">
                   <div className="surface-card chart-card large" id="daily-chart">
-                    <PanelHeader title="시간대별 입사각 · 복사 · 전력 진단" subtitle={`${dateTime.slice(0, 10)} · ${automaticSourceLabel} 우선 시계열`} action={<Pill tone="good">E = {dailyWh.toFixed(2)} Wh</Pill>} />
+                    <PanelHeader title="시간대별 입사각 · 복사 · 전력 진단" subtitle={`${dateTime.slice(0, 10)} · 10분 실제 계산 · 점을 클릭하면 원인과 구역 상태 표시`} action={<Pill tone="good">E = {dailyWh.toFixed(2)} Wh</Pill>} />
                     <div className="series-toggle-grid" aria-label="그래프 계열 선택">
                       {(Object.keys(DIAGNOSTIC_SERIES) as DiagnosticSeriesKey[]).map((key) => (
                         <button
@@ -2329,7 +3056,13 @@ export default function SimulatorClient() {
                         </button>
                       ))}
                     </div>
-                    <div className="chart-large"><ResponsiveContainer width="100%" height="100%"><LineChart data={dailySeries}><CartesianGrid stroke="#203743" strokeDasharray="3 6" /><XAxis dataKey="time" interval={7} /><YAxis yAxisId="irradiance" width={48} tickFormatter={(value) => Number(value).toFixed(0)} /><YAxis yAxisId="power" orientation="right" width={42} tickFormatter={(value) => Number(value).toFixed(2)} /><YAxis yAxisId="angle" hide domain={[-90, 180]} /><YAxis yAxisId="factor" hide domain={[0, 1]} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c", borderRadius: 10 }} formatter={(value, name) => [Number(value).toFixed(3), name]} /><Legend />{(Object.keys(DIAGNOSTIC_SERIES) as DiagnosticSeriesKey[]).filter((key) => diagnosticSeries[key]).map((key) => { const descriptor = DIAGNOSTIC_SERIES[key]; return <Line key={key} yAxisId={descriptor.axis} type="monotone" dataKey={key} name={descriptor.label} stroke={descriptor.color} dot={false} strokeWidth={key === "poa" || key === "dc" || key === "ac" ? 2 : 1.5} isAnimationActive={false} />; })}</LineChart></ResponsiveContainer></div>
+                    <div className="chart-large"><ResponsiveContainer width="100%" height="100%"><LineChart data={dailySeries} onClick={handleDailyChartClick}><CartesianGrid stroke="#203743" strokeDasharray="3 6" /><XAxis dataKey="time" interval={11} /><YAxis yAxisId="irradiance" width={48} tickFormatter={(value) => Number(value).toFixed(0)} /><YAxis yAxisId="power" orientation="right" width={42} tickFormatter={(value) => Number(value).toFixed(2)} /><YAxis yAxisId="angle" hide domain={[-90, 180]} /><YAxis yAxisId="factor" hide domain={[0, 1]} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c", borderRadius: 10 }} formatter={(value, name) => [Number(value).toFixed(3), name]} /><Legend />{selectedDiagnosticPoint ? <ReferenceLine yAxisId="power" x={selectedDiagnosticPoint.time} stroke="#f7d774" strokeDasharray="4 3" /> : null}{(Object.keys(DIAGNOSTIC_SERIES) as DiagnosticSeriesKey[]).filter((key) => diagnosticSeries[key]).map((key) => { const descriptor = DIAGNOSTIC_SERIES[key]; return <Line key={key} yAxisId={descriptor.axis} type="linear" dataKey={key} name={descriptor.label} stroke={descriptor.color} dot={false} activeDot={{ r: 5 }} strokeWidth={key === "poa" || key === "dc" || key === "ac" ? 2 : 1.5} isAnimationActive={false} />; })}</LineChart></ResponsiveContainer></div>
+                    {selectedDiagnosticPoint ? <div className={`time-diagnostic ${selectedDiagnosticPoint.diagnosticSeverity}`}>
+                      <div className="time-diagnostic-head"><div><span>선택 시각</span><strong>{selectedDiagnosticPoint.localDateTime} KST</strong><small>UTC {selectedDiagnosticPoint.timeUtcIso} · 원본 {selectedDiagnosticPoint.timestampOriginal}</small></div><div className="reason-pills">{selectedDiagnosticPoint.reasonCodes.length ? selectedDiagnosticPoint.reasonCodes.map((code) => <Pill key={code} tone={selectedDiagnosticPoint.diagnosticSeverity === "error" ? "warn" : code === "NIGHT" || code === "NORMAL_SUNSET" ? "good" : "data"}>{code}</Pill>) : <Pill tone="good">CONTINUOUS_OK</Pill>}</div></div>
+                      <div className="diagnostic-audit-grid"><div><span>태양 고도 / 방위 / 천정</span><strong>{selectedDiagnosticPoint.elevation.toFixed(2)}° / {selectedDiagnosticPoint.azimuth.toFixed(2)}° / {selectedDiagnosticPoint.zenith.toFixed(2)}°</strong></div><div><span>기상 source · GHI/DNI/DHI</span><strong>{selectedDiagnosticPoint.weatherSource} · {selectedDiagnosticPoint.ghi.toFixed(1)} / {selectedDiagnosticPoint.dni.toFixed(1)} / {selectedDiagnosticPoint.dhi.toFixed(1)}</strong></div><div><span>최종 DC / AC · 누적</span><strong>{selectedDiagnosticPoint.dc.toFixed(4)} / {selectedDiagnosticPoint.ac.toFixed(4)} W · {selectedDiagnosticCumulativeWh.toFixed(3)} Wh</strong></div><div><span>V / I · 인버터 · 가시율</span><strong>{selectedDiagnosticPoint.voltage.toFixed(3)} V / {selectedDiagnosticPoint.current.toFixed(3)} A · {selectedDiagnosticPoint.inverterStatus} · {(selectedDiagnosticPoint.visibility * 100).toFixed(1)}%</strong></div><div><span>Mode A 공용 회로</span><strong>{selectedDiagnosticPoint.sharedDc.toFixed(4)} W DC → {selectedDiagnosticPoint.sharedAc.toFixed(4)} W AC</strong></div><div><span>Mode B 구역별 MPPT</span><strong>{selectedDiagnosticPoint.independentDc.toFixed(4)} W DC → {selectedDiagnosticPoint.independentAc.toFixed(4)} W AC</strong></div></div>
+                      <div className="diagnostic-explanation">{selectedDiagnosticPoint.reasonCodes.length ? selectedDiagnosticPoint.reasonCodes.map((code) => <span key={code}><code>{code}</code>{DIAGNOSTIC_REASON_LABELS[code]}</span>) : <span><Check size={14} /> 불연속 원인이 감지되지 않았습니다.</span>}</div>
+                      <div className="zone-diagnostic-table"><div className="zone-diagnostic-row header"><span>구역</span><span>AOI / n·s / IAM</span><span>직달 / 산란 / 반사 / POA</span><span>온도</span><span>V / I / P</span><span>상태</span></div>{selectedDiagnosticPoint.zones.map((zone) => <div className="zone-diagnostic-row" key={zone.id}><strong>{zone.label}</strong><span>{zone.aoiDeg.toFixed(1)}° / {zone.cosineIncidence.toFixed(3)} / {zone.iam.toFixed(3)}</span><span>{zone.directWm2.toFixed(0)} / {zone.diffuseWm2.toFixed(0)} / {zone.groundWm2.toFixed(0)} / {zone.poaWm2.toFixed(0)}</span><span>{zone.temperatureC.toFixed(1)}°C</span><span>{zone.voltageV.toFixed(3)} / {zone.currentA.toFixed(3)} / {zone.powerW.toFixed(4)}</span><span>{zone.bypassActive ? "BYPASS" : `${(zone.visibility * 100).toFixed(0)}% visible`}</span></div>)}</div>
+                    </div> : null}
                   </div>
                   <div className="sim-lower-grid">
                     <section className="surface-card chart-card"><PanelHeader title="월간 예상 발전량" subtitle="대표월 시나리오 · 시간별 계산" /><div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><BarChart data={monthlyData}><CartesianGrid stroke="#203743" strokeDasharray="3 6" vertical={false} /><XAxis dataKey="month" /><YAxis tickFormatter={(value) => `${value.toFixed(0)}`} /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c" }} formatter={(value) => [`${Number(value).toFixed(1)} Wh`, "에너지"]} /><Bar dataKey="energy" radius={[5, 5, 0, 0]}>{monthlyData.map((_, index) => <Cell key={index} fill={index === 5 ? "#f4ba4b" : "#3d8295"} />)}</Bar></BarChart></ResponsiveContainer></div></section>
@@ -2348,6 +3081,7 @@ export default function SimulatorClient() {
 
                   <hr />
                   <PanelHeader title="연간 계산" subtitle="8,760시간 · 백그라운드 작업" />
+                  {annualAuditCode ? <div className="warning-card"><AlertTriangle size={16} /><div><strong>{annualAuditCode}</strong><span>{DIAGNOSTIC_REASON_LABELS[annualAuditCode]}</span></div></div> : null}
                   {annualRunning ? <div className="progress-block"><div><span>{annualScope === "compare" ? "비교 형상" : "현재 형상"} 워커 계산 중</span><strong>{annualProgress}%</strong></div><div className="progress-track"><span style={{ width: `${annualProgress}%` }} /></div><button className="full secondary" onClick={cancelAnnual}><X size={14} /> 취소</button></div> : <button className="full primary" onClick={() => runAnnual([preset], "current")}><Activity size={15} /> 연간 8,760시간점 계산</button>}
                 </aside>
               </div>
@@ -2356,7 +3090,7 @@ export default function SimulatorClient() {
 
           {screen === "compare" ? (
             <div className="content-screen compare-screen">
-              <SectionTitle eyebrow="동일 기상 · 동일 시드 · 독립 장면" title="다중 형상 비교" aside={<><Pill tone="data">seed {seed}</Pill><span>최대 5개 · 총 {compareShapes.length * 20}패널</span></>} />
+              <SectionTitle eyebrow="동일 기상 · 동일 시드 · 독립 장면" title="다중 형상 비교" aside={<><Pill tone="data">seed {seed}</Pill><span>최대 5개 · 형상당 0.050 m² · Mode A/B 동시</span></>} />
               <div className="compare-toolbar surface-card">
                 <div className="shape-checkboxes">{(["plane", "cube", "cylinder", "sphere", "cone"] as PresetName[]).map((name) => <label key={name} className={compareShapes.includes(name) ? "active" : ""}><input type="checkbox" checked={compareShapes.includes(name)} onChange={() => setCompareShapes((items) => items.includes(name) ? (items.length > 1 ? items.filter((item) => item !== name) : items) : (items.length < 5 ? [...items, name] : items))} /><span><Check size={12} /></span>{PRESET_LABELS[name]}</label>)}</div>
                 <div className="compare-common"><button onClick={() => setPlaying(!playing)}>{playing ? <Pause size={15} /> : <Play size={15} />} 공통 재생</button><select value={playSpeed} onChange={(event) => setPlaySpeed(Number(event.target.value))}><option value={5}>×5분</option><option value={30}>×30분</option><option value={60}>×1시간</option></select><button onClick={() => runAnnual(compareShapes, "compare")} disabled={annualRunning}><Activity size={14} /> {annualRunning && annualScope === "compare" ? `${annualProgress}%` : "공통 연간 계산"}</button><Field label="난수 시드" value={seed} min={0} max={9999999} onChange={setSeed} /></div>
@@ -2365,12 +3099,20 @@ export default function SimulatorClient() {
                 {compareShapes.map((name, index) => {
                   const compareResult = compareInstantByShape[name];
                   const energy = compareEnergyByShape[name] ?? 0;
-                  const hasWorkerResult = annualEnergyWhByVariant[`compare:${name}`] !== undefined;
-                  return <article className="compare-card surface-card" key={name}><div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div>{energy === bestCompareEnergy ? <Pill tone="good">현재 1위</Pill> : null}</div><div className="mini-scene"><ThreeWorkspace panels={renderPanelsFromBase(generatePreset(name, tiltDeg, panelAzimuthDeg), compareResult.panels)} obstacles={obstacles} selectedPanelId={null} onSelectPanel={() => undefined} onPanelTransform={() => undefined} transformMode="translate" gridSnap={false} surfaceSnap={false} showNormals={false} showRays={false} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} quality="fast" /></div><div className="compare-kpis"><div><span>순간 AC</span><strong>{compareResult.acW.toFixed(2)} W</strong></div><div><span>연간</span><strong>{formatEnergy(energy)}</strong></div><div><span>면적당</span><strong>{(energy / (20 * PANEL_AREA_M2)).toFixed(0)} Wh/m²</strong></div><div><span>패널/면적</span><strong>20 / 0.050 m²</strong></div></div><div className="rank-bar"><span style={{ width: `${bestCompareEnergy > 0 ? (energy / bestCompareEnergy) * 100 : 0}%` }} /></div><small>{hasWorkerResult ? "8,760 시간점 워커" : "12개 대표일 실제 계산"} · RPM {rotationRpm.toFixed(2)} · DC {compareResult.dcW.toFixed(2)} W · AC {compareResult.acW.toFixed(2)} W</small></article>;
+                  const energyModes = compareEnergyModesByShape[name];
+                  const continuous = isContinuousSurfacePreset(name);
+                  const basePanels = generatePreset(name, tiltDeg, panelAzimuthDeg, { cylinderAspectRatio, coneAspectRatio, azimuthSamples: surfaceAzimuthSamples });
+                  return <article className="compare-card surface-card" key={name}>
+                    <div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div>{energy === bestCompareEnergy ? <Pill tone="good">Mode A 1위</Pill> : null}</div>
+                    <div className="mini-scene"><ThreeWorkspace panels={renderPanelsFromBase(basePanels, compareResult.panels)} obstacles={obstacles} selectedPanelId={null} onSelectPanel={() => undefined} onPanelTransform={() => undefined} transformMode="translate" gridSnap={false} surfaceSnap={false} showNormals={false} showRays={false} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={activeRotationAngle} continuousSurface={continuous ? { kind: name as ContinuousSurfaceKind, cylinderAspectRatio, coneAspectRatio } : null} showZoneBoundaries={continuous} quality="fast" /></div>
+                    <div className="compare-kpis"><div><span>모델</span><strong>{continuous ? "연속 스킨" : "강체 패널"}</strong></div><div><span>활성 / 투영</span><strong>{compareResult.activeAreaM2.toFixed(3)} / {compareResult.projectedAreaM2.toFixed(3)} m²</strong></div><div><span>Mode A 순간 AC</span><strong>{compareResult.sharedCircuit.acPowerW.toFixed(3)} W</strong></div><div><span>Mode B 순간 AC</span><strong>{compareResult.independentMppt.acPowerW.toFixed(3)} W</strong></div><div><span>Mode A 연간</span><strong>{formatEnergy(energyModes?.sharedWh ?? 0)}</strong></div><div><span>Mode B 연간</span><strong>{formatEnergy(energyModes?.independentWh ?? 0)}</strong></div><div><span>Mode A 면적당</span><strong>{((energyModes?.sharedWh ?? 0) / compareResult.activeAreaM2).toFixed(0)} Wh/m²</strong></div><div><span>최대 투영 / footprint</span><strong>{compareResult.maximumProjectedAreaM2.toFixed(3)} / {compareResult.footprintM2.toFixed(3)} m²</strong></div></div>
+                    <div className="rank-bar"><span style={{ width: `${bestCompareEnergy > 0 ? (energy / bestCompareEnergy) * 100 : 0}%` }} /></div>
+                    <small>Mode A {energyModes?.sharedIsWorker ? "8,760 시간점 워커" : "12개 대표일"} · Mode B 12개 대표일 · RPM {rotationRpm.toFixed(2)} · 형상별 독립 장면</small>
+                  </article>;
                 })}
               </div>
               <div className="compare-bottom-grid">
-                <section className="surface-card chart-card"><PanelHeader title="연간 절대 발전량 비교" subtitle="공통 시간축과 인버터 규칙" /><div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><BarChart data={compareChartData}><CartesianGrid stroke="#203743" strokeDasharray="3 6" vertical={false} /><XAxis dataKey="name" /><YAxis /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c" }} /><Legend /><Bar dataKey="absolute" name="절대 Wh" fill="#f4ba4b" radius={[5, 5, 0, 0]} /><Bar dataKey="normalized" name="Wh/m²" fill="#42c6a5" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></section>
+                <section className="surface-card chart-card"><PanelHeader title="연간 Mode A · B 비교" subtitle="공통 기상·활성면적·인버터, 전기 결합만 변경" /><div className="chart-medium"><ResponsiveContainer width="100%" height="100%"><BarChart data={compareChartData}><CartesianGrid stroke="#203743" strokeDasharray="3 6" vertical={false} /><XAxis dataKey="name" /><YAxis /><Tooltip contentStyle={{ background: "#10212c", border: "1px solid #29404c" }} /><Legend /><Bar dataKey="modeA" name="Mode A 공용 회로 Wh" fill="#f4ba4b" radius={[5, 5, 0, 0]} /><Bar dataKey="modeB" name="Mode B 구역별 MPPT Wh" fill="#42c6a5" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></section>
                 <section className="surface-card fairness-card"><PanelHeader title="비교 공정성 확인" subtitle="형상 이외의 모든 조건을 잠금" /><div className="fairness-list"><div><Check size={15} /><span>날짜·시간·태양</span><strong>{dateTime.replace("T", " ")}</strong></div><div><Check size={15} /><span>기상 시계열</span><strong>{provenance.kind}</strong></div><div><Check size={15} /><span>환경·장애물</span><strong>{environmentName} · {obstacles.length}개</strong></div><div><Check size={15} /><span>난수 시드</span><strong>{seed}</strong></div><div><Check size={15} /><span>패널 규격</span><strong>20 × 0.0025 = 0.050 m²</strong></div></div><p>모든 형상은 동일한 총 활성면적으로 비교합니다. 투영 단면적은 태양 방향과 형상에 따라 달라지는 결과값이므로 강제로 같게 만들지 않습니다. 화면에서 나란히 보이지만 물리 장면은 독립되어 서로 차폐하지 않습니다.</p></section>
               </div>
             </div>

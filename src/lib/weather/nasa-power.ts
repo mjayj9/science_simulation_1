@@ -29,28 +29,43 @@ function nasaTime(key: string): number {
   return Date.UTC(Number(key.slice(0, 4)), Number(key.slice(4, 6)) - 1, Number(key.slice(6, 8)), Number(key.slice(8, 10)));
 }
 
+function providerNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number > -900 ? number : undefined;
+}
+
 export function normalizeNasaPowerResponse(raw: unknown, requestUrl?: string, now = new Date()): WeatherSeries {
   const parameter = (raw as { properties?: { parameter?: unknown } })?.properties?.parameter;
   if (typeof parameter !== "object" || parameter === null) throw new Error("NASA POWER 응답에 properties.parameter가 없습니다.");
   const values = parameter as Record<string, Record<string, unknown>>;
   const keys = Object.keys(values.ALLSKY_SFC_SW_DWN ?? {}).sort();
   if (keys.length === 0) throw new Error("NASA POWER 시간별 데이터가 없습니다.");
-  const read = (field: string, key: string, fallback = 0) => {
-    const value = Number(values[field]?.[key]);
-    return Number.isFinite(value) && value > -900 ? value : fallback;
+  const read = (field: string, key: string, fallback: number) => {
+    return providerNumber(values[field]?.[key]) ?? fallback;
+  };
+  const readIrradiance = (field: string, key: string) => {
+    const value = providerNumber(values[field]?.[key]);
+    if (value === undefined) {
+      throw new Error(`NASA POWER 핵심 일사량 ${field}[${key}]이 결측 또는 sentinel입니다.`);
+    }
+    return value;
   };
   const points: WeatherPoint[] = keys.map((key) => ({
     timeUtcMs: nasaTime(key),
+    sourceTimestamp: key,
     // POWER hourly solar fields are Wh/m² over the hour, numerically equal to hourly mean W/m².
-    ghiWm2: Math.max(0, read("ALLSKY_SFC_SW_DWN", key)),
-    dniWm2: Math.max(0, read("ALLSKY_SFC_SW_DNI", key)),
-    dhiWm2: Math.max(0, read("ALLSKY_SFC_SW_DIFF", key)),
+    ghiWm2: Math.max(0, readIrradiance("ALLSKY_SFC_SW_DWN", key)),
+    dniWm2: Math.max(0, readIrradiance("ALLSKY_SFC_SW_DNI", key)),
+    dhiWm2: Math.max(0, readIrradiance("ALLSKY_SFC_SW_DIFF", key)),
     ambientC: read("T2M", key, 20),
-    windSpeedMs: Math.max(0, read("WS10M", key)),
-    windDirectionDeg: ((read("WD10M", key) % 360) + 360) % 360,
-    gustMs: Math.max(0, read("WS10M", key)),
+    windSpeedMs: Math.max(0, read("WS10M", key, 0)),
+    windDirectionDeg: ((read("WD10M", key, 0) % 360) + 360) % 360,
+    gustMs: Math.max(0, read("WS10M", key, 0)),
     cloudFraction: 0,
-    precipitationMm: Math.max(0, read("PRECTOTCORR", key)),
+    precipitationMm: Math.max(0, read("PRECTOTCORR", key, 0)),
   }));
   return assertWeatherSeries({
     points,

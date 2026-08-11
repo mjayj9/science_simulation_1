@@ -38,7 +38,7 @@ test("server-renders the Korean Solarform product shell", async () => {
   assert.match(html, />다중 형상 비교</);
   assert.match(html, />공식 · 근거</);
   assert.match(html, />데이터 내보내기</);
-  assert.match(html, /모든 기본 형상은 정확히 20개 패널/);
+  assert.match(html, /강체 배열과 0\.050 m² 연속 PV 스킨을 같은 활성면적으로 비교/);
   assert.match(html, /1280px 이상 PC 화면을 권장/);
   assert.match(html, /Three\.js와 Web Worker 계산을 위해 JavaScript가 필요/);
 

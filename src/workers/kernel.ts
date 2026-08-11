@@ -4,6 +4,7 @@ import {
   PANEL_AREA_M2,
 } from "../lib/geometry";
 import {
+  DEFAULT_ELECTRICAL,
   calculateCircuit,
   calculateInverter,
   createPanelFrame,
@@ -17,10 +18,14 @@ import {
   quaternionFromAxisAngle,
   rotateAroundY,
   rotateVector,
+  singleDiodeCurve,
   simulateInstant,
+  solarPosition,
+  sunVector,
   type CircuitDevice,
   type InstantSimulationInput,
   type InverterResult,
+  type IVCurve,
   type Quaternion,
   type Vec3,
 } from "../lib/physics";
@@ -36,8 +41,13 @@ import {
   type SimulationProgressEvent,
   type SimulationResultRow,
   type SimulationRunRequest,
+  type SimulationObstacleBounds,
+  type SimulationSurfaceSample,
   type SimulationVariantWorkItem,
 } from "./protocol";
+
+const MAX_SURFACE_SAMPLES_PER_ZONE = 256;
+const MAX_OBSTACLE_BOUNDS_PER_VARIANT = 256;
 
 export class SimulationCancelledError extends Error {
   constructor() {
@@ -189,6 +199,26 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
       input.weather.length,
       `${variant.variantId}.irradianceScaleByStep`,
     );
+    if (variant.obstacleBounds !== undefined) {
+      if (
+        !Array.isArray(variant.obstacleBounds) ||
+        variant.obstacleBounds.length > MAX_OBSTACLE_BOUNDS_PER_VARIANT
+      ) {
+        throw new RangeError(
+          `${variant.variantId}.obstacleBounds must contain at most ${MAX_OBSTACLE_BOUNDS_PER_VARIANT} bounds.`,
+        );
+      }
+      variant.obstacleBounds.forEach((bounds, obstacleIndex) => {
+        const obstacleLabel = `${variant.variantId}.obstacleBounds[${obstacleIndex}]`;
+        assertVec3(bounds.min, `${obstacleLabel}.min`, true);
+        assertVec3(bounds.max, `${obstacleLabel}.max`, true);
+        for (const axis of ["x", "y", "z"] as const) {
+          if (bounds.min[axis] > bounds.max[axis]) {
+            throw new RangeError(`${obstacleLabel}.min.${axis} must not exceed max.${axis}.`);
+          }
+        }
+      });
+    }
     if (
       variant.rotationPhaseSamples !== undefined &&
       (!Number.isInteger(variant.rotationPhaseSamples) ||
@@ -247,6 +277,30 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
         assertVec3(panel.sampleAxisU, `${panelLabel}.sampleAxisU`);
         assertVec3(panel.sampleAxisV, `${panelLabel}.sampleAxisV`);
         assertQuaternion(panel.quaternion, `${panelLabel}.quaternion`);
+        if (panel.surfaceSamples !== undefined) {
+          if (
+            !Array.isArray(panel.surfaceSamples) ||
+            panel.surfaceSamples.length < 1 ||
+            panel.surfaceSamples.length > MAX_SURFACE_SAMPLES_PER_ZONE
+          ) {
+            throw new RangeError(
+              `${panelLabel}.surfaceSamples must contain 1-${MAX_SURFACE_SAMPLES_PER_ZONE} samples.`,
+            );
+          }
+          let totalAreaWeight = 0;
+          panel.surfaceSamples.forEach((sample, sampleIndex) => {
+            const sampleLabel = `${panelLabel}.surfaceSamples[${sampleIndex}]`;
+            assertVec3(sample.positionM, `${sampleLabel}.positionM`, true);
+            assertVec3(sample.normal, `${sampleLabel}.normal`);
+            if (!Number.isFinite(sample.areaWeight) || sample.areaWeight <= 0) {
+              throw new RangeError(`${sampleLabel}.areaWeight must be finite and greater than zero.`);
+            }
+            totalAreaWeight += sample.areaWeight;
+          });
+          if (!Number.isFinite(totalAreaWeight) || totalAreaWeight <= 0) {
+            throw new RangeError(`${panelLabel}.surfaceSamples total areaWeight is invalid.`);
+          }
+        }
         assertUnitFraction(panel.visibility, `${panel.panelId}.visibility`);
         assertUnitFraction(panel.diffuseVisibility, `${panel.panelId}.diffuseVisibility`);
         assertUnitFraction(panel.groundVisibility, `${panel.panelId}.groundVisibility`);
@@ -338,6 +392,12 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
   ) {
     throw new RangeError("워커 chunkSize는 1~1024 정수여야 합니다.");
   }
+  if (
+    input.reportingOffsetMinutes !== undefined &&
+    (!Number.isInteger(input.reportingOffsetMinutes) || Math.abs(input.reportingOffsetMinutes) > 1_440)
+  ) {
+    throw new RangeError("보고 시간대 오프셋은 -1,440~1,440분 정수여야 합니다.");
+  }
   return input;
 }
 
@@ -375,6 +435,63 @@ function scaledIrradiance(
     dniWm2: Math.max(0, weather.dniWm2 * scale),
     dhiWm2: Math.max(0, weather.dhiWm2 * scale),
   };
+}
+
+/** Mirrors the solar context resolved inside `simulateInstant`. */
+function obstacleSunDirection(input: SimulationKernelInput, weather: WeatherPoint): Vec3 {
+  const override = input.physics?.solarOverride;
+  if (override) {
+    const azimuthDeg = ((override.azimuthDeg % 360) + 360) % 360;
+    const elevationDeg = Math.max(-90, Math.min(90, override.elevationDeg));
+    return sunVector(azimuthDeg, elevationDeg);
+  }
+  const location = input.physics?.location;
+  const pressurePa = input.physics?.weather?.pressurePa;
+  return sunVector(solarPosition({
+    timestamp: weather.timeUtcMs,
+    latitudeDeg: location?.latitudeDeg ?? 37.5665,
+    longitudeDeg: location?.longitudeDeg ?? 126.978,
+    elevationM: location?.elevationM ?? 38,
+    pressureHPa: location?.pressureHPa ?? (
+      pressurePa === undefined ? undefined : pressurePa / 100
+    ),
+    temperatureC: location?.temperatureC ?? weather.ambientC,
+    deltaTSeconds: location?.deltaTSeconds,
+    deltaUt1Seconds: location?.deltaUt1Seconds,
+    applyRefraction: location?.applyRefraction,
+  }));
+}
+
+function rayIntersectsAabb(
+  origin: Vec3,
+  direction: Vec3,
+  bounds: SimulationObstacleBounds,
+): boolean {
+  let near = 0;
+  let far = Number.POSITIVE_INFINITY;
+  for (const axis of ["x", "y", "z"] as const) {
+    const component = direction[axis];
+    if (Math.abs(component) < 1e-12) {
+      if (origin[axis] < bounds.min[axis] || origin[axis] > bounds.max[axis]) return false;
+      continue;
+    }
+    const inverse = 1 / component;
+    let first = (bounds.min[axis] - origin[axis]) * inverse;
+    let second = (bounds.max[axis] - origin[axis]) * inverse;
+    if (first > second) [first, second] = [second, first];
+    near = Math.max(near, first);
+    far = Math.min(far, second);
+    if (near > far) return false;
+  }
+  return far >= 0;
+}
+
+function obstacleVisibilityAtPoint(
+  origin: Vec3,
+  direction: Vec3,
+  bounds: readonly SimulationObstacleBounds[],
+): 0 | 1 {
+  return bounds.some((obstacle) => rayIntersectsAabb(origin, direction, obstacle)) ? 0 : 1;
 }
 
 export interface RotatedPanelPose {
@@ -480,6 +597,23 @@ export function rotatePanelPoseAroundY(
     sampleAxisV: rotateAroundY(base.sampleAxisV, angleRad),
     angleRad,
   };
+}
+
+interface RotatedSurfaceSample extends SimulationSurfaceSample {
+  /** Normalized relative area within the electrical zone. */
+  areaWeight: number;
+}
+
+function rotateSurfaceSamplesAroundY(
+  samples: readonly SimulationSurfaceSample[],
+  angleRad: number,
+): RotatedSurfaceSample[] {
+  const totalAreaWeight = samples.reduce((sum, sample) => sum + sample.areaWeight, 0);
+  return samples.map((sample) => ({
+    positionM: rotateAroundY(sample.positionM, angleRad),
+    normal: normalize(rotateAroundY(sample.normal, angleRad)),
+    areaWeight: sample.areaWeight / totalAreaWeight,
+  }));
 }
 
 function timestampMilliseconds(value: Date | string | number): number {
@@ -634,6 +768,18 @@ export function rotationPhaseAngles(context: SimulationStepContext): number[] {
 }
 
 /** Production step: POA → Faiman temperature → PV → circuit → inverter. */
+interface ZonePhysicsResult {
+  panelId: string;
+  areaM2: number;
+  dcPowerW: number;
+  dcVoltageV: number;
+  dcCurrentA: number;
+  ivCurve?: IVCurve;
+  poaWm2: number;
+  moduleTemperatureC: number;
+  ghiClosure: ReturnType<typeof simulateInstant>["irradiance"]["ghiClosure"];
+}
+
 function computePhysicsStepAtAngle(
   { input, variant, weather, stepIndex, isCancelled }: SimulationStepContext,
   angleRad: number,
@@ -641,22 +787,27 @@ function computePhysicsStepAtAngle(
   const panels = resolvedPanels(input, variant);
   const detailedCircuit =
     panels.length > 1 && variant.circuit !== undefined && variant.circuit !== false;
-  const panelResults: Array<ReturnType<typeof simulateInstant> & { panelId: string; areaM2: number }> = [];
+  const panelResults: ZonePhysicsResult[] = [];
+  const obstacleBounds = variant.obstacleBounds?.length
+    ? variant.obstacleBounds
+    : undefined;
+  const sunDirection = obstacleBounds
+    ? obstacleSunDirection(input, weather)
+    : undefined;
 
   for (const panel of panels) {
     if (isCancelled?.()) throw new SimulationCancelledError();
     const pose = rotatePanelPoseAroundY(panel, angleRad);
+    const areaM2 = panel.areaM2 ?? PANEL_AREA_M2;
+    const efficiency = panel.efficiency ?? variant.referenceEfficiency;
     const electrical: NonNullable<InstantSimulationInput["electrical"]> = {
       ...input.physics?.electrical,
       ...variant.electrical,
       ...panel.electrical,
       ...(detailedCircuit ? { mode: "single-diode" as const } : {}),
     };
-    const panelInput: NonNullable<InstantSimulationInput["panel"]> = {
-      normal: pose.normal,
-      sampleAxisU: pose.sampleAxisU,
-      areaM2: panel.areaM2 ?? PANEL_AREA_M2,
-      efficiency: panel.efficiency ?? variant.referenceEfficiency,
+    const sharedPanelInput = {
+      efficiency,
       visibility: panel.visibilityByStep?.[stepIndex] ?? panel.visibility,
       diffuseVisibility:
         panel.diffuseVisibilityByStep?.[stepIndex] ?? panel.diffuseVisibility,
@@ -666,27 +817,108 @@ function computePhysicsStepAtAngle(
       iam: panel.iam,
       diffuseModel: panel.diffuseModel,
       soilingLossFraction: panel.soilingLossFraction,
-      heightM: panel.heightM,
     };
-    const result = simulateInstant({
-      timestamp: weather.timeUtcMs,
-      location: input.physics?.location,
-      solarOverride: input.physics?.solarOverride,
-      irradiance: scaledIrradiance(variant, weather, stepIndex),
-      panel: panelInput,
-      weather: {
-        ...input.physics?.weather,
-        ambientTemperatureC: weather.ambientC,
-        referenceWindSpeedMS: weather.windSpeedMs,
-      },
-      electrical,
-      inverter: false,
-      thermal: input.physics?.thermal,
+    const irradiance = scaledIrradiance(variant, weather, stepIndex);
+    const simulationWeather = {
+      ...input.physics?.weather,
+      ambientTemperatureC: weather.ambientC,
+      referenceWindSpeedMS: weather.windSpeedMs,
+    };
+
+    if (!panel.surfaceSamples) {
+      const result = simulateInstant({
+        timestamp: weather.timeUtcMs,
+        location: input.physics?.location,
+        solarOverride: input.physics?.solarOverride,
+        irradiance,
+        panel: {
+          ...sharedPanelInput,
+          normal: pose.normal,
+          sampleAxisU: pose.sampleAxisU,
+          areaM2,
+          heightM: panel.heightM,
+          visibility: sunDirection && obstacleBounds
+            ? (sharedPanelInput.visibility ?? 1) * obstacleVisibilityAtPoint(
+                pose.positionM,
+                sunDirection,
+                obstacleBounds,
+              )
+            : sharedPanelInput.visibility,
+        },
+        weather: simulationWeather,
+        electrical,
+        inverter: false,
+        thermal: input.physics?.thermal,
+      });
+      panelResults.push({
+        panelId: panel.panelId,
+        areaM2,
+        dcPowerW: result.dcPowerW,
+        dcVoltageV: result.dcVoltageV,
+        dcCurrentA: result.dcCurrentA,
+        ivCurve: result.ivCurve,
+        poaWm2: result.poa.totalWm2,
+        moduleTemperatureC: result.moduleTemperatureC,
+        ghiClosure: result.irradiance.ghiClosure,
+      });
+      continue;
+    }
+
+    const surfaceSamples = rotateSurfaceSamplesAroundY(panel.surfaceSamples, angleRad);
+    const sampleResults = surfaceSamples.map((sample) => {
+      if (isCancelled?.()) throw new SimulationCancelledError();
+      return {
+        areaWeight: sample.areaWeight,
+        result: simulateInstant({
+          timestamp: weather.timeUtcMs,
+          location: input.physics?.location,
+          solarOverride: input.physics?.solarOverride,
+          irradiance,
+          panel: {
+            ...sharedPanelInput,
+            normal: sample.normal,
+            areaM2: areaM2 * sample.areaWeight,
+            heightM: panel.heightM ?? Math.max(0.01, sample.positionM.y),
+            visibility: sunDirection && obstacleBounds
+              ? (sharedPanelInput.visibility ?? 1) * obstacleVisibilityAtPoint(
+                  sample.positionM,
+                  sunDirection,
+                  obstacleBounds,
+                )
+              : sharedPanelInput.visibility,
+          },
+          weather: simulationWeather,
+          // Samples resolve local POA and temperature only. The electrical
+          // zone receives exactly one detailed I-V solve after integration.
+          electrical: { ...electrical, mode: "simple" as const },
+          inverter: false,
+          thermal: input.physics?.thermal,
+        }),
+      };
+    });
+    const average = (selector: (result: ReturnType<typeof simulateInstant>) => number) =>
+      sampleResults.reduce(
+        (sum, sample) => sum + selector(sample.result) * sample.areaWeight,
+        0,
+      );
+    const averageEffectivePoaWm2 = average((result) => result.effectivePoaWm2);
+    const averageModuleTemperatureC = average((result) => result.moduleTemperatureC);
+    const baseElectrical = electrical.config ?? DEFAULT_ELECTRICAL;
+    const zoneCurve = singleDiodeCurve({
+      irradianceWm2: sampleResults[0].result.solar.isDaylight ? averageEffectivePoaWm2 : 0,
+      cellTemperatureC: averageModuleTemperatureC,
+      config: { ...baseElectrical, areaM2, efficiency },
     });
     panelResults.push({
-      ...result,
       panelId: panel.panelId,
-      areaM2: panelInput.areaM2 ?? PANEL_AREA_M2,
+      areaM2,
+      dcPowerW: zoneCurve.mpp.powerW,
+      dcVoltageV: zoneCurve.mpp.voltageV,
+      dcCurrentA: zoneCurve.mpp.currentA,
+      ivCurve: zoneCurve,
+      poaWm2: average((result) => result.poa.totalWm2),
+      moduleTemperatureC: averageModuleTemperatureC,
+      ghiClosure: sampleResults[0].result.irradiance.ghiClosure,
     });
   }
 
@@ -699,10 +931,16 @@ function computePhysicsStepAtAngle(
 
   if (detailedCircuit) {
     const devices: CircuitDevice[] = panelResults.map((result) => {
-      if (!result.ivCurve) {
-        throw new Error(`${variant.variantId}/${result.panelId}의 상세 I-V 곡선이 없습니다.`);
-      }
-      return { id: result.panelId, curve: result.ivCurve };
+      const zeroPoint = { voltageV: 0, currentA: 0, powerW: 0 };
+      return {
+        id: result.panelId,
+        curve: result.ivCurve ?? {
+          points: [zeroPoint],
+          iscA: 0,
+          vocV: 0,
+          mpp: zeroPoint,
+        },
+      };
     });
     const options = variant.circuit === false || variant.circuit === undefined
       ? {}
@@ -744,12 +982,12 @@ function computePhysicsStepAtAngle(
     totalArea > 0
       ? panelResults.reduce((sum, result) => sum + selector(result) * result.areaM2, 0) / totalArea
       : 0;
-  const closure = panelResults[0].irradiance.ghiClosure;
+  const closure = panelResults[0].ghiClosure;
 
   return {
     dcPowerW,
     acPowerW: inverter?.acPowerW ?? dcPowerW,
-    poaWm2: weighted((result) => result.poa.totalWm2),
+    poaWm2: weighted((result) => result.poaWm2),
     moduleTemperatureC: weighted((result) => result.moduleTemperatureC),
     mismatchLossFraction,
     bypassActiveCount,
@@ -890,13 +1128,18 @@ interface MonthlyAccumulator {
   acEnergyWhByVariant: Record<string, number>;
 }
 
-function monthKey(timeUtcMs: number): string {
-  return new Date(timeUtcMs).toISOString().slice(0, 7);
+function monthKey(timeUtcMs: number, reportingOffsetMinutes: number): string {
+  return new Date(timeUtcMs + reportingOffsetMinutes * 60_000).toISOString().slice(0, 7);
 }
 
-function nextMonthUtc(timeUtcMs: number): number {
-  const date = new Date(timeUtcMs);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+function nextMonthUtc(timeUtcMs: number, reportingOffsetMinutes: number): number {
+  const offsetMs = reportingOffsetMinutes * 60_000;
+  const reportingDate = new Date(timeUtcMs + offsetMs);
+  return Date.UTC(
+    reportingDate.getUTCFullYear(),
+    reportingDate.getUTCMonth() + 1,
+    1,
+  ) - offsetMs;
 }
 
 function addEnergySegment(
@@ -908,16 +1151,17 @@ function addEnergySegment(
   current: Record<string, SimulationPhysicsStepResult>,
   totalDc: Record<string, number>,
   totalAc: Record<string, number>,
+  reportingOffsetMinutes: number,
 ): void {
   const durationMs = endMs - startMs;
   if (!(durationMs > 0)) return;
   let segmentStart = startMs;
   while (segmentStart < endMs) {
-    const segmentEnd = Math.min(endMs, nextMonthUtc(segmentStart));
+    const segmentEnd = Math.min(endMs, nextMonthUtc(segmentStart, reportingOffsetMinutes));
     const startFraction = (segmentStart - startMs) / durationMs;
     const endFraction = (segmentEnd - startMs) / durationMs;
     const hours = (segmentEnd - segmentStart) / 3_600_000;
-    const key = monthKey(segmentStart);
+    const key = monthKey(segmentStart, reportingOffsetMinutes);
     let bucket = monthly.get(key);
     if (!bucket) {
       bucket = {
@@ -972,13 +1216,18 @@ export async function runSimulationKernel(
   const dcEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const acEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const monthly = new Map<string, MonthlyAccumulator>();
+  const reportingOffsetMinutes = input.reportingOffsetMinutes ?? 0;
   const startedAt = Date.now();
   const workByStep = input.weather.map((weather, stepIndex) =>
     input.variants.reduce((sum, variant) => {
       const phaseCount = computeStep === computePhysicsStep
         ? rotationPhaseCount({ input, variant, weather, stepIndex })
         : 1;
-      return sum + Math.max(1, variant.panels?.length ?? 1) * phaseCount;
+      const zoneSampleCount = variant.panels?.reduce(
+        (variantWork, panel) => variantWork + (panel.surfaceSamples?.length ?? 1),
+        0,
+      ) ?? 1;
+      return sum + Math.max(1, zoneSampleCount) * phaseCount;
     }, 0),
   );
   const cumulativeWork = workByStep.reduce<number[]>((prefix, work) => {
@@ -1047,6 +1296,7 @@ export async function runSimulationKernel(
           stepResults,
           dcEnergyWhByVariant,
           acEnergyWhByVariant,
+          reportingOffsetMinutes,
         );
       }
       previousResults = stepResults;
@@ -1110,6 +1360,7 @@ export async function runSimulationKernel(
     dcEnergyWhByVariant,
     acEnergyWhByVariant,
     monthlyEnergy,
+    reportingOffsetMinutes,
     steps: input.weather.length,
     intervals: Math.max(0, input.weather.length - 1),
     durationHours: (lastTime - firstTime) / 3_600_000,

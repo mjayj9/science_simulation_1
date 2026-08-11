@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PANEL_AREA_M2 } from "../src/lib/geometry";
-import { rotateVector, simulateInstant, solarPosition } from "../src/lib/physics";
+import {
+  DEFAULT_ELECTRICAL,
+  calculateCircuit,
+  calculateInverter,
+  rotateVector,
+  simulateInstant,
+  singleDiodeCurve,
+  solarPosition,
+} from "../src/lib/physics";
 import { getOfflineWeather, type WeatherPoint } from "../src/lib/weather";
 import {
   SIMULATION_WORKER_PROTOCOL_VERSION,
@@ -211,6 +219,385 @@ describe("annual physics kernel", () => {
     expect(complete.acEnergyWhByVariant.plane).toBeCloseTo(direct.inverter.acPowerW, 12);
     expect(complete.energyWhByVariant).toEqual(complete.dcEnergyWhByVariant);
     expect(complete.mode).toBe("annual");
+  });
+
+  it("area-integrates curved samples into one I-V curve per zone and counts sample work", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    const inverter = {
+      ratedAcPowerW: 1,
+      nominalEfficiency: 0.96,
+      mpptMinVoltageV: 0,
+      mpptMaxVoltageV: 10,
+      maxDcVoltageV: 20,
+      maxInputCurrentA: 100,
+      startPowerW: 0,
+      nightConsumptionW: 0,
+      wiringLossFraction: 0,
+    };
+    input.variants[0] = {
+      variantId: "curved-string",
+      panelCount: 2,
+      totalPanelAreaM2: 2 * PANEL_AREA_M2,
+      referenceEfficiency: 0.2,
+      topology: "series",
+      circuit: { bypassEnabled: true, bypassForwardVoltageV: 0.5 },
+      inverter,
+      panels: [
+        {
+          panelId: "curved-zone",
+          // A representative diagnostic normal must not replace the samples.
+          normal: { x: 0, y: -1, z: 0 },
+          areaM2: PANEL_AREA_M2,
+          efficiency: 0.2,
+          heightM: 1,
+          albedo: 0,
+          iam: { model: "none" },
+          diffuseModel: "isotropic",
+          soilingLossFraction: 0,
+          surfaceSamples: [
+            {
+              positionM: { x: 0, y: 1, z: 0 },
+              normal: { x: 0, y: 1, z: 0 },
+              areaWeight: 1,
+            },
+            {
+              positionM: { x: 1, y: 1, z: 0 },
+              normal: { x: 1, y: 0, z: 0 },
+              areaWeight: 3,
+            },
+          ],
+        },
+        {
+          panelId: "flat-zone",
+          normal: { x: 0, y: -1, z: 0 },
+          areaM2: PANEL_AREA_M2,
+          efficiency: 0.2,
+          heightM: 1,
+          albedo: 0,
+          iam: { model: "none" },
+          diffuseModel: "isotropic",
+          soilingLossFraction: 0,
+          surfaceSamples: [
+            {
+              positionM: { x: -1, y: 1, z: 0 },
+              normal: { x: 0, y: 1, z: 0 },
+              areaWeight: 7,
+            },
+          ],
+        },
+      ],
+    };
+
+    const directSample = (normal: { x: number; y: number; z: number }) => simulateInstant({
+      timestamp: start,
+      solarOverride: { azimuthDeg: 180, elevationDeg: 90 },
+      irradiance: { ghiWm2: 1000, dniWm2: 1000, dhiWm2: 0 },
+      panel: {
+        normal,
+        areaM2: PANEL_AREA_M2,
+        efficiency: 0.2,
+        heightM: 1,
+        albedo: 0,
+        iam: { model: "none" },
+        diffuseModel: "isotropic",
+        soilingLossFraction: 0,
+      },
+      weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+      electrical: { mode: "simple" },
+      inverter: false,
+    });
+    const upward = directSample({ x: 0, y: 1, z: 0 });
+    const vertical = directSample({ x: 1, y: 0, z: 0 });
+    const curvedPoaWm2 = (upward.effectivePoaWm2 + 3 * vertical.effectivePoaWm2) / 4;
+    const curvedTemperatureC =
+      (upward.moduleTemperatureC + 3 * vertical.moduleTemperatureC) / 4;
+    const zoneConfig = {
+      ...DEFAULT_ELECTRICAL,
+      areaM2: PANEL_AREA_M2,
+      efficiency: 0.2,
+    };
+    const curvedCurve = singleDiodeCurve({
+      irradianceWm2: curvedPoaWm2,
+      cellTemperatureC: curvedTemperatureC,
+      config: zoneConfig,
+    });
+    const flatCurve = singleDiodeCurve({
+      irradianceWm2: upward.effectivePoaWm2,
+      cellTemperatureC: upward.moduleTemperatureC,
+      config: zoneConfig,
+    });
+    const expectedCircuit = calculateCircuit({
+      devices: [
+        { id: "curved-zone", curve: curvedCurve },
+        { id: "flat-zone", curve: flatCurve },
+      ],
+      topology: "series",
+      bypassEnabled: true,
+      bypassForwardVoltageV: 0.5,
+    });
+    const expectedInverter = calculateInverter({
+      dcPowerW: expectedCircuit.mpp.powerW,
+      dcVoltageV: expectedCircuit.mpp.voltageV,
+      dcCurrentA: expectedCircuit.mpp.currentA,
+      config: inverter,
+    });
+    const rows: SimulationPhysicsStepResult[] = [];
+    const progress: SimulationProgressEvent[] = [];
+
+    await runSimulationKernel(createSimulationRunRequest("curved-zone-integration", input), {
+      onChunk: (event) => {
+        event.rows.forEach((row) => rows.push({
+          dcPowerW: row.dcPowerWByVariant["curved-string"],
+          acPowerW: row.acPowerWByVariant["curved-string"],
+          poaWm2: row.poaWm2ByVariant["curved-string"],
+          moduleTemperatureC: row.moduleTemperatureCByVariant["curved-string"],
+          mismatchLossFraction: row.mismatchLossFractionByVariant["curved-string"],
+          bypassActiveCount: row.bypassActiveCountByVariant["curved-string"],
+          inverterStatus: row.inverterStatusByVariant["curved-string"],
+          ghiClosure: row.ghiClosureByVariant["curved-string"],
+          rotationIntervalAveraged: row.rotationIntervalAveragedByVariant["curved-string"],
+        }));
+      },
+      onProgress: (event) => { progress.push(event); },
+      yieldControl: async () => undefined,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].dcPowerW).toBeCloseTo(expectedCircuit.mpp.powerW, 10);
+    expect(rows[0].acPowerW).toBeCloseTo(expectedInverter.acPowerW, 10);
+    expect(rows[0].inverterStatus).toBe(expectedInverter.status);
+    expect(rows[0].poaWm2).toBeCloseTo((curvedPoaWm2 + upward.poa.totalWm2) / 2, 12);
+    expect(rows[0].moduleTemperatureC).toBeCloseTo(
+      (curvedTemperatureC + upward.moduleTemperatureC) / 2,
+      12,
+    );
+    expect(rows[0].mismatchLossFraction).toBeCloseTo(
+      expectedCircuit.mismatchLossFraction,
+      12,
+    );
+    expect(progress.map((event) => event.completedWork)).toEqual([0, 3, 6]);
+    expect(progress.every((event) => event.totalWork === 6)).toBe(true);
+  });
+
+  it("rejects empty or non-positive curved-surface quadrature", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    input.variants[0].panels = [{
+      panelId: "invalid-zone",
+      areaM2: PANEL_AREA_M2,
+      surfaceSamples: [],
+    }];
+    expect(() => validateKernelInput(input)).toThrow(/surfaceSamples/);
+
+    input.variants[0].panels[0].surfaceSamples = [{
+      positionM: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      areaWeight: 0,
+    }];
+    expect(() => validateKernelInput(input)).toThrow(/areaWeight/);
+  });
+
+  it("casts obstacle rays from the rotated rigid-panel position and preserves empty bounds", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    const variant = input.variants[0];
+    variant.panels = [{
+      panelId: "rotated-shadow-origin",
+      positionM: { x: 1, y: 0, z: 0 },
+      normal: { x: 0, y: 1, z: 0 },
+      areaM2: PANEL_AREA_M2,
+      efficiency: 0.2,
+      visibility: 0.5,
+      albedo: 0,
+      iam: { model: "none" },
+      diffuseModel: "isotropic",
+      soilingLossFraction: 0,
+    }];
+    variant.rotation = { mode: "static", angleRad: Math.PI / 2 };
+    const context = {
+      input,
+      variant,
+      weather: input.weather[0],
+      stepIndex: 0,
+    };
+    const baseline = computePhysicsStep(context) as SimulationPhysicsStepResult;
+
+    variant.obstacleBounds = [];
+    const emptyBounds = computePhysicsStep(context) as SimulationPhysicsStepResult;
+    expect(emptyBounds).toEqual(baseline);
+    expect(baseline.poaWm2).toBeCloseTo(500, 12);
+
+    // +Y rotation moves (1,0,0) to (0,0,-1); this AABB only shadows that
+    // rotated origin under the overhead sun, not the unrotated position.
+    variant.obstacleBounds = [{
+      min: { x: -0.1, y: 0.1, z: -1.1 },
+      max: { x: 0.1, y: 2, z: -0.9 },
+    }];
+    const blocked = computePhysicsStep(context) as SimulationPhysicsStepResult;
+    expect(blocked.poaWm2).toBe(0);
+    expect(blocked.dcPowerW).toBe(0);
+  });
+
+  it("multiplies existing visibility by per-sample obstacle rays before zone integration", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    input.variants[0] = {
+      variantId: "sample-shadow",
+      panelCount: 1,
+      totalPanelAreaM2: PANEL_AREA_M2,
+      referenceEfficiency: 0.2,
+      inverter: false,
+      rotation: { mode: "static", angleRad: Math.PI / 2 },
+      obstacleBounds: [{
+        min: { x: -0.1, y: 0.1, z: -1.1 },
+        max: { x: 0.1, y: 2, z: -0.9 },
+      }],
+      panels: [{
+        panelId: "sample-zone",
+        // The representative point is deliberately clear. Only the first
+        // integration sample is under the obstacle.
+        positionM: { x: 5, y: 0, z: 0 },
+        normal: { x: 0, y: 1, z: 0 },
+        areaM2: PANEL_AREA_M2,
+        efficiency: 0.2,
+        heightM: 1,
+        visibility: 0.8,
+        albedo: 0,
+        iam: { model: "none" },
+        diffuseModel: "isotropic",
+        soilingLossFraction: 0,
+        surfaceSamples: [
+          {
+            positionM: { x: 1, y: 0, z: 0 },
+            normal: { x: 0, y: 1, z: 0 },
+            areaWeight: 1,
+          },
+          {
+            positionM: { x: 3, y: 0, z: 0 },
+            normal: { x: 0, y: 1, z: 0 },
+            areaWeight: 1,
+          },
+        ],
+      }],
+    };
+
+    const directSample = (visibility: number) => simulateInstant({
+      timestamp: start,
+      solarOverride: { azimuthDeg: 180, elevationDeg: 90 },
+      irradiance: { ghiWm2: 1000, dniWm2: 1000, dhiWm2: 0 },
+      panel: {
+        normal: { x: 0, y: 1, z: 0 },
+        areaM2: PANEL_AREA_M2 / 2,
+        efficiency: 0.2,
+        heightM: 1,
+        visibility,
+        albedo: 0,
+        iam: { model: "none" },
+        diffuseModel: "isotropic",
+        soilingLossFraction: 0,
+      },
+      weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+      electrical: { mode: "simple" },
+      inverter: false,
+    });
+    const shadowed = directSample(0);
+    const clear = directSample(0.8);
+    const averageEffectivePoaWm2 = (shadowed.effectivePoaWm2 + clear.effectivePoaWm2) / 2;
+    const averageTemperatureC =
+      (shadowed.moduleTemperatureC + clear.moduleTemperatureC) / 2;
+    const expectedCurve = singleDiodeCurve({
+      irradianceWm2: averageEffectivePoaWm2,
+      cellTemperatureC: averageTemperatureC,
+      config: {
+        ...DEFAULT_ELECTRICAL,
+        areaM2: PANEL_AREA_M2,
+        efficiency: 0.2,
+      },
+    });
+    const rows: Array<{ dcPowerW: number; poaWm2: number; temperatureC: number }> = [];
+
+    await runSimulationKernel(createSimulationRunRequest("sample-obstacle-shadow", input), {
+      onChunk: (event) => {
+        event.rows.forEach((row) => rows.push({
+          dcPowerW: row.dcPowerWByVariant["sample-shadow"],
+          poaWm2: row.poaWm2ByVariant["sample-shadow"],
+          temperatureC: row.moduleTemperatureCByVariant["sample-shadow"],
+        }));
+      },
+      yieldControl: async () => undefined,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].poaWm2).toBeCloseTo(400, 12);
+    expect(rows[0].temperatureC).toBeCloseTo(averageTemperatureC, 12);
+    expect(rows[0].dcPowerW).toBeCloseTo(expectedCurve.mpp.powerW, 10);
+  });
+
+  it("rejects inverted obstacle bounds", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    input.variants[0].obstacleBounds = [{
+      min: { x: 1, y: 0, z: 0 },
+      max: { x: 0, y: 1, z: 1 },
+    }];
+    expect(() => validateKernelInput(input)).toThrow(/min\.x/);
+  });
+
+  it("keeps a detailed multi-panel circuit finite and off through natural night", async () => {
+    const start = Date.UTC(2026, 5, 20, 15);
+    const input = baseInput([start, start + 3_600_000]);
+    input.weather = input.weather.map((point) => ({
+      ...point,
+      ghiWm2: 0,
+      dniWm2: 0,
+      dhiWm2: 0,
+    }));
+    input.physics = {
+      location: {
+        latitudeDeg: 37.5665,
+        longitudeDeg: 126.978,
+        elevationM: 38,
+      },
+      panelDefaults: { soilingLossFraction: 0 },
+    };
+    input.variants[0] = {
+      variantId: "night-string",
+      panelCount: 2,
+      totalPanelAreaM2: 2 * PANEL_AREA_M2,
+      referenceEfficiency: 0.2,
+      topology: "series",
+      circuit: { bypassEnabled: true, bypassForwardVoltageV: 0.5 },
+      panels: ["night-a", "night-b"].map((panelId) => ({
+        panelId,
+        normal: { x: 0, y: 1, z: 0 },
+        areaM2: PANEL_AREA_M2,
+        efficiency: 0.2,
+        soilingLossFraction: 0,
+      })),
+    };
+    const rows: Array<{ dcPowerW: number; acPowerW: number; status: string }> = [];
+
+    const complete = await runSimulationKernel(
+      createSimulationRunRequest("natural-night-string", input),
+      {
+        onChunk: (event) => {
+          event.rows.forEach((row) => rows.push({
+            dcPowerW: row.dcPowerWByVariant["night-string"],
+            acPowerW: row.acPowerWByVariant["night-string"],
+            status: row.inverterStatusByVariant["night-string"],
+          }));
+        },
+        yieldControl: async () => undefined,
+      },
+    );
+
+    expect(rows).toEqual([
+      { dcPowerW: 0, acPowerW: 0, status: "off" },
+      { dcPowerW: 0, acPowerW: 0, status: "off" },
+    ]);
+    expect(complete.dcEnergyWhByVariant["night-string"]).toBe(0);
+    expect(complete.acEnergyWhByVariant["night-string"]).toBe(0);
   });
 
   it("requirement 10: applies one world-Y rotation to position, quaternion, normal and both sample axes", () => {
@@ -531,6 +918,49 @@ describe("annual physics kernel", () => {
     expect(progress.at(-1)?.fraction).toBe(1);
     expect(progress.at(-1)?.completedWork).toBe(progress.at(-1)?.totalWork);
     expect(complete.intervals).toBe(2);
+  });
+
+  it("splits monthly energy at an optional fixed reporting offset", async () => {
+    const start = Date.UTC(2026, 0, 31, 14);
+    const input = baseInput([start, start + 3_600_000, start + 7_200_000]);
+    input.reportingOffsetMinutes = 9 * 60;
+    const constantStep: SimulationPhysicsStepResult = {
+      dcPowerW: 100,
+      acPowerW: 80,
+      poaWm2: 500,
+      moduleTemperatureC: 30,
+      mismatchLossFraction: 0,
+      bypassActiveCount: 0,
+      inverterStatus: "running",
+      ghiClosure: {
+        residualWm2: 0,
+        relativeResidual: 0,
+        toleranceWm2: 1,
+        isClosed: true,
+        policy: "not-evaluated",
+      },
+      rotationIntervalAveraged: false,
+    };
+
+    const complete = await runSimulationKernel(
+      createSimulationRunRequest("monthly-kst", input),
+      { yieldControl: async () => undefined },
+      () => constantStep,
+    );
+
+    expect(complete.reportingOffsetMinutes).toBe(540);
+    expect(complete.monthlyEnergy).toEqual([
+      {
+        monthUtc: "2026-01",
+        dcEnergyWhByVariant: { plane: 100 },
+        acEnergyWhByVariant: { plane: 80 },
+      },
+      {
+        monthUtc: "2026-02",
+        dcEnergyWhByVariant: { plane: 100 },
+        acEnergyWhByVariant: { plane: 80 },
+      },
+    ]);
   });
 
   it("requires an annual hourly closing endpoint and accepts 8,761 point boundaries", () => {

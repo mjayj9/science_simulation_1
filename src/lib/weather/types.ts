@@ -16,6 +16,8 @@ export interface WeatherProvenance {
 
 export interface WeatherPoint {
   timeUtcMs: number;
+  /** Provider timestamp before normalization/interpolation, retained for audits. */
+  sourceTimestamp?: string;
   ghiWm2: number;
   dniWm2: number;
   dhiWm2: number;

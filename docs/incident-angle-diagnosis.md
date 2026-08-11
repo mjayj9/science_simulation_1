@@ -1,8 +1,36 @@
-# 입사각·일사량 계산 원인 분석과 수정 계약
+# 시간대별 출력과 입사각 진단 계약
 
-## 결론
+## 목적
 
-패널 직달 POA의 유일한 계산식은 다음과 같다.
+시간 그래프의 dropout이나 spike는 후처리 smoothing으로 숨기지 않는다. 각 시점의 원본 시간, 기상, 태양 위치, 광학, 회로와 인버터 상태를 같은 계산 경로에서 보존하고, 급변 원인을 분류한다. 18시라는 시각만으로 오류를 판정하지 않는다. 해당 날짜와 위치에서 태양 고도가 양수이고 복사 입력이 있으면 저녁 발전은 정상일 수 있다.
+
+## 단일 데이터 흐름
+
+```mermaid
+flowchart LR
+  W["한 개의 WeatherSeries\nUTC timestamp + GHI/DNI/DHI"] --> S["solarPosition / sunVector"]
+  S --> O["강체 패널 또는 곡면 표본 POA"]
+  W --> O
+  O --> T["오염 · Faiman 온도"]
+  T --> E["구역 I-V · 회로 / 독립 MPPT"]
+  E --> I["인버터"]
+  I --> D["DailyPoint 진단 행"]
+  D --> C["차트 · 원인코드 · 에너지 적분"]
+```
+
+각 시간점은 공급자 원본 timestamp, 정규화된 UTC ISO, 현지시각 표시값, 기상 provenance를 함께 가진다. UTC millisecond가 계산과 정렬의 기준이고 현지시각은 표시를 위해 한 번만 변환한다. `WeatherSeries`는 중복 없는 오름차순 timestamp와 유한·비음수 복사량을 입력 경계에서 검증한다.
+
+일간 경로는 현재 10분 간격으로 동일 시점의 태양 위치와 기상점을 사용한다. 월 대표일과 연간 worker는 별도 시간 해상도를 사용하므로 일간 차트의 점 개수와 동일하다고 가정하면 안 된다.
+
+## 날씨 단일-source 정책
+
+한 요청 시간축 안에서 API/파일 자료와 오프라인 맑은하늘 자료를 점별로 이어 붙이지 않는다. 선호 `WeatherSeries`가 요청한 모든 timestamp를 직접 또는 허용된 보간 간격으로 덮으면 전 구간에서 그 자료만 사용한다. 한 점이라도 덮지 못하면 전 구간을 하나의 결정론적 오프라인 series로 다시 만들고 `fallbackReason`에 이유를 남긴다.
+
+이 정책은 자료 경계가 물리적 dropout과 저녁 spike처럼 보이던 현상을 제거한다. 공급자 자료의 실제 급변은 보존하며 `WEATHER_STEP`으로 진단할 뿐 값을 평활화하지 않는다. 수동 GHI/DNI/DHI는 순간 계산 전용이며 일간·월간·연간 series를 합성하지 않는다.
+
+## POA와 각도 손실
+
+직달 성분은 다음과 같다.
 
 \[
 G_{direct,POA}=DNI\;V_{sun}\;\eta_{cos}\;IAM
@@ -13,56 +41,19 @@ G_{direct,POA}=DNI\;V_{sun}\;\eta_{cos}\;IAM
 \eta_{angle}=\eta_{cos}\,IAM
 \]
 
-- `n̂`: 회전까지 반영한 패널 전면 세계법선, 무차원 단위벡터
-- `ŝ`: 관측점에서 태양을 향하는 ENU 세계벡터, 무차원 단위벡터
-- `DNI`: 직달법선 복사조도, W/m²
-- `Vsun`: ray sampling으로 계산한 직달 가시율, 0–1
-- `IAM`: 유리 표면 입사각 광학 계수, 0–1
-- `ηcos`: 기하학적 코사인 투영 계수, 0–1
-- `ηangle`: 가시율을 제외한 전체 직달 각도 계수, 0–1
+`ηcos`, IAM과 직달 가시율은 각각 한 번만 적용한다. POA에서 계산한 `effectivePoaWm2`를 DC 모델에 전달한 뒤 `cos(AOI)`나 IAM을 다시 곱하지 않는다. 총 POA는 직달, 하늘 산란과 지면 반사의 합이다.
 
-수정 전 `calculatePOA` 내부의 수식 자체는 이미 이 구조를 사용했다. 실제 이상 출력의 원인은 그 앞뒤 통합 계층에 있었다. UI의 대표일 생성기가 GHI/DNI/DHI를 서로 다른 임의 함수로 다시 만들었고, 패널 위치·법선·ray sampling 축·Three.js 그룹이 서로 다른 단계에서 회전했다. 또한 코사인, IAM, 결합 각도계수가 별도로 노출되지 않아 후속 전기 계산이 같은 손실을 다시 적용하기 쉬웠다.
+\[
+G_{POA}=G_{direct,POA}+G_{diffuse,POA}+G_{ground,POA}
+\]
 
-## 좌표계 계약
-
-전 물리 코어는 Three.js와 같은 ENU 좌표계를 사용한다.
-
-| 축/각 | 정의 |
-|---|---|
-| `+X` | 동쪽 |
-| `+Y` | 위쪽 |
-| `+Z` | 북쪽 |
-| 방위각 0° | 북쪽 |
-| 방위각 90° | 동쪽 |
-| 방위각 180° | 남쪽 |
-| 방위각 270° | 서쪽 |
-
-태양벡터는 다음과 같다.
+좌표는 `+X=동`, `+Y=위`, `+Z=북`, 방위각 0°=북·90°=동이다. 태양 벡터는 다음 규약을 따른다.
 
 \[
 \hat s=(\cos\alpha\sin\gamma,\;\sin\alpha,\;\cos\alpha\cos\gamma)
 \]
 
-여기서 `α`는 태양고도, `γ`는 진북 기준 시계방향 방위각이다. `sunVector()`가 이 규약의 단일 구현이다.
-
-## 확인된 원인
-
-### 1. 각도 손실의 의미가 합쳐져 있었음
-
-기존 결과에는 signed `cosineIncidence`와 최종 `beamWm2`만 있어 다음 값을 구분하기 어려웠다.
-
-- 전면 투영 손실 `ηcos`
-- 유리 반사 손실 `IAM`
-- 두 값을 곱한 `ηangle`
-- 음영까지 반영한 최종 직달 POA
-
-이 때문에 화면 표시 또는 전기 모델에서 `cos(AOI)`를 다시 곱하면 직달 출력이 `cos²(AOI)`에 비례하는 오류가 생길 수 있었다.
-
-### 2. GHI/DNI/DHI의 수평면 폐합 검사가 없었음
-
-세 성분이 모두 입력되면 이전 파이프라인은 그대로 사용했다. 서로 폐합하지 않는 입력에서는 직달·산란항과 GHI 기반 지면반사항이 서로 다른 복사장을 나타낼 수 있다.
-
-검사식은 다음과 같다.
+태양 고도 `α ≤ 0°`이면 직달 입력과 발전 출력은 0으로 강제한다. GHI 세 성분은 값을 수정하지 않고 다음 폐합 잔차를 기록한다.
 
 \[
 GHI_{reconstructed}=DNI\max(0,\cos\theta_z)+DHI
@@ -72,134 +63,57 @@ GHI_{reconstructed}=DNI\max(0,\cos\theta_z)+DHI
 r_{GHI}=GHI-GHI_{reconstructed}
 \]
 
-이번 수정은 원자료를 조용히 덮어쓰지 않고 잔차와 통과 여부를 노출한다. 기본 통과 허용치는 `max(1 W/m², 2%)`이다.
+## 곡면 적분과 Mode A·B
 
-### 3. 태양벡터와 별도 천정각이 서로 다른 권위값이 될 수 있었음
+구·원기둥·원뿔의 AOI는 구역 대표 법선 하나로 계산하지 않는다. 각 등면적 구역의 표면 표본마다 법선, `n·s`, IAM, 직달·산란·지면반사 POA, 외부 가시율과 온도를 계산하고 면적 가중 적분한 뒤 구역 I–V 곡선을 만든다.
 
-기존 POA 입력은 `sunDirection`과 `solarZenithDeg`를 함께 받았다. AOI는 전자를, daylight·Hay–Davies 분모는 후자를 사용했기 때문에 두 값이 불일치하면 한 번의 POA 계산 안에서 서로 다른 태양 위치가 사용될 수 있었다.
+- Mode A(`shared-circuit`)는 동일 회로·바이패스·인버터에서 실제 mismatch를 포함한다.
+- Mode B(`independent-mppt`)는 구역별 MPP를 합산해 mismatch와 바이패스를 제거한 광학 상한을 보여 준다.
 
-수정 후 POA는 정규화된 `sunDirection.y`에서 천정각을 유도해 모든 기하 계산에 사용한다. 입력 천정각과의 차이는 `solarZenithMismatchDeg`로 보존한다.
+두 값의 차이는 투영면적 때문에 생긴 형상 차이와 회로 불일치를 구분하는 데 사용한다. 손실 원장은 투영, IAM, 외부 차폐, 자체 차폐, 오염, 온도·PV 모델, mismatch, 바이패스, 인버터 항목을 중복 차감 없이 기록한다.
 
-### 4. 회전 위치·법선·ray sampling 축이 하나의 pose를 공유하지 않았음
+## 회전 구간 적분
 
-패널 중심 ray 하나만 쓰지 않는 경우 위치, quaternion, 전면법선과 면내 sampling 축 `U`, `V`가 모두 같은 강체 회전을 받아야 한다. 이전 UI는 패널 위치와 법선을 +Y축으로 회전했지만 quaternion은 회전 전 값으로 남겼다. 차폐 sampling 축은 그 회전 전 quaternion에서 계산했으므로, POA가 본 법선과 ray origin들이 놓인 면이 달라졌다.
+RPM이 0이면 정적 계산과 같은 pose와 결과를 사용한다. 고정 RPM의 한 시간 구간은 완전 회전 수와 남은 호를 주기적 위상 구적법으로 면적 평균한다. 이 행의 전력은 이미 `[t_i,t_{i+1}]`의 구간 평균이므로 에너지 적분에서는 왼쪽 행의 평균에 구간 길이를 한 번만 곱한다. 정적 행에는 사다리꼴 적분을 사용한다.
 
-수정 후 `createPanelFrame()`이 오른손 직교 frame을 만들고 `rotatePanelFrameAroundY()`가 법선과 두 sampling 축에 동일한 +Y 회전행렬을 적용한다. `simulateInstant()`는 정규화된 `panelFrame`을 반환한다.
+위상 표본을 임의 상한으로 잘라 수백 회전을 몇 개 timestamp의 순간값으로 대신하지 않는다. `ROTATION_PHASE`는 구간 위상평균을 사용했다는 감사 표식이며 오류가 아니다.
 
-### 5. UI `buildDaySeries`가 실제 기상 대신 비폐합 일사 시계열을 합성했음
+곡면 표본 위치, 법선과 차폐 좌표는 같은 월드 Y 회전을 받는다. 축대칭 곡면의 장애물 없는 총 투영면적은 Y 회전에 불변이며, 화면에서 mesh와 helper가 다시 회전해 이중 변환하지 않아야 한다.
 
-이전 대표일 경로는 한 시점의 프리셋을 시간대별 기상자료처럼 사용하면서 `f=max(0,sin(elevation))`를 만든 뒤 다음과 같이 세 성분에 서로 다른 배율을 적용했다.
+## 원인코드
 
-\[
-GHI_t=GHI_0\min(1,f),\qquad
-DNI_t=DNI_0\sqrt f,\qquad
-DHI_t=DHI_0(0.55+0.45f)
-\]
+분류기는 원본 값을 변경하지 않고 표시용 코드와 `normal / attention / error` 심각도만 만든다.
 
-이 식들은 Haurwitz, Erbs 또는 관측자료의 성분 분해식이 아니며 `GHI=DNI cos(zenith)+DHI`를 보장하지 않는다. 특히 태양이 지평선 바로 위에 있을 때도 DHI는 원 프리셋의 약 55%를 남기고, DNI의 제곱근 배율은 GHI와 다른 시간형상을 만들어 POA와 일·월·연 에너지를 왜곡한다. 이후 `simulateInstant()`가 정확한 POA 식을 사용해도 입력 복사장 자체가 비물리적이므로 결과를 복구할 수 없다.
+| 코드 | 판정 의미 | 기본 심각도 |
+|---|---|---|
+| `NIGHT` | 태양 고도 0° 이하 | normal |
+| `NORMAL_SUNSET` | 정오 이후 태양고도 25° 이하에서 태양·GHI·AC가 함께 감소하는 정상 일몰 | normal |
+| `WEATHER_STEP` | 연속점 GHI 변화가 절대 120 W/m² 이상이고 상대 35% 이상 | attention |
+| `INVERTER_CUTOFF` | DC는 양수지만 AC가 0이고 인버터가 off/cutoff/MPPT 제한 상태 | attention |
+| `BYPASS_SWITCH` | 연속점 사이 바이패스 도통 개수 변화 | attention |
+| `STRING_CURRENT_LIMIT` | 인버터 상태가 current-limit | attention |
+| `OCCLUSION_CHANGE` | 면적가중 직달 가시율이 0.2 이상 변화 | attention |
+| `ROTATION_PHASE` | 해당 행이 회전 구간 평균 | normal |
+| `MISSING_DATA` | 원본 자료 누락 플래그 | error |
+| `STALE_WORKER_RESULT` | 현재 fingerprint와 다른 worker 결과 | error |
+| `NUMERIC_ERROR` | 진단 신호에 NaN 또는 Infinity가 있음 | error |
 
-### 6. 계산된 세계 pose를 Three.js에서 다시 회전했음
+`low-load-cutoff`은 양의 DC가 있어도 인버터 기동전력 아래에서 AC가 0인 물리 상태를 `INVERTER_CUTOFF`으로 구분한다. worker 결과는 fingerprint가 일치하지 않으면 차트 상태에 합치기 전에 폐기한다.
 
-이전 순간 계산은 `position`과 `normal`에 이미 `rotationAngle`을 적용한 결과를 `ThreeWorkspace`로 넘겼다. 그러나 3D 계층은 다시 `panelGroup.rotation.y=rotationAngle`을 적용했다. 따라서 화면 위치는 두 번 회전하고 mesh quaternion·법선 helper·ray helper는 서로 다른 횟수로 회전할 수 있었다. 이 차이는 단순한 표시 오차가 아니라 편집 후 세계 pose를 기준 pose로 저장하면서 다음 계산에 다시 들어가는 누적 오차도 만들 수 있었다.
+현재 일간 `DailyPoint`에는 원본/UTC/현지 timestamp, 태양 고도·방위·천정각, GHI/DNI/DHI, 선택 구역 AOI·cosine·IAM·POA 성분·온도·DC, 시스템 전압·전류, 바이패스 수, 인버터 상태, 두 공정성 모드 결과와 원인코드가 저장된다. `MISSING_DATA`와 `STALE_WORKER_RESULT`는 분류 계약에는 있으나 각각 입력 검증/worker 경계에서 먼저 차단되는 경로가 있어 일반 일간 행에서는 보통 나타나지 않는다.
 
-## 수정된 통합 계약
+## 그래프 진단 UI 상태
 
-일사와 자세의 단일 데이터 흐름은 다음과 같다.
+일간 차트 계열은 태양 고도, AOI, `ηcos`, IAM, `ηangle`, GHI/DNI/DHI, POA, DC와 AC를 개별 토글한다. 선은 `linear` 보간을 사용해 renderer가 표본 사이에 새로운 극값을 만들지 않는다. 사용자가 차트 점을 클릭하면 선택 시각의 원본/UTC/현지 timestamp, 태양·기상, DC/AC·누적 Wh, 전압·전류·인버터·가시율, Mode A·B, 원인코드 설명과 구역별 AOI/POA/온도/I–V/바이패스 표가 표시된다. 이 상호작용의 브라우저 자동 테스트는 아직 없다.
 
-1. Open-Meteo/PVGIS/NASA 파일 또는 오프라인 fallback이 실제 `WeatherSeries`를 만든다. 각 `WeatherPoint`의 timestamp와 GHI/DNI/DHI가 시계열 계산의 유일한 기상 권위값이다.
-2. 같은 timestamp·위치로 공유 `solarPosition()`을 한 번 호출하고 그 결과의 `sunVector()`를 사용한다. UI 전용 태양 위치 근사나 시간대별 `sin(elevation)` 재배율은 두지 않는다.
-3. `WeatherPoint`의 세 일사 성분을 수정 없이 공유 `simulateInstant()`에 전달한다. POA에서 `etaCos`, IAM, 가시율을 각각 한 번 적용하고, 그 `effectivePoaWm2`를 DC 모델에 직접 전달한다.
-4. 오프라인 fallback만 태양 위치에서 Haurwitz clear-sky GHI를 만든 뒤 시나리오 감쇠를 GHI에 한 번 적용하고 Erbs로 DNI/DHI를 분해한다. 이 경로도 폐합된 `WeatherSeries`를 먼저 만든 뒤 동일한 단계 2–3을 탄다.
-5. 기준 pose `(p0,q0)`에 세로축 회전 하나만 합성해 `p=R_y p0`, `q=q_y q0`인 세계 pose를 만든다. `normal=q(+Z)`, `U=q(+X)`, `V=q(+Y)`를 같은 quaternion에서 유도하고 이 값을 POA, ray sampling, mesh, helper가 함께 사용한다.
-6. `ThreeWorkspace`는 이미 계산된 세계 pose를 그대로 그리며 그룹 회전을 다시 적용하지 않는다. 편집 결과를 기준 pose로 저장해야 할 때만 현재 세계 회전의 역변환을 한 번 적용한다.
+## 자동화된 회귀 계약
 
-즉, UI의 대표일·순간·연간 경로는 모두 `WeatherSeries → solarPosition/sunVector → simulateInstant`라는 같은 물리 경계를 사용해야 한다. 임의 일사 곡선이나 별도 자세 변환은 이 경계 밖에서 추가하지 않는다.
+- AOI 0°/60°/90°/뒷면, DNI 선형성, GHI 폐합과 cosine·IAM 단일 적용
+- 밤 출력 0, 입력 0에서 유한한 0 출력, 인버터 저부하 차단 상태
+- RPM 0과 정적 일치, 고RPM 위상 적분 수렴, 구간 평균 에너지의 중복 적분 방지
+- 공급된 GHI/DNI/DHI 우선 사용과 과거 `sin(elevation)`/`sqrt` 재형상화 금지
+- timestamp 경계, worker 취소·fingerprint·stale 결과 차단
+- 정상 일몰과 입력/차폐/바이패스/인버터 급변 원인코드 분류
+- 서울 하지·춘분·동지의 5/10분 맑은 날 시계열 길이·정렬·중복 및 무원인 단일점 spike/dropout 검사
 
-## 변경된 API
-
-### `POAResult`
-
-새 필드:
-
-| 필드 | 단위 | 의미 |
-|---|---:|---|
-| `etaCos` | 1 | `max(0,n̂·ŝ)` |
-| `iamFactor` | 1 | 선택한 ASHRAE/physical IAM |
-| `etaAngle` | 1 | `etaCos × iamFactor`; 가시율 제외 |
-| `directPoaWm2` | W/m² | `DNI × visibility × etaAngle` |
-| `diffusePoaWm2` | W/m² | Hay–Davies 또는 등방 산란 POA |
-| `groundPoaWm2` | W/m² | Lambert 지면반사 POA |
-| `solarZenithDegUsed` | deg | 세계 태양벡터에서 유도해 실제 사용한 천정각 |
-| `solarZenithMismatchDeg` | deg | 입력 천정각 − 실제 사용 천정각 |
-| `ghiClosure` | — | 폐합 재구성값·잔차·상대잔차·판정 |
-
-호환 필드 `beamWm2`, `skyDiffuseWm2`, `groundReflectedWm2`, `incidenceAngleModifier`는 유지된다. 각각 새 canonical 필드와 같은 값이다.
-
-### `IrradianceComponents`
-
-`ghiClosure`가 추가되었다. `checkGHIClosure()`를 직접 호출할 수도 있다. 이 검사는 입력값을 수정하지 않는다.
-
-### `InstantSimulationResult`
-
-- `effectivePoaWm2`: `poa.totalWm2`에서 오염 손실만 차감한 전기 모델 입력
-- `panelFrame.normal`: 회전 후 정규화 세계법선
-- `panelFrame.sampleAxisU`, `panelFrame.sampleAxisV`: 법선과 동일 회전을 받은 면내 ray sampling 축
-
-`simpleDcPower()`와 단일 다이오드 모델은 `effectivePoaWm2`를 직접 사용한다. `etaCos`나 IAM을 다시 곱하지 않는다.
-
-### 패널 회전 입력 의미
-
-`panel.normal`과 `panel.sampleAxisU`는 `rotation`이 있으면 회전 전 body frame 값이다. 이미 세계좌표로 변환한 위치·quaternion·법선·sampling 축을 전달할 때는 `rotation`을 다시 전달하지 않아야 한다. quaternion과 명시적 법선/축을 함께 전달한다면 서로 같은 pose에서 유도된 값이어야 하며, 불일치 값을 섞어 권위값으로 사용해서는 안 된다.
-
-## POA 성분의 경계
-
-\[
-G_{POA}=G_{direct,POA}+G_{diffuse,POA}+G_{ground,POA}
-\]
-
-- 단면 패널에서 `n̂·ŝ≤0`이면 `etaCos=0`, 직달 POA는 정확히 0이다.
-- 현재 IAM은 직달 성분에 적용한다. Hay–Davies 산란 및 지면반사에 별도 diffuse IAM은 적용하지 않는다.
-- diffuse visibility와 ground visibility는 각각 별도 입력이다.
-- 태양이 지평선 아래면 모든 POA와 DC/AC 출력은 0이다.
-- 브라우저 실시간 코어는 Perez 전천돔 적분 대신 Hay–Davies 또는 등방 모델을 사용한다.
-
-## 자동 회귀 검사
-
-`tests/physics.test.ts`의 `incident-angle diagnosis contract 1-10`이 다음을 고정한다.
-
-1. DNI 1000, DHI 0, AOI 0°에서 `etaCos=1`, `IAM=1`, 직달 1000 W/m²
-2. AOI 60°에서 `etaCos=0.5`, 직달 `500×IAM(60°)`
-3. AOI 90°에서 직달 0
-4. AOI 90° 초과 단면에서 직달 0
-5. 수평패널·태양고도 30°에서 AOI 60°, IAM off 직달 500 W/m²
-6. 동일 DNI에서 태양방향/AOI가 바뀌면 출력 변화
-7. 동일 AOI에서 직달 출력이 DNI에 선형 비례
-8. `GHI=DNI cos(zenith)+DHI` 폐합과 불일치 탐지
-9. POA 코사인 손실 뒤 simple 및 single-diode DC가 각도손실을 재적용하지 않음
-10. +Y 회전 전후 법선·sampling U/V 축이 동일 변환을 사용
-
-실행 명령과 결과:
-
-```text
-npx.cmd vitest run tests/physics.test.ts --config src/lib/physics/vitest.config.ts
-Test Files  1 passed
-Tests       30 passed
-```
-
-## 통합 시 주의점
-
-- UI는 `etaCos`, `iamFactor`, `etaAngle`을 결과에서 읽어 표시하고 자체적으로 재계산하지 않는다.
-- UI/worker는 전기 입력으로 `effectivePoaWm2`만 전달한다. `cos(AOI)`나 IAM을 추가 적용하지 않는다.
-- ray sampling origin을 만들 때 `panelFrame.sampleAxisU/V`를 사용해야 한다.
-- `ghiClosure.isClosed=false`이면 원자료 provenance와 잔차를 경고로 표시하되, 사용자가 선택하지 않은 보정 정책으로 원자료를 자동 변경하지 않는다.
-- `solarZenithMismatchDeg`가 허용오차를 넘으면 태양벡터와 스칼라 천정각을 서로 다른 시점/좌표계에서 만든 것인지 점검한다.
-
-## 기술 근거
-
-- [NREL Solar Position Algorithm](https://midcdmz.nrel.gov/spa/)
-- [Sandia PVPMC: Plane-of-array irradiance](https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/plane-of-array-poa-irradiance/)
-- [Sandia PVPMC: ASHRAE IAM](https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/shading-soiling-and-reflection-losses/incident-angle-reflection-losses/ashrae-iam-model/)
-- [Sandia PVPMC: Physical IAM](https://pvpmc.sandia.gov/modeling-guide/1-weather-design-inputs/shading-soiling-and-reflection-losses/incident-angle-reflection-losses/physical-iam-model/)
-- [pvlib: Haurwitz clear-sky GHI](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.clearsky.haurwitz.html)
-- [pvlib: Erbs GHI decomposition](https://pvlib-python.readthedocs.io/en/stable/reference/generated/pvlib.irradiance.erbs.html)
-- [Sandia SAND2012-2389](https://www.sandia.gov/research/publications/details/global-horizontal-irradiance-clear-sky-models-implementation-and-analysis-2012-03-01/)
+연속 곡면 적분의 별도 수렴 범위와 아직 자동화되지 않은 항목은 [검증 결과](validation-report.md)에 기록한다.

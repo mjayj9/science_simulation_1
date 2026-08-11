@@ -75,6 +75,32 @@ describe("solar position and vectors", () => {
       expect(Math.hypot(direction.x, direction.y, direction.z)).toBeCloseTo(1, 12);
     }
   });
+
+  it("keeps Seoul UTC/KST conversion exact across solstice and equinox fixtures", () => {
+    const location = { latitudeDeg: 37.5665, longitudeDeg: 126.978, elevationM: 38 };
+    const fromUtc = solarPosition({ timestamp: "2026-06-21T03:30:00.000Z", ...location });
+    const fromKst = solarPosition({ timestamp: "2026-06-21T12:30:00+09:00", ...location });
+    expect(fromKst.elevationDeg).toBeCloseTo(fromUtc.elevationDeg, 12);
+    expect(fromKst.azimuthDeg).toBeCloseTo(fromUtc.azimuthDeg, 12);
+
+    const summer = fromUtc.elevationDeg;
+    const equinox = solarPosition({ timestamp: "2026-03-20T03:30:00.000Z", ...location }).elevationDeg;
+    const winter = solarPosition({ timestamp: "2026-12-21T03:30:00.000Z", ...location }).elevationDeg;
+    expect(summer).toBeGreaterThan(equinox);
+    expect(equinox).toBeGreaterThan(winter);
+    expect(summer).toBeGreaterThan(70);
+    expect(winter).toBeGreaterThan(20);
+  });
+
+  it("shows that 18:00 KST at Seoul summer solstice is daylight, followed by a normal night transition", () => {
+    const location = { latitudeDeg: 37.5665, longitudeDeg: 126.978, elevationM: 38 };
+    const at1800 = solarPosition({ timestamp: "2026-06-21T18:00:00+09:00", ...location });
+    const at2030 = solarPosition({ timestamp: "2026-06-21T20:30:00+09:00", ...location });
+    expect(at1800.elevationDeg).toBeGreaterThan(15);
+    expect(at1800.isDaylight).toBe(true);
+    expect(at2030.elevationDeg).toBeLessThan(0);
+    expect(at2030.isDaylight).toBe(false);
+  });
 });
 
 describe("incident-angle diagnosis contract 1-10", () => {
@@ -358,6 +384,30 @@ describe("inverter, rotation, integration and deterministic pipeline", () => {
     expect(result.acPowerW).toBe(10);
     expect(result.status).toBe("clipped");
     expect(result.clippingLossW).toBeGreaterThan(0);
+  });
+
+  it("labels a positive-DC PVWatts zero-output point as a low-load cutoff", () => {
+    const result = calculateInverter({
+      dcPowerW: 0.06,
+      dcVoltageV: 9,
+      dcCurrentA: 0.06 / 9,
+      config: {
+        ratedAcPowerW: 10,
+        nominalEfficiency: 0.96,
+        mpptMinVoltageV: 0.3,
+        mpptMaxVoltageV: 20,
+        maxDcVoltageV: 1_200,
+        maxInputCurrentA: 25,
+        startPowerW: 0,
+        nightConsumptionW: 0,
+        wiringLossFraction: 0.015,
+      },
+    });
+
+    expect(result.acceptedDcPowerW).toBeGreaterThan(0);
+    expect(result.grossAcPowerW).toBe(0);
+    expect(result.acPowerW).toBe(0);
+    expect(result.status).toBe("low-load-cutoff");
   });
 
   it("makes fixed RPM=0 identical to static rotation", () => {

@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PANEL_AREA_M2,
   addPanel,
+  createContinuousSurface,
   createObstacle,
   createPanel,
+  computeVisibilities,
   deletePanel,
   detectOverlaps,
   duplicatePanel,
@@ -11,7 +13,10 @@ import {
   obstacleToAabb,
   updatePanel,
   visibility,
+  type ContinuousSurfaceKind,
+  type PresetOptions,
   type PresetName,
+  type Vec3,
 } from "../src/lib/geometry";
 import {
   createDefaultProject,
@@ -26,6 +31,8 @@ import {
 import {
   fetchOpenMeteo,
   getOfflineWeather,
+  importPvgisJson,
+  normalizeOpenMeteoResponse,
   type WeatherRangeRequest,
 } from "../src/lib/weather";
 import {
@@ -43,8 +50,8 @@ class MemoryStorage implements StorageLike {
 }
 
 describe("geometry infrastructure", () => {
-  it("creates every engineering preset with exactly twenty rigid 5 cm panels", () => {
-    const names: PresetName[] = ["cube", "plane", "cylinder", "sphere", "cone"];
+  it("keeps plane, cube and free presets as twenty rigid 5 cm panels", () => {
+    const names: PresetName[] = ["cube", "plane", "free"];
     for (const name of names) {
       const panels = generatePreset(name);
       expect(panels).toHaveLength(20);
@@ -59,23 +66,49 @@ describe("geometry infrastructure", () => {
     }
   });
 
-  it("packs curved presets compactly without panel-to-panel intersections", () => {
-    const curvedNames: PresetName[] = ["cylinder", "sphere", "cone"];
-    for (const name of curvedNames) {
-      const panels = generatePreset(name);
-      expect(detectOverlaps(panels), `${name} 패널 충돌`).toEqual([]);
+  it("maps each continuous curved skin to twenty equal-area electrical-zone anchors", () => {
+    const cases: { kind: ContinuousSurfaceKind; options: PresetOptions }[] = [
+      { kind: "sphere", options: { azimuthSamples: 64, groundClearanceM: 0.007 } },
+      {
+        kind: "cylinder",
+        options: { azimuthSamples: 64, cylinderAspectRatio: 1.7, groundClearanceM: 0.007 },
+      },
+      {
+        kind: "cone",
+        options: { azimuthSamples: 64, coneAspectRatio: 2.4, groundClearanceM: 0.007 },
+      },
+    ];
+
+    for (const { kind, options } of cases) {
+      const surface = createContinuousSurface(kind, options.azimuthSamples, {
+        cylinderAspectRatio: options.cylinderAspectRatio,
+        coneAspectRatio: options.coneAspectRatio,
+        groundClearanceM: options.groundClearanceM,
+      });
+      const anchors = generatePreset(kind, options);
+
+      expect(anchors).toHaveLength(20);
+      expect(anchors.map(({ id }) => id)).toEqual(surface.zones.map(({ id }) => id));
+      expect(anchors.reduce((sum, anchor) => sum + anchor.areaM2, 0)).toBeCloseTo(0.05, 14);
+      anchors.forEach((anchor, index) => {
+        const zone = surface.zones[index];
+        expect(zone.areaM2).toBe(PANEL_AREA_M2);
+        expect(zone.qMax - zone.qMin).toBeCloseTo(1 / 20, 14);
+        expect(anchor.widthM).toBe(0.05);
+        expect(anchor.heightM).toBe(0.05);
+        expect(anchor.areaM2).toBe(zone.areaM2);
+        anchor.position.forEach((value, axis) => {
+          expect(value).toBeCloseTo(zone.representativePosition[axis], 14);
+        });
+        anchor.normal.forEach((value, axis) => {
+          expect(value).toBeCloseTo(zone.representativeNormal[axis], 14);
+        });
+        expect(Math.hypot(...anchor.normal)).toBeCloseTo(1, 12);
+        expect(Math.hypot(...anchor.quaternion)).toBeCloseTo(1, 12);
+      });
     }
 
-    const sphere = generatePreset("sphere");
-    const sphereRadius = Math.max(...sphere.map(({ position }) => Math.hypot(...position)));
-    const nominalSphereCoverage = (sphere.length * PANEL_AREA_M2) / (4 * Math.PI * sphereRadius ** 2);
-    expect(sphereRadius).toBeLessThan(0.08);
-    expect(nominalSphereCoverage).toBeGreaterThan(0.6);
-
-    const cylinder = generatePreset("cylinder");
-    const cylinderRadii = cylinder.map(({ position: [x, , z] }) => Math.hypot(x, z));
-    expect(Math.max(...cylinderRadii)).toBeLessThan(0.085);
-    expect(new Set(cylinder.map(({ position: [, y] }) => y.toFixed(6))).size).toBe(2);
+    expect(() => generatePreset("sphere", { azimuthSamples: 15 })).toThrow(/16~128/);
   });
 
   it("adds, duplicates, updates, deletes and detects overlap without mutating inputs", () => {
@@ -104,6 +137,20 @@ describe("geometry infrastructure", () => {
     expect(a.blockedBy["block-a"]).toBe(9);
     expect(b.visibility).toBe(1);
     expect(b.blockedBy).toEqual({});
+  });
+
+  it("keeps every coplanar plane panel visible for front-side sun directions", () => {
+    const panels = generatePreset("plane", { planeTiltDeg: 30, planeAzimuthDeg: 180 });
+    const normal = panels[0].normal;
+    const directions: Vec3[] = [
+      [normal[0], normal[1], normal[2]],
+      [normal[0] + 0.18, normal[1] + 0.12, normal[2] - 0.08],
+      [normal[0] - 0.15, normal[1] + 0.08, normal[2] + 0.1],
+    ];
+    for (const direction of directions) {
+      const results = computeVisibilities(panels, direction, [], { samplesPerSide: 3 });
+      expect(results.every((result) => result.frontFacing && result.visibility === 1)).toBe(true);
+    }
   });
 });
 
@@ -172,7 +219,9 @@ describe("weather adapters", () => {
     expect(first.provenance.kind).toBe("model-estimate");
     expect(first.provenance.fallbackReason).toContain("Open-Meteo 실패");
     expect(first.points).toEqual(second.points);
-    expect(first.points.every((point) => Object.values(point).every(Number.isFinite))).toBe(true);
+    expect(first.points.every((point) => Object.values(point)
+      .filter((value): value is number => typeof value === "number")
+      .every(Number.isFinite))).toBe(true);
   });
 
   it("offline generation is stable for the same seed and changes with a different seed", () => {
@@ -181,6 +230,32 @@ describe("weather adapters", () => {
     const c = getOfflineWeather({ ...request, seed: "different" }, { now: new Date(0) });
     expect(a).toEqual(b);
     expect(a.points).not.toEqual(c.points);
+  });
+
+  it("rejects a missing Open-Meteo irradiance value instead of converting it to night", () => {
+    expect(() => normalizeOpenMeteoResponse({
+      hourly: {
+        time: ["2026-06-21T08:00", "2026-06-21T09:00", "2026-06-21T10:00"],
+        shortwave_radiation: [300, null, 100],
+        direct_normal_irradiance: [500, 400, 200],
+        diffuse_radiation: [80, 70, 60],
+      },
+    })).toThrow(/누락/);
+  });
+
+  it("canonicalizes multi-source-year PVGIS TMY rows by month-day clock", () => {
+    const series = importPvgisJson({ outputs: { tmy_hourly: [
+      { time: "20210301:0000", "G(h)": 300, "Gb(n)": 0, "Gd(h)": 0 },
+      { time: "20200101:0000", "G(h)": 100, "Gb(n)": 0, "Gd(h)": 0 },
+      { time: "20190201:0000", "G(h)": 200, "Gb(n)": 0, "Gd(h)": 0 },
+    ] } });
+    expect(series.points.map((point) => new Date(point.timeUtcMs).getUTCFullYear())).toEqual([2000, 2000, 2000]);
+    expect(series.points.map((point) => new Date(point.timeUtcMs).getUTCMonth())).toEqual([0, 1, 2]);
+    expect(series.points.map((point) => point.sourceTimestamp)).toEqual([
+      "20200101:0000",
+      "20190201:0000",
+      "20210301:0000",
+    ]);
   });
 });
 
