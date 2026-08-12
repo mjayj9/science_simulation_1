@@ -1,15 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { createContinuousSurface, type ContinuousSurfaceKind } from "../src/lib/geometry";
+import {
+  createComparisonSurface,
+  createContinuousSurface,
+  type ContinuousSurfaceKind,
+  type IdealSurfaceModel,
+} from "../src/lib/geometry";
 import {
   DEFAULT_ELECTRICAL,
   DEFAULT_INVERTER,
   DEFAULT_THERMAL,
+  singleDiodeCurve,
   simulateContinuousSurface,
   solarPosition,
 } from "../src/lib/physics";
 import { getOfflineWeather, type WeatherPoint } from "../src/lib/weather";
 
-const KINDS: ContinuousSurfaceKind[] = ["sphere", "cylinder", "cone"];
+const KINDS: ContinuousSurfaceKind[] = ["sphere", "hemisphere", "cylinder", "cone"];
 const SEOUL = {
   latitudeDeg: 37.5665,
   longitudeDeg: 126.978,
@@ -41,10 +47,13 @@ function run(
     azimuthSamples?: number;
     ambientTemperatureC?: number;
     windSpeedMS?: number;
+    surface?: IdealSurfaceModel;
+    groundReflectorAreaM2?: number;
+    electricalModel?: "ideal-continuous" | "distributed-circuit";
   } = {},
 ) {
   return simulateContinuousSurface({
-    surface: createContinuousSurface(kind, patch.azimuthSamples ?? 32),
+    surface: patch.surface ?? createContinuousSurface(kind, patch.azimuthSamples ?? 32),
     timestamp: "2026-06-21T03:30:00.000Z",
     solarOverride: {
       elevationDeg: patch.elevationDeg ?? 45,
@@ -72,6 +81,8 @@ function run(
     iam: { model: "ashrae", b0: 0.05 },
     diffuseModel: "hay-davies",
     soilingLossFraction: 0.02,
+    groundReflectorAreaM2: patch.groundReflectorAreaM2,
+    electricalModel: patch.electricalModel,
   });
 }
 
@@ -181,6 +192,7 @@ describe("continuous-surface optical/electrical integration", () => {
       - ledger.iamLossW
       - ledger.externalOcclusionLossW
       - ledger.selfShadingLossW
+      - ledger.groundReflectionCapLossW
       - ledger.soilingLossW
       - ledger.temperatureAndModelLossW
       - ledger.mismatchLossW
@@ -200,6 +212,7 @@ describe("continuous-surface optical/electrical integration", () => {
       - ledger.iamLossW
       - ledger.externalOcclusionLossW
       - ledger.selfShadingLossW
+      - ledger.groundReflectionCapLossW
       - ledger.soilingLossW
       - ledger.temperatureAndModelLossW
       - ledger.mismatchLossW
@@ -216,6 +229,144 @@ describe("continuous-surface optical/electrical integration", () => {
     const rotated = run(kind, { azimuthSamples: 64, rotationAngleRad: 1.234, azimuthDeg: 37 });
     expect(Math.abs(rotated.sharedCircuit.acPowerW - base.sharedCircuit.acPowerW) / Math.max(base.sharedCircuit.acPowerW, 1e-12)).toBeLessThan(0.005);
     expect(rotated.projectedAreaM2).toBeCloseTo(base.projectedAreaM2, 14);
+  });
+
+  it.each(["plane", "cube"] as const)("reports rotated-sample A_sun for asymmetric %s", (kind) => {
+    const surface = createComparisonSurface(kind, {
+      landAreaM2: 0.05,
+      maxHeightM: 1,
+      maximumActiveAreaM2: 1,
+      planeTiltDeg: 30,
+      planeAzimuthDeg: 180,
+    }, 32);
+    const result = run("sphere", {
+      surface,
+      rotationAngleRad: Math.PI / 4,
+      elevationDeg: 38,
+      azimuthDeg: 127,
+    });
+    const expected = result.zones.reduce((zoneSum, zone) => zoneSum + zone.samples.reduce(
+      (sampleSum, sample) => {
+        const sun = sample.simulation.sunDirection;
+        const normal = sample.sample.normal;
+        return sampleSum + sample.sample.areaM2 * Math.max(
+          0,
+          normal[0] * sun.x + normal[1] * sun.y + normal[2] * sun.z,
+        );
+      },
+      0,
+    ), 0);
+    expect(result.projectedAreaM2).toBeCloseTo(expected, 12);
+  });
+
+  it("scales each zone I-V curve with zone area while preserving the legacy 0.0025 m2 path", () => {
+    const baseSurface = createContinuousSurface("sphere", 16);
+    const doubledSurface: IdealSurfaceModel = {
+      ...baseSurface,
+      dimensions: {
+        ...baseSurface.dimensions,
+        activeAreaM2: baseSurface.dimensions.activeAreaM2 * 2,
+        zoneAreaM2: baseSurface.dimensions.zoneAreaM2 * 2,
+      },
+      zones: baseSurface.zones.map((zone) => ({
+        ...zone,
+        areaM2: zone.areaM2 * 2,
+        samples: zone.samples.map((sample) => ({ ...sample, areaM2: sample.areaM2 * 2 })),
+      })),
+    };
+    const base = run("sphere", { surface: baseSurface, electricalModel: "distributed-circuit" });
+    const doubled = run("sphere", { surface: doubledSurface, electricalModel: "distributed-circuit" });
+    const baseZone = base.zones[0];
+    const doubledZone = doubled.zones[0];
+    const legacyExpected = singleDiodeCurve({
+      irradianceWm2: baseZone.averageEffectivePoaWm2,
+      cellTemperatureC: baseZone.averageTemperatureC,
+      config: DEFAULT_ELECTRICAL,
+      points: 64,
+    });
+
+    expect(baseZone.areaM2).toBe(0.0025);
+    expect(baseZone.curve.mpp.powerW).toBeCloseTo(legacyExpected.mpp.powerW, 12);
+    expect(baseZone.curve.iscA).toBeCloseTo(legacyExpected.iscA, 12);
+    expect(doubledZone.curve.vocV).toBeCloseTo(baseZone.curve.vocV, 9);
+    expect(doubledZone.curve.iscA).toBeCloseTo(baseZone.curve.iscA * 2, 9);
+    expect(doubledZone.curve.mpp.powerW).toBeCloseTo(baseZone.curve.mpp.powerW * 2, 9);
+  });
+
+  it("applies one auditable parcel-wide ground-reflection cap for a sphere", () => {
+    const surface = createContinuousSurface("sphere", 16);
+    const uncapped = run("sphere", { surface });
+    const capped = run("sphere", {
+      surface,
+      groundReflectorAreaM2: surface.dimensions.footprintM2,
+    });
+    const budget = capped.groundReflectionBudget;
+    const expectedCapW = 665.685 * 0.2 * surface.dimensions.footprintM2;
+    const integratedUncappedGroundW = uncapped.zones.flatMap((zone) => zone.samples).reduce(
+      (sum, sample) => sum + sample.simulation.poa.groundPoaWm2 * sample.sample.areaM2,
+      0,
+    );
+    const integratedCappedGroundW = capped.zones.flatMap((zone) => zone.samples).reduce(
+      (sum, sample) => sum + sample.simulation.poa.groundPoaWm2 * sample.sample.areaM2,
+      0,
+    );
+
+    expect(surface.dimensions.activeAreaM2).toBeCloseTo(4 * surface.dimensions.footprintM2, 14);
+    expect(budget.rawGroundViewAreaM2).toBeCloseTo(surface.dimensions.activeAreaM2 / 2, 14);
+    expect(budget.rawGroundCaptureW).toBeCloseTo(integratedUncappedGroundW, 12);
+    expect(budget.reflectorIncidentCapW).toBeCloseTo(expectedCapW, 12);
+    expect(budget.appliedScale).toBeCloseTo(0.5, 12);
+    expect(budget.boundedGroundCaptureW).toBeCloseTo(integratedCappedGroundW, 12);
+    expect(budget.boundedGroundCaptureW).toBeLessThanOrEqual(expectedCapW + 1e-12);
+    expect(capped.zones[0].averageGroundPoaWm2).toBeCloseTo(
+      uncapped.zones[0].averageGroundPoaWm2 * budget.appliedScale,
+      12,
+    );
+    expect(capped.zones.flatMap((zone) => zone.samples).every(
+      (sample) => Math.abs(sample.viewFactors.sky + sample.viewFactors.ground - 1) < 1e-12,
+    )).toBe(true);
+
+    const ledger = capped.lossLedger;
+    const closed = ledger.solarResourceDcW
+      - ledger.projectionLossW
+      - ledger.iamLossW
+      - ledger.externalOcclusionLossW
+      - ledger.selfShadingLossW
+      - ledger.groundReflectionCapLossW
+      - ledger.soilingLossW
+      - ledger.temperatureAndModelLossW
+      - ledger.mismatchLossW
+      - ledger.bypassLossW
+      - ledger.inverterLossW;
+    expect(ledger.groundReflectionCapLossW).toBeGreaterThan(0);
+    expect(closed).toBeCloseTo(capped.sharedCircuit.acPowerW, 7);
+  });
+
+  it("separates a land-comparison cylinder top disk from its lateral skin", () => {
+    const surface = createComparisonSurface("cylinder", {
+      basis: "land",
+      landAreaM2: 0.05,
+      cylinderHeightM: 0.12,
+      maxHeightM: 0.25,
+      maximumActiveAreaM2: 1,
+      azimuthSamples: 16,
+    });
+    const result = run("cylinder", { surface });
+    const top = result.regionBreakdown.find((region) => region.id === "top");
+    const lateral = result.regionBreakdown.find((region) => region.id === "lateral");
+    const radiusM = surface.dimensions.radiusM ?? 0;
+
+    expect(top?.areaM2).toBeCloseTo(Math.PI * radiusM ** 2, 12);
+    expect(lateral?.areaM2).toBeCloseTo(2 * Math.PI * radiusM * surface.dimensions.heightM, 12);
+    expect(result.regionBreakdown.reduce((sum, region) => sum + region.areaM2, 0)).toBeCloseTo(result.activeAreaM2, 12);
+    expect(result.regionBreakdown.reduce((sum, region) => sum + region.directOpticalW, 0)).toBeCloseTo(
+      result.zones.reduce((sum, zone) => sum + zone.averageDirectPoaWm2 * zone.areaM2, 0),
+      12,
+    );
+    expect(result.regionBreakdown.reduce((sum, region) => sum + region.independentMppDcW, 0)).toBeCloseTo(
+      result.independentMppt.dcPowerW,
+      10,
+    );
   });
 
   it.each(KINDS)("converges %s clear-day AC energy within 0.5% from Nphi=32 to 64", (kind) => {
@@ -242,5 +393,5 @@ describe("continuous-surface optical/electrical integration", () => {
         `${kind} ${day.label}: Nphi 32=${coarseEnergyWh} Wh, 64=${refinedEnergyWh} Wh`,
       ).toBeLessThan(0.005);
     }
-  }, 30_000);
+  }, 60_000);
 });

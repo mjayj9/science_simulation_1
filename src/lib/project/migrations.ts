@@ -54,7 +54,7 @@ export function migrateV1ToV2(input: unknown): JsonRecord {
   const source = record(input, "V1 프로젝트");
   if (source.version !== 1 && source.schemaVersion !== 1) throw new Error("V1 프로젝트가 아닙니다.");
   const now = typeof source.updatedAt === "string" ? source.updatedAt : new Date(0).toISOString();
-  const preset = (["cube", "plane", "cylinder", "sphere", "cone", "free"] as const).includes(source.preset as PresetName)
+  const preset = (["cube", "plane", "cylinder", "sphere", "hemisphere", "cone", "free"] as const).includes(source.preset as PresetName)
     ? source.preset as PresetName
     : "plane";
   const panels = Array.isArray(source.panels) && source.panels.length > 0

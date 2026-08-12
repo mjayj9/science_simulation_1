@@ -173,3 +173,123 @@ describe("SimulatorClient fixed-RPM daily integration", () => {
     expect(source).not.toContain('new URL("../workers/simulation.worker.ts", import.meta.url)');
   });
 });
+
+describe("SimulatorClient equal-land comparison wiring", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/ui/SimulatorClient.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  it("offers all six shapes and keeps equal land as the default basis", () => {
+    expect(source).toContain(
+      'const COMPARISON_SHAPES = ["plane", "cube", "cylinder", "sphere", "hemisphere", "cone"]',
+    );
+    expect(source).toContain('basis: "land"');
+    expect(source).toContain('const [screen, setScreen] = useState<Screen>("compare")');
+    expect(source).toContain('useState<PresetName[]>([...COMPARISON_SHAPES])');
+    expect(source).toContain('basis: "land",\n    landAreaM2: comparisonSettings.landAreaM2');
+  });
+
+  it("sends one ideal continuous-skin annual variant without discrete circuit fields", () => {
+    expect(source).toContain("const variants = shapeNames.flatMap");
+    expect(source).toContain('variantId: `compare:${shapeName}:ideal`');
+    expect(source).toContain("continuousSurface: createContinuousSurfaceWorkItem(annualSurface");
+    expect(source).toContain("landAreaM2: landComparisonSurface.dimensions.footprintM2");
+    expect(source).toContain("meshVersion: `comparison-surface-v2:");
+    expect(source).toContain("return [idealVariant]");
+    const continuousBranch = source.slice(
+      source.indexOf('if (scope === "compare")'),
+      source.indexOf('const variantId = scope === "current"'),
+    );
+    expect(continuousBranch).not.toContain("panelCount:");
+    expect(continuousBranch).not.toContain("totalPanelAreaM2:");
+    expect(continuousBranch).not.toContain("topology:");
+    expect(continuousBranch).not.toContain("electricalFairnessMode:");
+  });
+
+  it("normalizes the same annual AC result by both actual land and active PV area", () => {
+    expect(source).toContain(
+      "normalizedAnnualEnergy(annualEnergy, actualLandAreaM2, activeAreaM2)",
+    );
+    expect(source).toContain('unit="kWh/m²-land/year"');
+    expect(source).toContain('unit="kWh/m²-PV/year"');
+    expect(source).toContain('unit="kWh/year"');
+    expect(source).toContain("<LabelList dataKey={dataKey}");
+    expect(source).toContain('<XAxis dataKey="name" interval={0} angle={-28}');
+    expect(source).toContain("bestCompareEnergy) * 100 : 0).toFixed(4)");
+  });
+
+  it("keeps legacy panel language and mixed-unit charts out of the default comparison screen", () => {
+    const compareScreen = source.slice(
+      source.indexOf('{screen === "compare"'),
+      source.indexOf('{screen === "evidence"'),
+    );
+    expect(compareScreen).toContain("단일 연속 PV 스킨");
+    expect(compareScreen).toContain("토지 투영면적 A_land");
+    expect(compareScreen).toContain("면적지수");
+    expect(compareScreen).toContain("순간 태양 투영면적 A_sun(t)");
+    expect(compareScreen).toContain("위에서 보기");
+    expect(compareScreen).toContain("표면 법선");
+    expect(compareScreen).toContain("적분 샘플");
+    expect(compareScreen).not.toContain("N_eq");
+    expect(compareScreen).not.toContain("20구역");
+    expect(compareScreen).not.toContain("동일 PV 활성면적");
+    expect(compareScreen).not.toContain("Mode A");
+    expect(compareScreen).not.toContain("Mode B");
+  });
+
+  it("reapplies direct research-to-research changes from the saved general inputs", () => {
+    expect(source).toMatch(
+      /applyResearchComparisonInputs\(\s*normalizedNext\.researchPresetId,\s*generalComparisonSettings\.current,\s*\)/,
+    );
+    expect(source).toContain(
+      'applied = { ...generalComparisonSettings.current, researchPresetId: "general" }',
+    );
+  });
+
+  it("invalidates annual worker results when any manual weather input changes", () => {
+    const annualKey = source.slice(
+      source.indexOf("const annualScenarioKey = useMemo"),
+      source.indexOf("useEffect(() => {", source.indexOf("const annualScenarioKey = useMemo")),
+    );
+    expect(annualKey).toContain(
+      "weather: { dataMode, automaticWeatherSeries, seed, weatherPreset, manual: weather }",
+    );
+    expect(annualKey).toMatch(/weather,\s*environment,/);
+  });
+
+  it("commits numeric comparison drafts atomically and preserves the last feasible model", () => {
+    const controls = readFileSync(
+      fileURLToPath(new URL("../src/ui/LandComparisonControls.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(controls).toContain('const [draft, setDraft] = useState(String(value))');
+    expect(controls).toContain('draft.trim() === ""');
+    expect(controls).toContain('onBlur={commit}');
+    expect(controls).toContain('role="alert"');
+    expect(source).toContain("validationShapes.forEach((shapeName) => createComparisonSurface(");
+    expect(source).toContain("비교 입력 거부:");
+    expect(source).toContain('disabled={comparisonSettings.researchPresetId !== "general"}');
+    expect(controls).toContain("onChange: (next: LandComparisonSettings) => boolean");
+    expect(controls).toContain('key={`land:${value.landAreaM2}`}');
+  });
+
+  it("keeps legacy plane-editor tilt inside the shared comparison contract", () => {
+    expect(source).toContain(
+      "const boundedTilt = clamp(tilt, 0, MAX_COMPARISON_PLANE_TILT_DEG)",
+    );
+    expect(source).toContain("setTiltDeg(boundedTilt)");
+    expect(source).toContain('generatePreset("plane", boundedTilt, azimuth)');
+  });
+
+  it("uses interval quadrature for both fixed and frozen-auto rotation", () => {
+    expect(source).toContain(
+      'const phaseVariant: SimulationVariantWorkItem | null = rotation.mode !== "static"',
+    );
+    expect(source).toContain('rotationPhaseSamples: rotation.mode !== "static"');
+    expect(source).toContain("rpm: effectiveRotationRpm");
+    expect(source).toContain("const rotationRpmAtRun = rotation.mode === \"auto\"");
+    expect(source).toContain("setAnnualRotationRpmByVariant");
+    expect(source).toContain("실행 시점 고정값");
+  });
+});

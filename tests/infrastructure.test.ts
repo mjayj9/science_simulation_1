@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  MAX_VARIANTS,
   PANEL_AREA_M2,
   addPanel,
   createContinuousSurface,
@@ -69,6 +70,7 @@ describe("geometry infrastructure", () => {
   it("maps each continuous curved skin to twenty equal-area electrical-zone anchors", () => {
     const cases: { kind: ContinuousSurfaceKind; options: PresetOptions }[] = [
       { kind: "sphere", options: { azimuthSamples: 64, groundClearanceM: 0.007 } },
+      { kind: "hemisphere", options: { azimuthSamples: 64, groundClearanceM: 0.007 } },
       {
         kind: "cylinder",
         options: { azimuthSamples: 64, cylinderAspectRatio: 1.7, groundClearanceM: 0.007 },
@@ -288,8 +290,8 @@ describe("simulation worker kernel", () => {
     };
   }
 
-  it("test 14: executes one to five variants with at most one hundred panels", async () => {
-    for (let count = 1; count <= 5; count += 1) {
+  it("test 14: executes every supported comparison variant", async () => {
+    for (let count = 1; count <= MAX_VARIANTS; count += 1) {
       const progress: number[] = [];
       const chunks: number[] = [];
       const complete = await runSimulationKernel(request(count), {

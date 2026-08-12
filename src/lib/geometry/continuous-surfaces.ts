@@ -6,8 +6,13 @@ export const SURFACE_MERIDIONAL_ORDER = 2 as const;
 export const DEFAULT_SURFACE_AZIMUTH_SAMPLES = 32 as const;
 export const MIN_SURFACE_AZIMUTH_SAMPLES = 16 as const;
 export const MAX_SURFACE_AZIMUTH_SAMPLES = 128 as const;
+/** Composite GL2 intervals used by the comparison-only surface quadrature. */
+export const DEFAULT_SURFACE_MERIDIONAL_SEGMENTS = 8 as const;
+export const MIN_SURFACE_MERIDIONAL_SEGMENTS = 4 as const;
+export const MAX_SURFACE_MERIDIONAL_SEGMENTS = 128 as const;
 
-export type ContinuousSurfaceKind = Extract<PresetName, "sphere" | "cylinder" | "cone">;
+export type ContinuousSurfaceKind = "sphere" | "hemisphere" | "cylinder" | "cone";
+export type IdealSurfaceKind = "plane" | "cube" | ContinuousSurfaceKind;
 
 export interface ContinuousSurfaceOptions {
   /** Cylinder h / (2r). The default is a balanced height-to-diameter ratio of 1. */
@@ -18,16 +23,31 @@ export interface ContinuousSurfaceOptions {
   groundClearanceM?: number;
 }
 
-export interface ContinuousSurfaceDimensions {
-  kind: ContinuousSurfaceKind;
+export interface SurfaceModelDimensions {
+  kind: IdealSurfaceKind;
   activeAreaM2: number;
   zoneAreaM2: number;
-  radiusM: number;
   heightM: number;
-  slantHeightM?: number;
   footprintM2: number;
   maximumProjectedAreaM2: number;
   centreY: number;
+  /** World-space clearance already embedded in every generated position. */
+  groundClearanceM?: number;
+  radiusM?: number;
+  widthM?: number;
+  depthM?: number;
+  slantHeightM?: number;
+  /** Comparison cylinders may include the upward top disk; legacy cylinders do not. */
+  includesTopDisk?: boolean;
+  /** Tracking planes retain one pivot and all-posture envelope across time steps. */
+  planeTrackingMode?: "fixed" | "single-axis" | "dual-axis";
+  trackingEnvelopeHeightM?: number;
+  trackingEnvelopeRadiusM?: number;
+}
+
+export interface ContinuousSurfaceDimensions extends SurfaceModelDimensions {
+  kind: ContinuousSurfaceKind;
+  radiusM: number;
 }
 
 export interface SurfacePoint {
@@ -60,15 +80,25 @@ export interface SurfaceZone {
   samples: SurfaceSample[];
 }
 
-export interface ContinuousSurfaceModel {
-  kind: ContinuousSurfaceKind;
-  dimensions: ContinuousSurfaceDimensions;
+export interface SurfaceIntegrationModel {
+  kind: IdealSurfaceKind;
+  dimensions: SurfaceModelDimensions;
   meridionalOrder: typeof SURFACE_MERIDIONAL_ORDER;
+  /** Numerical integration intervals; never a panel or electrical-zone count. */
+  meridionalSegments?: number;
   azimuthSamples: number;
   /** @deprecated Compatibility alias. This now means azimuthSamples, not a square grid. */
   samplesPerAxis: number;
   zones: SurfaceZone[];
 }
+
+export interface ContinuousSurfaceModel extends SurfaceIntegrationModel {
+  kind: ContinuousSurfaceKind;
+  dimensions: ContinuousSurfaceDimensions;
+}
+
+/** A single ideal PV skin represented by one or more parameter-chart regions. */
+export type IdealSurfaceModel = SurfaceIntegrationModel;
 
 const TWO_PI = 2 * Math.PI;
 const GL2_ABSCISSA = 1 / Math.sqrt(3);
@@ -86,7 +116,7 @@ function positiveFinite(value: number, label: string): number {
   return value;
 }
 
-function azimuthSampleCount(value: number): number {
+export function validateSurfaceAzimuthSamples(value: number): number {
   if (
     !Number.isInteger(value) ||
     value < MIN_SURFACE_AZIMUTH_SAMPLES ||
@@ -99,10 +129,23 @@ function azimuthSampleCount(value: number): number {
   return value;
 }
 
+export function validateSurfaceMeridionalSegments(value: number): number {
+  if (
+    !Number.isInteger(value) ||
+    value < MIN_SURFACE_MERIDIONAL_SEGMENTS ||
+    value > MAX_SURFACE_MERIDIONAL_SEGMENTS
+  ) {
+    throw new RangeError(
+      `Surface meridional quadrature must be an integer from ${MIN_SURFACE_MERIDIONAL_SEGMENTS} to ${MAX_SURFACE_MERIDIONAL_SEGMENTS}.`,
+    );
+  }
+  return value;
+}
+
 export function isContinuousSurfacePreset(
-  preset: PresetName,
+  preset: PresetName | ContinuousSurfaceKind,
 ): preset is ContinuousSurfaceKind {
-  return preset === "sphere" || preset === "cylinder" || preset === "cone";
+  return preset === "sphere" || preset === "hemisphere" || preset === "cylinder" || preset === "cone";
 }
 
 function coneProjectedAreaFromComponents(
@@ -198,6 +241,7 @@ export function maximumConeProjectedArea(
  * Exact dimensions under the common active-area contract.
  *
  * Sphere: A = 4 pi r^2
+ * Hemisphere (curved surface only): A = 2 pi r^2
  * Cylinder side: A = 2 pi r h, h = 2 r k
  * Cone side: A = pi r l, l = sqrt(r^2 + h^2), h = k r
  */
@@ -217,6 +261,23 @@ export function continuousSurfaceDimensions(
       footprintM2: Math.PI * radiusM * radiusM,
       maximumProjectedAreaM2: TOTAL_ACTIVE_AREA_M2 / 4,
       centreY: clearance + radiusM,
+      groundClearanceM: clearance,
+    };
+  }
+
+  if (kind === "hemisphere") {
+    const radiusM = Math.sqrt(TOTAL_ACTIVE_AREA_M2 / (2 * Math.PI));
+    return {
+      kind,
+      activeAreaM2: TOTAL_ACTIVE_AREA_M2,
+      zoneAreaM2: PANEL_AREA_M2,
+      radiusM,
+      heightM: radiusM,
+      footprintM2: Math.PI * radiusM * radiusM,
+      maximumProjectedAreaM2: Math.PI * radiusM * radiusM,
+      // For a hemisphere the sphere centre lies in the horizontal base plane.
+      centreY: clearance,
+      groundClearanceM: clearance,
     };
   }
 
@@ -233,6 +294,7 @@ export function continuousSurfaceDimensions(
       footprintM2: Math.PI * radiusM * radiusM,
       maximumProjectedAreaM2: 2 * radiusM * heightM,
       centreY: clearance + heightM / 2,
+      groundClearanceM: clearance,
     };
   }
 
@@ -250,6 +312,7 @@ export function continuousSurfaceDimensions(
     slantHeightM,
     footprintM2: Math.PI * radiusM * radiusM,
     centreY: clearance + heightM / 2,
+    groundClearanceM: clearance,
   };
   return {
     ...base,
@@ -259,7 +322,7 @@ export function continuousSurfaceDimensions(
 
 /**
  * Maps the common cumulative-area coordinate q and normalized azimuth v to an
- * analytic point and normal. All three shapes satisfy dA=A/(2pi)dq dphi.
+ * analytic point and normal. All four shapes satisfy dA=A/(2pi)dq dphi.
  */
 export function pointOnContinuousSurface(
   kind: ContinuousSurfaceKind,
@@ -275,6 +338,22 @@ export function pointOnContinuousSurface(
 
   if (kind === "sphere") {
     const equalAreaY = 2 * q - 1;
+    const radial = Math.sqrt(Math.max(0, 1 - equalAreaY * equalAreaY));
+    const normal: Vec3 = [radial * sine, equalAreaY, radial * cosine];
+    return {
+      position: [
+        dimensions.radiusM * normal[0],
+        dimensions.centreY + dimensions.radiusM * normal[1],
+        dimensions.radiusM * normal[2],
+      ],
+      normal,
+    };
+  }
+
+  if (kind === "hemisphere") {
+    // q is normalized height from the equatorial base (0) to the apex (1).
+    // Spherical strip area is constant in q: dA = 2 pi R^2 dq.
+    const equalAreaY = q;
     const radial = Math.sqrt(Math.max(0, 1 - equalAreaY * equalAreaY));
     const normal: Vec3 = [radial * sine, equalAreaY, radial * cosine];
     return {
@@ -328,7 +407,7 @@ function createZone(
   const qMidpoint = (qMin + qMax) / 2;
   const qHalfWidth = (qMax - qMin) / 2;
   const zoneId = `${kind}-zone-${index + 1}`;
-  const sampleAreaM2 = PANEL_AREA_M2 / (SURFACE_MERIDIONAL_ORDER * azimuthSamples);
+  const sampleAreaM2 = dimensions.zoneAreaM2 / (SURFACE_MERIDIONAL_ORDER * azimuthSamples);
   const samples: SurfaceSample[] = [];
 
   for (const abscissa of [-GL2_ABSCISSA, GL2_ABSCISSA]) {
@@ -351,7 +430,7 @@ function createZone(
   return {
     id: zoneId,
     index,
-    areaM2: PANEL_AREA_M2,
+    areaM2: dimensions.zoneAreaM2,
     qMin,
     qMax,
     representativePosition: representative.position,
@@ -370,7 +449,7 @@ export function createContinuousSurface(
   azimuthSamplesInput: number = DEFAULT_SURFACE_AZIMUTH_SAMPLES,
   options: ContinuousSurfaceOptions = {},
 ): ContinuousSurfaceModel {
-  const azimuthSamples = azimuthSampleCount(azimuthSamplesInput);
+  const azimuthSamples = validateSurfaceAzimuthSamples(azimuthSamplesInput);
   const dimensions = continuousSurfaceDimensions(kind, options);
   const zones = Array.from(
     { length: ELECTRICAL_ZONE_COUNT },
@@ -386,23 +465,53 @@ export function createContinuousSurface(
   };
 }
 
-export function surfaceSamples(model: ContinuousSurfaceModel): SurfaceSample[] {
+export function surfaceSamples(model: Pick<SurfaceIntegrationModel, "zones">): SurfaceSample[] {
   return model.zones.flatMap((zone) => zone.samples);
 }
 
 /** Exact axisymmetric projected area; independent of the finite physics lattice. */
 export function projectedAreaForDirection(
-  model: ContinuousSurfaceModel,
+  model: SurfaceIntegrationModel,
   direction: Vec3,
 ): number {
   const length = Math.hypot(direction[0], direction[1], direction[2]);
   if (!(length > 0) || !Number.isFinite(length)) return 0;
   const horizontal = Math.hypot(direction[0], direction[2]) / length;
+  const vertical = direction[1] / length;
   if (model.kind === "sphere") return model.dimensions.activeAreaM2 / 4;
-  if (model.kind === "cylinder") {
-    return 2 * model.dimensions.radiusM * model.dimensions.heightM * horizontal;
+  if (model.kind === "hemisphere") {
+    // Vector area of the intersection of the upward and source-facing
+    // hemispheres gives P = pi R^2 (1 + s_y) / 2.
+    return model.dimensions.footprintM2 * (1 + vertical) / 2;
   }
-  return coneProjectedAreaForDirection(model.dimensions, direction);
+  if (model.kind === "cylinder") {
+    const radiusM = model.dimensions.radiusM ?? 0;
+    const lateral = 2 * radiusM * model.dimensions.heightM * horizontal;
+    const top = model.dimensions.includesTopDisk
+      ? Math.PI * radiusM * radiusM * Math.max(0, vertical)
+      : 0;
+    return lateral + top;
+  }
+  if (model.kind === "cone") {
+    const radiusM = model.dimensions.radiusM ?? 0;
+    return coneProjectedAreaForDirection({
+      activeAreaM2: model.dimensions.activeAreaM2,
+      radiusM,
+      heightM: model.dimensions.heightM,
+      slantHeightM: model.dimensions.slantHeightM,
+    }, direction);
+  }
+
+  // Piecewise planar models have constant normals within every electrical
+  // zone, so the exact one-sided projection is the zone-area sum.
+  return model.zones.reduce((sum, zone) => sum + zone.areaM2 * Math.max(
+    0,
+    (
+      zone.representativeNormal[0] * direction[0] +
+      zone.representativeNormal[1] * direction[1] +
+      zone.representativeNormal[2] * direction[2]
+    ) / length,
+  ), 0);
 }
 
 export function rotateSurfaceSampleAroundY(sample: SurfaceSample, angleRad: number): SurfaceSample {

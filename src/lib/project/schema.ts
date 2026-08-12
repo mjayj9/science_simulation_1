@@ -113,7 +113,7 @@ export const shapeVariantSchema = z
   .object({
     id,
     name: z.string().min(1).max(200),
-    preset: z.enum(["cube", "plane", "cylinder", "sphere", "cone", "free"]),
+    preset: z.enum(["cube", "plane", "cylinder", "sphere", "hemisphere", "cone", "free"]),
     panels: z.array(panelSchema).min(1).max(MAX_PANELS_PER_VARIANT),
     circuit: circuitSchema,
     inverter: inverterSchema,
@@ -274,7 +274,7 @@ export function createVariant(preset: PresetName = "plane", name?: string): Shap
   const panels = generatePreset(preset);
   return shapeVariantSchema.parse({
     id: makeId("variant"),
-    name: name ?? ({ cube: "정육면체", plane: "평면", cylinder: "원기둥", sphere: "구", cone: "원뿔", free: "자유 조립" }[preset]),
+    name: name ?? ({ cube: "정육면체", plane: "평면", cylinder: "원기둥", sphere: "구", hemisphere: "반구", cone: "원뿔", free: "자유 조립" }[preset]),
     preset,
     panels,
     circuit: createAutomaticCircuit(panels),

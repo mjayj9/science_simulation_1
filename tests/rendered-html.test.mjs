@@ -38,7 +38,24 @@ test("server-renders the Korean Solarform product shell", async () => {
   assert.match(html, />다중 형상 비교</);
   assert.match(html, />공식 · 근거</);
   assert.match(html, />데이터 내보내기</);
-  assert.match(html, /강체 배열과 0\.050 m² 연속 PV 스킨을 같은 활성면적으로 비교/);
+  assert.match(html, /단일 연속 PV 형상 비교/);
+  assert.match(html, /공통 토지 투영면적 A_land/);
+  assert.match(html, /단일 연속 PV 스킨/);
+  assert.match(html, /일반 평면/);
+  assert.match(html, /정육면체/);
+  assert.match(html, /원기둥/);
+  assert.match(html, />구</);
+  assert.match(html, /반구/);
+  assert.match(html, /원뿔/);
+  assert.match(html, /위에서 보기/);
+  assert.match(html, /표면 법선/);
+  assert.match(html, /적분 샘플/);
+  assert.match(html, /연간 절대 발전량/);
+  assert.match(html, /토지면적당 연간 발전량/);
+  assert.match(html, /PV 활성면적당 연간 발전량/);
+  assert.match(html, /kWh\/m²-land\/year/);
+  assert.match(html, /kWh\/m²-PV\/year/);
+  assert.doesNotMatch(html, /N_eq|20구역|동일 PV 활성면적|5×5 cm 물리 패널/);
   assert.match(html, /1280px 이상 PC 화면을 권장/);
   assert.match(html, /Three\.js와 Web Worker 계산을 위해 JavaScript가 필요/);
 

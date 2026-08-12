@@ -215,6 +215,12 @@ export interface POAResult {
   beamWm2: number;
   skyDiffuseWm2: number;
   groundReflectedWm2: number;
+  /** Unobstructed isotropic sky-dome view factor, F_sky=(1+n_y)/2. */
+  skyViewFactor: number;
+  /** Unobstructed ground-hemisphere view factor, F_ground=(1-n_y)/2. */
+  groundViewFactor: number;
+  /** GHI * clamped albedo * ground visibility; ground POA cannot exceed it. */
+  groundReflectedUpperBoundWm2: number;
   totalWm2: number;
   angleOfIncidenceDeg: number;
   panelTiltDeg: number;
@@ -233,6 +239,20 @@ export interface POAResult {
   /** Signed n·s retained for diagnostics; etaCos is the generation factor. */
   cosineIncidence: number;
   ghiClosure: GHIClosureResult;
+}
+
+export interface HemisphereViewFactors {
+  sky: number;
+  ground: number;
+}
+
+/** Isotropic unobstructed hemisphere factors for an arbitrary finite surface normal. */
+export function hemisphereViewFactors(panelNormal: Vec3): HemisphereViewFactors {
+  const normalY = clamp(normalize(panelNormal).y, -1, 1);
+  return {
+    sky: (1 + normalY) / 2,
+    ground: (1 - normalY) / 2,
+  };
 }
 
 export function calculatePOA(input: POAInput): POAResult {
@@ -255,8 +275,8 @@ export function calculatePOA(input: POAInput): POAResult {
     ? Math.max(0, input.dniWm2) * visibility * etaAngle
     : 0;
 
-  const tilt = panelTiltDeg * DEG2RAD;
-  const isotropicView = (1 + Math.cos(tilt)) / 2;
+  const viewFactors = hemisphereViewFactors(panelNormal);
+  const isotropicView = viewFactors.sky;
   let skyDiffuse: number;
   if (!daylight || input.dhiWm2 <= 0) {
     skyDiffuse = 0;
@@ -273,13 +293,10 @@ export function calculatePOA(input: POAInput): POAResult {
     skyDiffuse = input.dhiWm2 * (anisotropy * rb + (1 - anisotropy) * isotropicView);
   }
   skyDiffuse = Math.max(0, skyDiffuse) * diffuseVisibility;
-  const groundReflected =
-    daylight
-      ? Math.max(0, input.ghiWm2) *
-        clamp(input.albedo ?? 0.2, 0, 1) *
-        ((1 - Math.cos(tilt)) / 2) *
-        groundVisibility
-      : 0;
+  const groundReflectedUpperBoundWm2 = daylight
+    ? Math.max(0, input.ghiWm2) * clamp(input.albedo ?? 0.2, 0, 1) * groundVisibility
+    : 0;
+  const groundReflected = groundReflectedUpperBoundWm2 * viewFactors.ground;
   const total = beam + skyDiffuse + groundReflected;
   return {
     directPoaWm2: beam,
@@ -288,6 +305,9 @@ export function calculatePOA(input: POAInput): POAResult {
     beamWm2: beam,
     skyDiffuseWm2: skyDiffuse,
     groundReflectedWm2: groundReflected,
+    skyViewFactor: viewFactors.sky,
+    groundViewFactor: viewFactors.ground,
+    groundReflectedUpperBoundWm2,
     totalWm2: total,
     angleOfIncidenceDeg,
     panelTiltDeg,

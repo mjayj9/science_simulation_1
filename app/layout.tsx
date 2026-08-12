@@ -4,7 +4,7 @@ import "./globals.css";
 
 const title = "솔라폼 엔지니어링 랩";
 const description =
-  "태양·기상·열·회로·회전을 함께 계산하는 한국어 3D 태양광 공학 시뮬레이터";
+  "동일한 토지 투영면적 A_land에서 여섯 단일 연속 PV 형상의 광학·열·연간 발전량을 비교하는 한국어 3D 공학 시뮬레이터";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -20,19 +20,19 @@ export async function generateMetadata(): Promise<Metadata> {
     },
     description,
     applicationName: title,
-    keywords: ["태양광", "3D 시뮬레이션", "PV", "Three.js", "발전량 비교"],
+    keywords: ["태양광", "토지면적", "3D 시뮬레이션", "PV", "Three.js", "발전량 비교"],
     openGraph: {
       type: "website",
       locale: "ko_KR",
       title,
       description,
-      images: [{ url: "/solarform-continuous-og.png", width: 1536, height: 1024, alt: "솔라폼 연속 PV 스킨 형상 비교" }],
+      images: [{ url: "/solarform-continuous-og-v2.png", width: 1536, height: 1024, alt: "동일 토지면적의 여섯 단일 PV 스킨 비교" }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: ["/solarform-continuous-og.png"],
+      images: ["/solarform-continuous-og-v2.png"],
     },
   };
 }

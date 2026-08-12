@@ -3,7 +3,7 @@ import SimulatorClient from "@/src/ui/SimulatorClient";
 
 export const metadata: Metadata = {
   title: "3D 태양광 시뮬레이터",
-  description: "20개 패널 형상, 날씨·음영·열·회로·인버터·회전을 함께 비교하는 PC용 공학 시뮬레이터",
+  description: "평면·정육면체·구·반구·원기둥·원뿔을 토지면적과 PV면적 기준으로 함께 비교하는 PC용 공학 시뮬레이터",
 };
 
 export default function Home() {

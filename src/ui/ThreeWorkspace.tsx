@@ -8,10 +8,18 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   createContinuousSurface,
   continuousSurfaceDimensions,
+  pointOnContinuousSurface as geometryPointOnContinuousSurface,
   type ContinuousSurfaceDimensions,
   type ContinuousSurfaceKind,
-  type ContinuousSurfaceModel,
+  type IdealSurfaceKind,
+  type IdealSurfaceModel,
+  type SurfaceModelDimensions,
+  type SurfaceZone,
 } from "../lib/geometry/continuous-surfaces";
+import type {
+  ComparisonGeometry,
+  ComparisonShapeKind,
+} from "../lib/geometry/comparison-surfaces";
 
 export type Vec3Tuple = [number, number, number];
 export type QuaternionTuple = [number, number, number, number];
@@ -56,12 +64,35 @@ export interface ThreeWorkspaceProps {
   sunElevationDeg: number;
   rotationAngleRad: number;
   continuousSurface?: {
-    kind: ContinuousSurfaceKind;
+    kind: IdealSurfaceKind;
     cylinderAspectRatio?: number;
     coneAspectRatio?: number;
+    model?: IdealSurfaceModel;
   } | null;
+  /** Authoritative comparison model; regions are numerical integration groups, not panels. */
+  idealSurfaceModel?: IdealSurfaceModel | null;
   showZoneBoundaries?: boolean;
   showSurfaceSamples?: boolean;
+  /** Synchronized camera preset used by side-by-side footprint comparison. */
+  cameraView?: "perspective" | "top";
+  /** Horizontal land allocation shown as a translucent parcel. */
+  parcelAreaM2?: number;
+  /** Parcel width/depth ratio. Defaults to a square parcel. */
+  parcelAspectRatio?: number;
+  /** Authoritative parcel outline. Rectangle remains the legacy fallback. */
+  parcelShape?: "rectangle" | "circle";
+  parcelWidthM?: number;
+  parcelDepthM?: number;
+  parcelRotationRad?: number;
+  showParcelBoundary?: boolean;
+  /** Optional authoritative swept footprint. Falls back to the rendered geometry. */
+  sweptFootprintM2?: number;
+  showSweptFootprint?: boolean;
+  /** Target world-space ground clearance; authoritative models may already embed it. */
+  supportHeightM?: number;
+  /** Optional structural envelope height, visualized without distorting the PV surface. */
+  structureHeightM?: number;
+  showHeightGuide?: boolean;
   gltfUrl?: string | null;
   quality?: "fast" | "balanced" | "precise";
 }
@@ -71,85 +102,224 @@ const PANEL_DEPTH = 0.0022;
 const TWO_PI = 2 * Math.PI;
 
 interface ContinuousSurfaceHitData {
-  kind: ContinuousSurfaceKind;
-  dimensions: ContinuousSurfaceDimensions;
+  kind: IdealSurfaceKind;
+  dimensions: SurfaceModelDimensions;
   panelIds: string[];
+  qRanges: Array<{ qMin: number; qMax: number }>;
 }
 
-interface SurfacePoint {
+export interface SurfacePoint {
   position: Vec3Tuple;
   normal: Vec3Tuple;
+}
+
+export function parcelDimensionsFromArea(areaM2: number, aspectRatio = 1) {
+  const safeArea = Number.isFinite(areaM2) ? Math.max(0, areaM2) : 0;
+  const safeAspect = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  return {
+    widthM: Math.sqrt(safeArea * safeAspect),
+    depthM: Math.sqrt(safeArea / safeAspect),
+  };
+}
+
+export interface ParcelRenderGeometry {
+  shape: "rectangle" | "circle";
+  widthM: number;
+  depthM: number;
+  radiusM: number;
+  rotationRad: number;
+  areaM2: number;
+}
+
+export function resolveParcelRenderGeometry(input: {
+  shape?: "rectangle" | "circle";
+  areaM2?: number;
+  aspectRatio?: number;
+  widthM?: number;
+  depthM?: number;
+  rotationRad?: number;
+}): ParcelRenderGeometry {
+  const shape = input.shape ?? "rectangle";
+  const areaM2 = Number.isFinite(input.areaM2) ? Math.max(0, input.areaM2 ?? 0) : 0;
+  const explicitWidthM = Number.isFinite(input.widthM) && (input.widthM ?? 0) > 0
+    ? input.widthM!
+    : undefined;
+  const explicitDepthM = Number.isFinite(input.depthM) && (input.depthM ?? 0) > 0
+    ? input.depthM!
+    : undefined;
+  const rotationRad = Number.isFinite(input.rotationRad) ? input.rotationRad ?? 0 : 0;
+
+  if (shape === "circle") {
+    const explicitDiameterM = explicitWidthM ?? explicitDepthM;
+    const radiusM = explicitDiameterM !== undefined
+      ? explicitDiameterM / 2
+      : Math.sqrt(areaM2 / Math.PI);
+    const diameterM = 2 * radiusM;
+    return {
+      shape,
+      widthM: diameterM,
+      depthM: diameterM,
+      radiusM,
+      rotationRad: 0,
+      areaM2: Math.PI * radiusM * radiusM,
+    };
+  }
+
+  const fallback = parcelDimensionsFromArea(areaM2, input.aspectRatio);
+  const widthM = explicitWidthM ?? (
+    explicitDepthM !== undefined && areaM2 > 0 ? areaM2 / explicitDepthM : fallback.widthM
+  );
+  const depthM = explicitDepthM ?? (
+    explicitWidthM !== undefined && areaM2 > 0 ? areaM2 / explicitWidthM : fallback.depthM
+  );
+  return {
+    shape,
+    widthM,
+    depthM,
+    radiusM: Math.hypot(widthM, depthM) / 2,
+    rotationRad,
+    areaM2: widthM * depthM,
+  };
+}
+
+export function comparisonParcelRenderGeometry(
+  kind: ComparisonShapeKind,
+  comparison: ComparisonGeometry,
+  options: { clearanceM?: number; sceneRotationRad?: number } = {},
+): ParcelRenderGeometry {
+  // A_land is always the instantaneous/static vertical projection. Rotation's
+  // swept disk is rendered by the separate amber overlay; using it here would
+  // replace the green A_land parcel and draw the same swept area twice.
+  const clearanceM = Number.isFinite(options.clearanceM)
+    ? Math.max(0, options.clearanceM ?? 0)
+    : 0;
+  const useCircle = kind !== "plane" && kind !== "cube";
+  if (useCircle) {
+    const radiusM = Math.sqrt(comparison.footprint.staticProjectedAreaM2 / Math.PI)
+      + clearanceM;
+    return resolveParcelRenderGeometry({
+      shape: "circle",
+      areaM2: Math.PI * radiusM ** 2,
+    });
+  }
+
+  const dimensions = comparison.dimensions;
+  const widthM = kind === "plane"
+    ? dimensions.widthM
+    : comparison.footprint.staticBoundsWidthM;
+  const depthM = kind === "plane"
+    ? (dimensions.planeSlantLengthM ?? 0)
+      * Math.abs(Math.cos((dimensions.planeTiltDeg ?? 0) * Math.PI / 180))
+    : comparison.footprint.staticBoundsDepthM;
+  return resolveParcelRenderGeometry({
+    shape: "rectangle",
+    areaM2: comparison.footprint.staticProjectedAreaM2,
+    widthM: widthM + 2 * clearanceM,
+    depthM: depthM + 2 * clearanceM,
+    rotationRad: kind === "plane"
+      ? (dimensions.planeAzimuthDeg ?? 0) * Math.PI / 180 + (options.sceneRotationRad ?? 0)
+      : 0,
+  });
+}
+
+export function continuousRenderFootprintAreaM2(dimensions: ContinuousSurfaceDimensions) {
+  return Math.PI * dimensions.radiusM * dimensions.radiusM;
+}
+
+export function rigidSweptFootprintAreaM2(panels: readonly ScenePanel[]) {
+  let radiusM = 0;
+  const halfSize = PANEL_SIZE / 2;
+  const halfDepth = PANEL_DEPTH / 2;
+  panels.forEach((panel) => {
+    const quaternion = new THREE.Quaternion(...panel.quaternion).normalize();
+    for (const x of [-halfSize, halfSize]) {
+      for (const y of [-halfSize, halfSize]) {
+        for (const z of [-halfDepth, halfDepth]) {
+          const corner = new THREE.Vector3(x, y, z)
+            .applyQuaternion(quaternion)
+            .add(new THREE.Vector3(...panel.position));
+          radiusM = Math.max(radiusM, Math.hypot(corner.x, corner.z));
+        }
+      }
+    }
+  });
+  return Math.PI * radiusM * radiusM;
 }
 
 function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
-function surfaceLayout(kind: ContinuousSurfaceKind) {
-  void kind;
-  return { bands: 20, sectors: 1 };
+function isCurvedSurfaceKind(kind: IdealSurfaceKind): kind is ContinuousSurfaceKind {
+  return kind === "sphere" || kind === "hemisphere" || kind === "cylinder" || kind === "cone";
 }
 
 /** q is the normalized equal-area coordinate and v is normalized azimuth. */
-function pointOnContinuousSurface(
+export function pointOnContinuousSurface(
   kind: ContinuousSurfaceKind,
   dimensions: ContinuousSurfaceDimensions,
   q: number,
   v: number,
 ): SurfacePoint {
-  const azimuth = TWO_PI * v;
-  const sine = Math.sin(azimuth);
-  const cosine = Math.cos(azimuth);
-  if (kind === "sphere") {
-    const equalAreaY = -1 + 2 * clamp01(q);
-    const radial = Math.sqrt(Math.max(0, 1 - equalAreaY * equalAreaY));
-    const normal: Vec3Tuple = [radial * sine, equalAreaY, radial * cosine];
-    return {
-      position: [
-        dimensions.radiusM * normal[0],
-        dimensions.centreY + dimensions.radiusM * normal[1],
-        dimensions.radiusM * normal[2],
-      ],
-      normal,
-    };
-  }
-  if (kind === "cylinder") {
-    const normal: Vec3Tuple = [sine, 0, cosine];
-    return {
-      position: [
-        dimensions.radiusM * normal[0],
-        dimensions.centreY + (clamp01(q) - 0.5) * dimensions.heightM,
-        dimensions.radiusM * normal[2],
-      ],
-      normal,
-    };
-  }
-
-  const t = Math.sqrt(clamp01(q));
-  const radial = dimensions.radiusM * t;
-  const slant = dimensions.slantHeightM ?? Math.hypot(dimensions.radiusM, dimensions.heightM);
+  const point = geometryPointOnContinuousSurface(kind, dimensions, q, v);
   return {
-    position: [
-      radial * sine,
-      dimensions.centreY + dimensions.heightM / 2 - dimensions.heightM * t,
-      radial * cosine,
-    ],
-    normal: [
-      dimensions.heightM * sine / slant,
-      dimensions.radiusM / slant,
-      dimensions.heightM * cosine / slant,
-    ],
+    position: [...point.position],
+    normal: [...point.normal],
   };
 }
 
-function panelForZone(panels: ScenePanel[], model: ContinuousSurfaceModel, zoneIndex: number) {
+export function pointOnSurfaceModel(
+  model: IdealSurfaceModel,
+  qInput: number,
+  v: number,
+  cylinderRegion?: "top" | "lateral",
+): SurfacePoint {
+  if (model.kind !== "cylinder" || !model.dimensions.includesTopDisk) {
+    return pointOnContinuousSurface(
+      model.kind as ContinuousSurfaceKind,
+      model.dimensions as ContinuousSurfaceDimensions,
+      qInput,
+      v,
+    );
+  }
+  const dimensions = model.dimensions as ContinuousSurfaceDimensions;
+  const topAreaM2 = Math.PI * dimensions.radiusM ** 2;
+  const topFraction = topAreaM2 / dimensions.activeAreaM2;
+  const q = clamp01(qInput);
+  const angle = TWO_PI * v;
+  const sine = Math.sin(angle);
+  const cosine = Math.cos(angle);
+  const region = cylinderRegion ?? (q < topFraction ? "top" : "lateral");
+  if (region === "top") {
+    const radialFraction = Math.sqrt(clamp01(q / topFraction));
+    return {
+      position: [
+        dimensions.radiusM * radialFraction * sine,
+        dimensions.centreY + dimensions.heightM / 2,
+        dimensions.radiusM * radialFraction * cosine,
+      ],
+      normal: [0, 1, 0],
+    };
+  }
+  const lateralQ = clamp01((q - topFraction) / (1 - topFraction));
+  return {
+    position: [
+      dimensions.radiusM * sine,
+      dimensions.centreY + (lateralQ - 0.5) * dimensions.heightM,
+      dimensions.radiusM * cosine,
+    ],
+    normal: [sine, 0, cosine],
+  };
+}
+
+function panelForZone(panels: ScenePanel[], model: IdealSurfaceModel, zoneIndex: number) {
   const zone = model.zones[zoneIndex];
   return panels.find((panel) => panel.id === zone?.id) ?? panels[zoneIndex];
 }
 
 function selectedZoneIndex(
   panels: ScenePanel[],
-  model: ContinuousSurfaceModel,
+  model: IdealSurfaceModel,
   selectedPanelId: string | null,
 ) {
   if (!selectedPanelId) return -1;
@@ -163,22 +333,29 @@ function zoneIndexAtSurfacePoint(
   data: ContinuousSurfaceHitData,
   point: THREE.Vector3,
 ) {
-  const { bands, sectors } = surfaceLayout(data.kind);
+  if (data.kind === "plane" || data.kind === "cube") return 0;
+  const radiusM = data.dimensions.radiusM ?? 1;
   let q = 0;
-  if (data.kind === "sphere") {
-    const equalAreaY = (point.y - data.dimensions.centreY) / data.dimensions.radiusM;
+  if (data.kind === "hemisphere") {
+    q = (point.y - data.dimensions.centreY) / radiusM;
+  } else if (data.kind === "sphere") {
+    const equalAreaY = (point.y - data.dimensions.centreY) / radiusM;
     q = (equalAreaY + 1) / 2;
   } else if (data.kind === "cylinder") {
     q = (point.y - (data.dimensions.centreY - data.dimensions.heightM / 2))
       / data.dimensions.heightM;
   } else {
-    const radialFraction = Math.hypot(point.x, point.z) / data.dimensions.radiusM;
+    const radialFraction = Math.hypot(point.x, point.z) / radiusM;
     q = radialFraction * radialFraction;
   }
   const azimuth = (Math.atan2(point.x, point.z) + TWO_PI) % TWO_PI;
-  const band = Math.min(bands - 1, Math.floor(clamp01(q) * bands));
-  const sector = Math.min(sectors - 1, Math.floor((azimuth / TWO_PI) * sectors));
-  return band * sectors + sector;
+  void azimuth;
+  const clampedQ = clamp01(q);
+  const match = data.qRanges.findIndex(({ qMin, qMax }, index) => (
+    clampedQ >= qMin - 1e-12
+    && (clampedQ < qMax - 1e-12 || (index === data.qRanges.length - 1 && clampedQ <= qMax + 1e-12))
+  ));
+  return match >= 0 ? match : 0;
 }
 
 function colorForIrradiance(value = 0) {
@@ -199,61 +376,138 @@ function pushSurfaceTriangle(
   positions: number[],
   normals: number[],
   colors: number[],
+  zoneIndices: number[],
   a: SurfacePoint,
   b: SurfacePoint,
   c: SurfacePoint,
   color: THREE.Color,
+  zoneIndex: number,
 ) {
   for (const point of [a, b, c]) {
     positions.push(...point.position);
     normals.push(...point.normal);
     colors.push(color.r, color.g, color.b);
+    zoneIndices.push(zoneIndex);
   }
 }
 
+export interface PlanarZonePatch {
+  corners: [SurfacePoint, SurfacePoint, SurfacePoint, SurfacePoint];
+}
+
+export function planarZonePatch(zone: SurfaceZone): PlanarZonePatch {
+  const normal = new THREE.Vector3(...zone.representativeNormal).normalize();
+  const averages = new Map<number, { position: THREE.Vector3; count: number }>();
+  zone.samples.forEach((sample) => {
+    const current = averages.get(sample.v) ?? { position: new THREE.Vector3(), count: 0 };
+    current.position.add(new THREE.Vector3(...sample.position));
+    current.count += 1;
+    averages.set(sample.v, current);
+  });
+  const columns = [...averages.entries()]
+    .map(([v, value]) => ({ v, position: value.position.multiplyScalar(1 / value.count) }))
+    .sort((left, right) => left.v - right.v);
+  let axisU: THREE.Vector3;
+  let widthM: number;
+  if (columns.length >= 2 && columns.at(-1)!.v > columns[0].v) {
+    const span = columns.at(-1)!.position.clone().sub(columns[0].position);
+    widthM = span.length() / (columns.at(-1)!.v - columns[0].v);
+    axisU = span.normalize();
+  } else {
+    axisU = Math.abs(normal.y) < 0.9
+      ? new THREE.Vector3(0, 1, 0).cross(normal).normalize()
+      : new THREE.Vector3(1, 0, 0);
+    widthM = Math.sqrt(zone.areaM2);
+  }
+  const heightM = zone.areaM2 / Math.max(widthM, 1e-12);
+  const axisV = normal.clone().cross(axisU).normalize();
+  const centre = new THREE.Vector3(...zone.representativePosition);
+  const point = (u: number, v: number): SurfacePoint => ({
+    position: centre.clone().addScaledVector(axisU, u).addScaledVector(axisV, v).toArray() as Vec3Tuple,
+    normal: normal.toArray() as Vec3Tuple,
+  });
+  return {
+    corners: [
+      point(-widthM / 2, -heightM / 2),
+      point(widthM / 2, -heightM / 2),
+      point(widthM / 2, heightM / 2),
+      point(-widthM / 2, heightM / 2),
+    ],
+  };
+}
+
 function createContinuousSurfaceGeometry(
-  model: ContinuousSurfaceModel,
-  dimensions: ContinuousSurfaceDimensions,
+  model: IdealSurfaceModel,
+  dimensions: SurfaceModelDimensions,
   panels: ScenePanel[],
   selectedPanelId: string | null,
   quality: "fast" | "balanced" | "precise",
 ) {
-  const { bands, sectors } = surfaceLayout(model.kind);
-  const subdivisions = quality === "precise" ? 12 : quality === "balanced" ? 8 : 4;
-  const qSegments = bands * subdivisions;
-  const vSegments = sectors * subdivisions;
+  const qSegments = quality === "precise" ? 64 : quality === "balanced" ? 32 : 16;
+  const vSegments = quality === "precise" ? 96 : quality === "balanced" ? 64 : 32;
   const selectedIndex = selectedZoneIndex(panels, model, selectedPanelId);
   const positions: number[] = [];
   const normals: number[] = [];
   const colors: number[] = [];
+  const zoneIndices: number[] = [];
 
-  for (let row = 0; row < qSegments; row += 1) {
-    const q0 = row / qSegments;
-    const q1 = (row + 1) / qSegments;
-    const band = Math.min(bands - 1, Math.floor(row / subdivisions));
-    for (let column = 0; column < vSegments; column += 1) {
-      const v0 = column / vSegments;
-      const v1 = (column + 1) / vSegments;
-      const sector = Math.min(sectors - 1, Math.floor(column / subdivisions));
-      const zoneIndex = band * sectors + sector;
+  if (model.kind === "plane" || model.kind === "cube") {
+    model.zones.forEach((zone, zoneIndex) => {
       const color = colorForSurfaceZone(
         panelForZone(panels, model, zoneIndex),
         zoneIndex === selectedIndex,
       );
-      const p00 = pointOnContinuousSurface(model.kind, dimensions, q0, v0);
-      const p01 = pointOnContinuousSurface(model.kind, dimensions, q0, v1);
-      const p10 = pointOnContinuousSurface(model.kind, dimensions, q1, v0);
-      const p11 = pointOnContinuousSurface(model.kind, dimensions, q1, v1);
-
-      // Sphere/cylinder q grows upward; cone q grows from apex to base. The
-      // analytic normals remain authoritative, while winding stays outward.
-      if (model.kind === "cone") {
-        pushSurfaceTriangle(positions, normals, colors, p00, p10, p11, color);
-        pushSurfaceTriangle(positions, normals, colors, p00, p11, p01, color);
-      } else {
-        pushSurfaceTriangle(positions, normals, colors, p00, p01, p11, color);
-        pushSurfaceTriangle(positions, normals, colors, p00, p11, p10, color);
+      const [p00, p10, p11, p01] = planarZonePatch(zone).corners;
+      pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p10, p11, color, zoneIndex);
+      pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p11, p01, color, zoneIndex);
+    });
+  } else {
+    const renderRegion = (
+      qStart: number,
+      qEnd: number,
+      rowCount: number,
+      cylinderRegion?: "top" | "lateral",
+    ) => {
+      for (let row = 0; row < rowCount; row += 1) {
+        const q0 = qStart + (qEnd - qStart) * row / rowCount;
+        const q1 = qStart + (qEnd - qStart) * (row + 1) / rowCount;
+        const qMid = (q0 + q1) / 2;
+        const zoneIndex = Math.max(0, model.zones.findIndex((zone, zoneIndex) => (
+          qMid >= zone.qMin - 1e-12
+          && (qMid < zone.qMax - 1e-12 || zoneIndex === model.zones.length - 1)
+        )));
+        for (let column = 0; column < vSegments; column += 1) {
+          const v0 = column / vSegments;
+          const v1 = (column + 1) / vSegments;
+          const color = colorForSurfaceZone(
+            panelForZone(panels, model, zoneIndex),
+            zoneIndex === selectedIndex,
+          );
+          if (model.kind === "cylinder" && dimensions.includesTopDisk) {
+            color.lerp(new THREE.Color(cylinderRegion === "top" ? "#f0b84c" : "#34b998"), 0.18);
+          }
+          const p00 = pointOnSurfaceModel(model, q0, v0, cylinderRegion);
+          const p01 = pointOnSurfaceModel(model, q0, v1, cylinderRegion);
+          const p10 = pointOnSurfaceModel(model, q1, v0, cylinderRegion);
+          const p11 = pointOnSurfaceModel(model, q1, v1, cylinderRegion);
+          const reverseWinding = model.kind === "cone" || cylinderRegion === "top";
+          if (reverseWinding) {
+            pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p10, p11, color, zoneIndex);
+            pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p11, p01, color, zoneIndex);
+          } else {
+            pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p01, p11, color, zoneIndex);
+            pushSurfaceTriangle(positions, normals, colors, zoneIndices, p00, p11, p10, color, zoneIndex);
+          }
+        }
       }
+    };
+    if (model.kind === "cylinder" && dimensions.includesTopDisk) {
+      const radiusM = dimensions.radiusM ?? 0;
+      const topFraction = Math.PI * radiusM ** 2 / dimensions.activeAreaM2;
+      renderRegion(0, topFraction, Math.max(1, Math.ceil(qSegments * topFraction)), "top");
+      renderRegion(topFraction, 1, Math.max(1, Math.ceil(qSegments * (1 - topFraction))), "lateral");
+    } else {
+      renderRegion(0, 1, qSegments);
     }
   }
 
@@ -261,6 +515,7 @@ function createContinuousSurfaceGeometry(
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  geometry.setAttribute("zoneIndex", new THREE.Uint16BufferAttribute(zoneIndices, 1));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;
@@ -273,26 +528,32 @@ function offsetSurfacePoint(point: SurfacePoint, distance = 0.00045) {
   );
 }
 
-function createZoneBoundaryGroup(
-  model: ContinuousSurfaceModel,
-  dimensions: ContinuousSurfaceDimensions,
-) {
+function createZoneBoundaryGroup(model: IdealSurfaceModel) {
   const group = new THREE.Group();
-  group.name = `${model.kind}-electrical-zone-boundaries`;
+  group.name = `${model.kind}-integration-region-boundaries`;
   const material = new THREE.LineBasicMaterial({
     color: "#9de7d7",
     transparent: true,
     opacity: 0.76,
     depthWrite: false,
   });
-  const { bands, sectors } = surfaceLayout(model.kind);
+  if (model.kind === "plane" || model.kind === "cube") {
+    model.zones.forEach((zone) => {
+      const points = planarZonePatch(zone).corners.map((point) => offsetSurfacePoint(point));
+      const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), material);
+      line.raycast = () => {};
+      group.add(line);
+    });
+    return group;
+  }
+  if (!isCurvedSurfaceKind(model.kind)) return group;
   const azimuthSegments = 128;
-  const meridianSegments = 96;
+  const boundaries = [...new Set(model.zones.flatMap((zone) => [zone.qMin, zone.qMax]))]
+    .sort((left, right) => left - right);
 
-  for (let boundary = 0; boundary <= bands; boundary += 1) {
-    const q = boundary / bands;
+  for (const q of boundaries) {
     const points = Array.from({ length: azimuthSegments }, (_, index) =>
-      offsetSurfacePoint(pointOnContinuousSurface(model.kind, dimensions, q, index / azimuthSegments))
+      offsetSurfacePoint(pointOnSurfaceModel(model, q, index / azimuthSegments))
     );
     const radius = Math.max(...points.map((point) => Math.hypot(point.x, point.z)));
     if (radius < 0.0001) continue;
@@ -301,17 +562,6 @@ function createZoneBoundaryGroup(
     group.add(line);
   }
 
-  for (let sector = 0; sector < sectors; sector += 1) {
-    const v = sector / sectors;
-    const points = Array.from({ length: meridianSegments + 1 }, (_, index) => {
-      const q = index / meridianSegments;
-      const offset = model.kind === "cone" && index === 0 ? 0 : 0.00045;
-      return offsetSurfacePoint(pointOnContinuousSurface(model.kind, dimensions, q, v), offset);
-    });
-    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), material);
-    line.raycast = () => {};
-    group.add(line);
-  }
   return group;
 }
 
@@ -424,6 +674,59 @@ function rotateAroundY([x, y, z]: Vec3Tuple, angleRad: number): Vec3Tuple {
   return [cosine * x + sine * z, y, -sine * x + cosine * z];
 }
 
+export function cameraPoseForView(
+  view: "perspective" | "top",
+  distance: number,
+  target: Vec3Tuple = [0, 0.075, 0],
+) {
+  const safeDistance = Number.isFinite(distance) ? Math.max(0.16, distance) : 0.72;
+  if (view === "top") {
+    return {
+      position: [target[0], target[1] + safeDistance, target[2] + 1e-6] as Vec3Tuple,
+      up: [0, 0, -1] as Vec3Tuple,
+      target,
+    };
+  }
+  const direction = new THREE.Vector3(0.48, 0.36, 0.56).normalize().multiplyScalar(safeDistance);
+  return {
+    position: [target[0] + direction.x, target[1] + direction.y, target[2] + direction.z] as Vec3Tuple,
+    up: [0, 1, 0] as Vec3Tuple,
+    target,
+  };
+}
+
+export interface SurfacePlacement {
+  /** Extra scene transform after accounting for clearance already in sample coordinates. */
+  translationY: number;
+  /** Final world-space clearance at the bottom of the PV skin. */
+  groundClearanceM: number;
+  /** Requested support visualization height (zero hides the support). */
+  displayedSupportHeightM: number;
+}
+
+/**
+ * Surface samples are authoritative world coordinates. Comparison geometry
+ * embeds groundClearanceM, so a matching UI support value must not lift them a
+ * second time. A larger requested value contributes only the missing delta.
+ */
+export function resolveSurfacePlacement(
+  dimensions: Pick<SurfaceModelDimensions, "groundClearanceM"> | null | undefined,
+  requestedSupportHeightM: number,
+): SurfacePlacement {
+  const requested = Number.isFinite(requestedSupportHeightM)
+    ? Math.max(0, requestedSupportHeightM)
+    : 0;
+  const embedded = Number.isFinite(dimensions?.groundClearanceM)
+    ? Math.max(0, dimensions?.groundClearanceM ?? 0)
+    : 0;
+  const groundClearanceM = Math.max(embedded, requested);
+  return {
+    translationY: groundClearanceM - embedded,
+    groundClearanceM,
+    displayedSupportHeightM: requested > 0 ? groundClearanceM : 0,
+  };
+}
+
 export function ThreeWorkspace({
   panels,
   obstacles,
@@ -442,8 +745,22 @@ export function ThreeWorkspace({
   sunElevationDeg,
   rotationAngleRad,
   continuousSurface = null,
+  idealSurfaceModel = null,
   showZoneBoundaries = false,
   showSurfaceSamples = false,
+  cameraView = "perspective",
+  parcelAreaM2,
+  parcelAspectRatio = 1,
+  parcelShape = "rectangle",
+  parcelWidthM,
+  parcelDepthM,
+  parcelRotationRad = 0,
+  showParcelBoundary = true,
+  sweptFootprintM2,
+  showSweptFootprint = false,
+  supportHeightM = 0,
+  structureHeightM,
+  showHeightGuide = false,
   gltfUrl,
   quality = "balanced",
 }: ThreeWorkspaceProps) {
@@ -458,6 +775,8 @@ export function ThreeWorkspace({
     obstacleGroup: THREE.Group;
     helperGroup: THREE.Group;
     rayGroup: THREE.Group;
+    siteOverlayGroup: THREE.Group;
+    supportGroup: THREE.Group;
     importedGroup: THREE.Group;
     sunLight: THREE.DirectionalLight;
     sunOrb: THREE.Mesh;
@@ -475,7 +794,6 @@ export function ThreeWorkspace({
     surfaceSnapRef.current = surfaceSnap;
   }, [surfaceSnap]);
 
-  const antialias = quality !== "fast";
   const [sunX, sunY, sunZ] = sunVector;
   const normalizedSun = useMemo(() => {
     const v = new THREE.Vector3(sunX, sunY, sunZ);
@@ -484,8 +802,35 @@ export function ThreeWorkspace({
   const continuousKind = continuousSurface?.kind;
   const cylinderAspectRatio = continuousSurface?.cylinderAspectRatio;
   const coneAspectRatio = continuousSurface?.coneAspectRatio;
+  const suppliedSurfaceModel = idealSurfaceModel ?? continuousSurface?.model ?? null;
+  const suppliedSurfaceKey = suppliedSurfaceModel
+    ? [
+        suppliedSurfaceModel.kind,
+        suppliedSurfaceModel.dimensions.activeAreaM2,
+        suppliedSurfaceModel.dimensions.heightM,
+        suppliedSurfaceModel.dimensions.footprintM2,
+        suppliedSurfaceModel.dimensions.radiusM ?? "",
+        suppliedSurfaceModel.dimensions.widthM ?? "",
+        suppliedSurfaceModel.dimensions.depthM ?? "",
+        ...suppliedSurfaceModel.zones.flatMap((zone) => [
+          zone.id,
+          ...zone.representativePosition,
+          ...zone.representativeNormal,
+          zone.areaM2,
+          zone.samples.length,
+        ]),
+      ].join(":")
+    : "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableSuppliedSurfaceModel = useMemo(() => suppliedSurfaceModel, [suppliedSurfaceKey]);
   const continuousSurfaceState = useMemo(() => {
-    if (!continuousKind) return null;
+    if (stableSuppliedSurfaceModel) {
+      return {
+        model: stableSuppliedSurfaceModel,
+        dimensions: stableSuppliedSurfaceModel.dimensions,
+      };
+    }
+    if (!continuousKind || !isCurvedSurfaceKind(continuousKind)) return null;
     const options = {
       ...(cylinderAspectRatio !== undefined
         ? { cylinderAspectRatio }
@@ -499,7 +844,7 @@ export function ThreeWorkspace({
       model: createContinuousSurface(continuousKind, samplesPerAxis, options),
       dimensions: continuousSurfaceDimensions(continuousKind, options),
     };
-  }, [continuousKind, cylinderAspectRatio, coneAspectRatio, quality]);
+  }, [continuousKind, cylinderAspectRatio, coneAspectRatio, quality, stableSuppliedSurfaceModel]);
   const panelRenderKey = panels.map((panel) => [
     panel.id,
     ...panel.position,
@@ -521,6 +866,36 @@ export function ThreeWorkspace({
   const stablePanels = useMemo(() => panels, [panelRenderKey]);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const stableObstacles = useMemo(() => obstacles, [obstacleRenderKey]);
+  const renderedSweptFootprintM2 = useMemo(
+    () => continuousSurfaceState
+      ? continuousSurfaceState.dimensions.footprintM2
+      : rigidSweptFootprintAreaM2(stablePanels),
+    [continuousSurfaceState, stablePanels],
+  );
+  const displayedSweptFootprintM2 = Number.isFinite(sweptFootprintM2)
+    ? Math.max(0, sweptFootprintM2 ?? 0)
+    : renderedSweptFootprintM2;
+  const surfacePlacement = resolveSurfacePlacement(
+    continuousSurfaceState?.dimensions,
+    supportHeightM,
+  );
+  const assemblyLiftM = surfacePlacement.translationY;
+  const assemblyGroundClearanceM = surfacePlacement.groundClearanceM;
+  const displayedSupportHeightM = surfacePlacement.displayedSupportHeightM;
+  const displayedStructureHeightM = Number.isFinite(structureHeightM)
+    ? Math.max(0, structureHeightM ?? 0)
+    : continuousSurfaceState?.dimensions.heightM ?? 0;
+  const parcelGeometry = useMemo(
+    () => resolveParcelRenderGeometry({
+      shape: parcelShape,
+      areaM2: parcelAreaM2,
+      aspectRatio: parcelAspectRatio,
+      widthM: parcelWidthM,
+      depthM: parcelDepthM,
+      rotationRad: parcelRotationRad,
+    }),
+    [parcelAreaM2, parcelAspectRatio, parcelDepthM, parcelRotationRad, parcelShape, parcelWidthM],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -534,15 +909,15 @@ export function ThreeWorkspace({
     camera.position.set(0.48, 0.36, 0.56);
     camera.lookAt(0, 0.08, 0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias, alpha: false, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === "precise" ? 2 : 1.5));
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
-    renderer.domElement.setAttribute("aria-label", "3D 태양광 패널 조립 장면");
-    renderer.domElement.tabIndex = 0;
+    renderer.domElement.setAttribute("aria-label", "3D 연속 PV 형상과 토지 투영면적 장면");
+    renderer.domElement.setAttribute("role", "img");
     host.appendChild(renderer.domElement);
 
     const orbit = new OrbitControls(camera, renderer.domElement);
@@ -602,8 +977,10 @@ export function ThreeWorkspace({
     const obstacleGroup = new THREE.Group();
     const helperGroup = new THREE.Group();
     const rayGroup = new THREE.Group();
+    const siteOverlayGroup = new THREE.Group();
+    const supportGroup = new THREE.Group();
     const importedGroup = new THREE.Group();
-    scene.add(panelGroup, obstacleGroup, helperGroup, rayGroup, importedGroup);
+    scene.add(siteOverlayGroup, supportGroup, panelGroup, obstacleGroup, helperGroup, rayGroup, importedGroup);
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setSize(0.7);
@@ -655,8 +1032,14 @@ export function ThreeWorkspace({
       let panelId = hit?.object.userData.panelId as string | undefined;
       const surfaceData = hit?.object.userData.continuousSurface as ContinuousSurfaceHitData | undefined;
       if (!panelId && hit && surfaceData) {
+        const geometry = hit.object instanceof THREE.Mesh ? hit.object.geometry : undefined;
+        const zoneAttribute = geometry?.getAttribute("zoneIndex");
+        const zoneFromTriangle = hit.face && zoneAttribute
+          ? Math.round(zoneAttribute.getX(hit.face.a))
+          : undefined;
         const localPoint = hit.object.worldToLocal(hit.point.clone());
-        panelId = surfaceData.panelIds[zoneIndexAtSurfacePoint(surfaceData, localPoint)];
+        const zoneIndex = zoneFromTriangle ?? zoneIndexAtSurfacePoint(surfaceData, localPoint);
+        panelId = surfaceData.panelIds[zoneIndex];
       }
       const obstacleId = hit?.object.userData.obstacleId as string | undefined;
       callbacksRef.current.onSelectPanel(panelId ?? null);
@@ -695,6 +1078,8 @@ export function ThreeWorkspace({
       obstacleGroup,
       helperGroup,
       rayGroup,
+      siteOverlayGroup,
+      supportGroup,
       importedGroup,
       sunLight,
       sunOrb,
@@ -716,7 +1101,16 @@ export function ThreeWorkspace({
       renderer.domElement.remove();
       stateRef.current = null;
     };
-  }, [antialias, quality]);
+  }, []);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    const host = hostRef.current;
+    if (!state || !host) return;
+    state.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality === "precise" ? 2 : 1.5));
+    const { width, height } = host.getBoundingClientRect();
+    if (width && height) state.renderer.setSize(width, height, false);
+  }, [quality]);
 
   useEffect(() => {
     const state = stateRef.current;
@@ -753,9 +1147,10 @@ export function ThreeWorkspace({
         kind: model.kind,
         dimensions,
         panelIds: model.zones.map((zone, index) => panelForZone(stablePanels, model, index)?.id ?? zone.id),
+        qRanges: model.zones.map((zone) => ({ qMin: zone.qMin, qMax: zone.qMax })),
       } satisfies ContinuousSurfaceHitData;
       panelGroup.add(mesh);
-      if (showZoneBoundaries) panelGroup.add(createZoneBoundaryGroup(model, dimensions));
+      if (showZoneBoundaries) panelGroup.add(createZoneBoundaryGroup(model));
     } else {
       const geometry = new THREE.BoxGeometry(PANEL_SIZE, PANEL_SIZE, PANEL_DEPTH);
       stablePanels.forEach((panel) => {
@@ -788,6 +1183,184 @@ export function ThreeWorkspace({
     state.panelGroup.rotation.y = rotationAngleRad;
     state.helperGroup.rotation.y = rotationAngleRad;
   }, [rotationAngleRad]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) return;
+    state.panelGroup.position.y = assemblyLiftM;
+    state.helperGroup.position.y = assemblyLiftM;
+    clearAndDispose(state.supportGroup);
+    if (displayedSupportHeightM > 1e-6) {
+      const pole = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.004, 0.0055, displayedSupportHeightM, 16),
+        new THREE.MeshStandardMaterial({ color: "#6f8791", roughness: 0.55, metalness: 0.62 }),
+      );
+      pole.position.y = displayedSupportHeightM / 2;
+      pole.castShadow = true;
+      pole.receiveShadow = true;
+      pole.name = "pv-support-height";
+      state.supportGroup.add(pole);
+    }
+    if (showHeightGuide && displayedStructureHeightM > 0) {
+      const guideX = Math.sqrt(displayedSweptFootprintM2 / Math.PI) + 0.018;
+      const bottom = assemblyGroundClearanceM;
+      const top = assemblyGroundClearanceM + displayedStructureHeightM;
+      const guide = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(guideX, bottom, 0),
+          new THREE.Vector3(guideX, top, 0),
+        ]),
+        new THREE.LineDashedMaterial({
+          color: "#9fc8d7",
+          dashSize: 0.008,
+          gapSize: 0.005,
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false,
+        }),
+      );
+      guide.computeLineDistances();
+      guide.renderOrder = 5;
+      guide.name = "pv-structure-height-guide";
+      guide.raycast = () => {};
+      state.supportGroup.add(guide);
+    }
+  }, [assemblyGroundClearanceM, assemblyLiftM, displayedStructureHeightM, displayedSupportHeightM, displayedSweptFootprintM2, showHeightGuide]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) return;
+    clearAndDispose(state.siteOverlayGroup);
+
+    if (showParcelBoundary && parcelGeometry.areaM2 > 0) {
+      const parcelMaterial = new THREE.MeshBasicMaterial({
+        color: "#55b98d",
+        transparent: true,
+        opacity: 0.095,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      if (parcelGeometry.shape === "circle") {
+        const parcel = new THREE.Mesh(
+          new THREE.CircleGeometry(parcelGeometry.radiusM, 128),
+          parcelMaterial,
+        );
+        parcel.rotation.x = -Math.PI / 2;
+        parcel.position.y = 0.0012;
+        parcel.renderOrder = 1;
+        parcel.name = "land-parcel-circle-area";
+        parcel.raycast = () => {};
+        state.siteOverlayGroup.add(parcel);
+
+        const ringWidthM = Math.max(0.001, parcelGeometry.radiusM * 0.012);
+        const boundary = new THREE.Mesh(
+          new THREE.RingGeometry(
+            Math.max(0, parcelGeometry.radiusM - ringWidthM),
+            parcelGeometry.radiusM,
+            128,
+          ),
+          new THREE.MeshBasicMaterial({
+            color: "#78d8ad",
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        boundary.rotation.x = -Math.PI / 2;
+        boundary.position.y = 0.0015;
+        boundary.renderOrder = 2;
+        boundary.name = "land-parcel-circle-boundary";
+        boundary.raycast = () => {};
+        state.siteOverlayGroup.add(boundary);
+      } else {
+        const parcelGroup = new THREE.Group();
+        parcelGroup.rotation.y = parcelGeometry.rotationRad;
+        parcelGroup.name = "land-parcel-rectangle";
+        const rectangleGeometry = new THREE.PlaneGeometry(parcelGeometry.widthM, parcelGeometry.depthM);
+        const parcel = new THREE.Mesh(rectangleGeometry, parcelMaterial);
+        parcel.rotation.x = -Math.PI / 2;
+        parcel.position.y = 0.0012;
+        parcel.renderOrder = 1;
+        parcel.name = "land-parcel-rectangle-area";
+        parcel.raycast = () => {};
+        parcelGroup.add(parcel);
+
+        const boundary = new THREE.LineSegments(
+          new THREE.EdgesGeometry(rectangleGeometry),
+          new THREE.LineBasicMaterial({ color: "#78d8ad", transparent: true, opacity: 0.9 }),
+        );
+        boundary.rotation.x = -Math.PI / 2;
+        boundary.position.y = 0.0015;
+        boundary.renderOrder = 2;
+        boundary.name = "land-parcel-rectangle-boundary";
+        boundary.raycast = () => {};
+        parcelGroup.add(boundary);
+        state.siteOverlayGroup.add(parcelGroup);
+      }
+    }
+
+    if (showSweptFootprint && displayedSweptFootprintM2 > 0) {
+      const radiusM = Math.sqrt(displayedSweptFootprintM2 / Math.PI);
+      const footprint = new THREE.Mesh(
+        new THREE.RingGeometry(Math.max(0, radiusM - Math.max(0.0015, radiusM * 0.025)), radiusM, 128),
+        new THREE.MeshBasicMaterial({
+          color: "#f2b95f",
+          transparent: true,
+          opacity: 0.72,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      footprint.rotation.x = -Math.PI / 2;
+      footprint.position.y = 0.0021;
+      footprint.renderOrder = 3;
+      footprint.name = "pv-swept-footprint";
+      footprint.raycast = () => {};
+      state.siteOverlayGroup.add(footprint);
+    }
+  }, [displayedSweptFootprintM2, parcelGeometry, showParcelBoundary, showSweptFootprint]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state || !showParcelBoundary || parcelGeometry.areaM2 <= 0) return;
+    const cosine = Math.abs(Math.cos(parcelGeometry.rotationRad));
+    const sine = Math.abs(Math.sin(parcelGeometry.rotationRad));
+    const boundsWidthM = parcelGeometry.shape === "circle"
+      ? parcelGeometry.widthM
+      : parcelGeometry.widthM * cosine + parcelGeometry.depthM * sine;
+    const boundsDepthM = parcelGeometry.shape === "circle"
+      ? parcelGeometry.depthM
+      : parcelGeometry.widthM * sine + parcelGeometry.depthM * cosine;
+    const horizontalSpan = Math.max(boundsWidthM, boundsDepthM);
+    const verticalSpan = assemblyGroundClearanceM + displayedStructureHeightM;
+    const requiredDistance = Math.max(0.72, horizontalSpan * 1.85, verticalSpan * 2.2);
+    state.orbit.maxDistance = Math.max(2.8, requiredDistance * 2.5);
+    state.camera.far = Math.max(50, requiredDistance * 8);
+    state.camera.updateProjectionMatrix();
+    const currentDistance = state.camera.position.distanceTo(state.orbit.target);
+    if (currentDistance >= requiredDistance) return;
+    const direction = state.camera.position.clone().sub(state.orbit.target).normalize();
+    state.camera.position.copy(state.orbit.target).addScaledVector(direction, requiredDistance);
+    state.orbit.update();
+  }, [assemblyGroundClearanceM, displayedStructureHeightM, parcelGeometry, showParcelBoundary]);
+
+  useEffect(() => {
+    const state = stateRef.current;
+    if (!state) return;
+    const distance = Math.max(
+      0.72,
+      state.camera.position.distanceTo(state.orbit.target),
+      Math.max(parcelGeometry.widthM, parcelGeometry.depthM) * 1.85,
+      (assemblyGroundClearanceM + displayedStructureHeightM) * 2.2,
+    );
+    const target = state.orbit.target.toArray() as Vec3Tuple;
+    const pose = cameraPoseForView(cameraView, distance, target);
+    state.camera.position.set(...pose.position);
+    state.camera.up.set(...pose.up);
+    state.camera.lookAt(...pose.target);
+    state.orbit.update();
+  }, [assemblyGroundClearanceM, cameraView, displayedStructureHeightM, parcelGeometry.depthM, parcelGeometry.widthM]);
 
   useEffect(() => {
     const state = stateRef.current;
@@ -877,16 +1450,23 @@ export function ThreeWorkspace({
       });
 
       const selectedZone = selection >= 0 ? model.zones[selection] : undefined;
-      if (showSurfaceSamples && selectedZone) {
+      if (showSurfaceSamples) {
+        const sourceSamples = selectedZone
+          ? selectedZone.samples
+          : model.zones.flatMap((zone) => zone.samples);
+        const sampleStride = Math.max(1, Math.ceil(sourceSamples.length / 320));
+        const visibleSamples = sourceSamples.filter((_, index) => index % sampleStride === 0);
         const samplePositions: number[] = [];
-        selectedZone.samples.forEach((sample) => {
+        visibleSamples.forEach((sample) => {
           const localPosition = new THREE.Vector3(...sample.position);
           const localNormal = new THREE.Vector3(...sample.normal).normalize();
           localPosition.addScaledVector(localNormal, 0.001);
           samplePositions.push(localPosition.x, localPosition.y, localPosition.z);
-          state.helperGroup.add(
-            new THREE.ArrowHelper(localNormal, localPosition, 0.014, "#73e6ff", 0.004, 0.0025),
-          );
+          if (selectedZone) {
+            state.helperGroup.add(
+              new THREE.ArrowHelper(localNormal, localPosition, 0.014, "#73e6ff", 0.004, 0.0025),
+            );
+          }
         });
         const points = new THREE.Points(
           new THREE.BufferGeometry().setAttribute(
@@ -903,6 +1483,7 @@ export function ThreeWorkspace({
         points.renderOrder = 6;
         state.helperGroup.add(points);
 
+        if (!selectedZone) return;
         const diagnosticSample = selectedZone.samples.reduce((nearest, sample) => {
           const distance = sample.position.reduce((sum, value, axis) => {
             const delta = value - selectedZone.representativePosition[axis];
@@ -954,6 +1535,7 @@ export function ThreeWorkspace({
         const origin = new THREE.Vector3(
           ...rotateAroundY([...zone.representativePosition] as Vec3Tuple, rotationAngleRad),
         );
+        origin.y += assemblyLiftM;
         addSunRay(state.rayGroup, origin, normalizedSun);
       });
       const selection = selectedZoneIndex(stablePanels, model, selectedPanelId);
@@ -976,6 +1558,7 @@ export function ThreeWorkspace({
         const diagnosticNormal = new THREE.Vector3(
           ...rotateAroundY([...diagnosticSample.normal] as Vec3Tuple, rotationAngleRad),
         ).normalize();
+        diagnosticOrigin.y += assemblyLiftM;
         diagnosticOrigin.addScaledVector(diagnosticNormal, 0.0012);
         addSunRay(state.rayGroup, diagnosticOrigin, normalizedSun, 0.09, 0.95);
         addAoiArc(state.rayGroup, diagnosticOrigin, diagnosticNormal, normalizedSun);
@@ -985,9 +1568,10 @@ export function ThreeWorkspace({
 
     stablePanels.forEach((panel) => {
       const origin = new THREE.Vector3(...rotateAroundY(panel.position, rotationAngleRad));
+      origin.y += assemblyLiftM;
       addSunRay(state.rayGroup, origin, normalizedSun);
     });
-  }, [continuousSurfaceState, stablePanels, rotationAngleRad, selectedPanelId, showRays, showSurfaceSamples, normalizedSun, sunElevationDeg]);
+  }, [assemblyLiftM, continuousSurfaceState, stablePanels, rotationAngleRad, selectedPanelId, showRays, showSurfaceSamples, normalizedSun, sunElevationDeg]);
 
   useEffect(() => {
     const state = stateRef.current;
@@ -1044,8 +1628,10 @@ export function ThreeWorkspace({
         <span className="north">N</span><span className="east">E</span><span className="south">S</span><span className="west">W</span>
       </div>
       <div className="scene-scale">
-        {continuousSurface ? "이상적 연속 PV 스킨 · 격자 1칸 = 1 cm" : "강체 패널 · 격자 1칸 = 1 cm"}
+        {continuousSurfaceState ? "단일 연속 PV 스킨 · 격자 1칸 = 1 cm" : "강체 자유편집 · 격자 1칸 = 1 cm"}
       </div>
+      {parcelGeometry.areaM2 > 0 ? <div className="scene-land-label">A_land {parcelGeometry.areaM2.toFixed(4)} m²</div> : null}
+      <div className="scene-view-label">{cameraView === "top" ? "TOP · XZ 투영" : "3D"}</div>
     </div>
   );
 }

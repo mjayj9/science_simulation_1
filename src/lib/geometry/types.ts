@@ -2,7 +2,7 @@ export const PANEL_WIDTH_M = 0.05 as const;
 export const PANEL_HEIGHT_M = 0.05 as const;
 export const PANEL_AREA_M2 = 0.0025 as const;
 export const MAX_PANELS_PER_VARIANT = 20 as const;
-export const MAX_VARIANTS = 5 as const;
+export const MAX_VARIANTS = 6 as const;
 
 export type Vec3 = readonly [number, number, number];
 export type Quaternion = readonly [number, number, number, number];
@@ -12,6 +12,7 @@ export type PresetName =
   | "plane"
   | "cylinder"
   | "sphere"
+  | "hemisphere"
   | "cone"
   | "free";
 

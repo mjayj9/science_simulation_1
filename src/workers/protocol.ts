@@ -1,5 +1,8 @@
+import { MAX_VARIANTS as MAX_PROJECT_VARIANTS } from "../lib/geometry";
+import type { IdealSurfaceModel } from "../lib/geometry";
 import type {
   CircuitInput,
+  ElectricalFairnessMode,
   InstantSimulationInput,
   InverterConfig,
   InverterResult,
@@ -11,10 +14,17 @@ import type {
 import type { WeatherPoint } from "../lib/weather";
 
 /**
- * v2 adds interval-aware rotation quadrature, closure diagnostics, work-based
- * progress and an explicit point-boundary annual integration contract.
+ * v3 separates the ideal continuous-PV comparison contract from the legacy
+ * discrete-panel editor contract. The version is part of every fingerprint,
+ * so v2 panel/circuit results cannot be mistaken for continuous-skin results.
  */
-export const SIMULATION_WORKER_PROTOCOL_VERSION = 2 as const;
+export const SIMULATION_WORKER_PROTOCOL_VERSION = 3 as const;
+export const SIMULATION_CACHE_VERSION = 3 as const;
+export const CONTINUOUS_SURFACE_MODEL_VERSION = "ideal-continuous-pv-v1" as const;
+export const CONTINUOUS_SURFACE_MESH_VERSION = "comparison-surface-mesh-v1" as const;
+
+/** Capacity for six ideal comparison shapes plus optional legacy diagnostics. */
+export const MAX_SIMULATION_VARIANTS = 2 * MAX_PROJECT_VARIANTS;
 
 type InstantPanelInput = NonNullable<InstantSimulationInput["panel"]>;
 type InstantElectricalInput = NonNullable<InstantSimulationInput["electrical"]>;
@@ -30,11 +40,91 @@ export type SimulationPanelDefaults = Omit<
  * positive relative area and is normalized across the zone by the kernel.
  */
 export interface SimulationSurfaceSample {
-  /** World-space position before the variant's +Y rotation is applied. */
+  /** World-space position before the variant's rotation or plane tracking. */
   positionM: Vec3;
-  /** World-space outward normal before the variant's +Y rotation is applied. */
+  /** World-space outward normal before the variant's rotation or plane tracking. */
   normal: Vec3;
   areaWeight: number;
+}
+
+export type SimulationContinuousShape =
+  | "plane"
+  | "cube"
+  | "sphere"
+  | "hemisphere"
+  | "cylinder"
+  | "cone";
+
+export type SimulationSurfaceRegionId = "surface" | "top" | "lateral" | string;
+
+/**
+ * Absolute-area quadrature point for the default comparison engine. Unlike
+ * `SimulationSurfaceSample.areaWeight`, this is never normalized per panel or
+ * electrical zone: the sum must equal `activeAreaM2` exactly within tolerance.
+ */
+export interface SimulationContinuousSurfaceSample {
+  positionM: Vec3;
+  normal: Vec3;
+  areaM2: number;
+  regionId?: SimulationSurfaceRegionId;
+}
+
+/**
+ * One gap-free PV skin. Geometry regions are reporting groups only; they are
+ * not panels, series strings, bypass sections, or independent normalizers.
+ */
+export interface SimulationContinuousSurfaceWorkItem {
+  modelVersion: typeof CONTINUOUS_SURFACE_MODEL_VERSION;
+  /** Producer-owned render/analytic mesh revision, included in the fingerprint. */
+  meshVersion: string;
+  shape: SimulationContinuousShape;
+  landAreaM2: number;
+  activeAreaM2: number;
+  heightM: number;
+  tiltDeg?: number;
+  azimuthSamples: number;
+  integrationSampleCount: number;
+  electricalModel: "local-mpp-area-integral";
+  samples: readonly SimulationContinuousSurfaceSample[];
+  /** Shared optical/material inputs; per-sample geometry remains authoritative. */
+  surfaceOptions?: SimulationPanelDefaults;
+}
+
+/**
+ * Converts authoritative geometry quadrature into the worker's panel-free
+ * contract without inventing zones, relative weights, or legacy cell areas.
+ */
+export function createContinuousSurfaceWorkItem(
+  surface: IdealSurfaceModel,
+  input: {
+    landAreaM2: number;
+    meshVersion?: string;
+    tiltDeg?: number;
+    surfaceOptions?: SimulationPanelDefaults;
+  },
+): SimulationContinuousSurfaceWorkItem {
+  const samples = surface.zones.flatMap((zone) => zone.samples.map((sample) => ({
+    positionM: { x: sample.position[0], y: sample.position[1], z: sample.position[2] },
+    normal: { x: sample.normal[0], y: sample.normal[1], z: sample.normal[2] },
+    areaM2: sample.areaM2,
+    regionId: surface.kind === "cylinder"
+      ? (zone.id.includes("top") || sample.normal[1] > 0.5 ? "top" : "lateral")
+      : "surface",
+  })));
+  return {
+    modelVersion: CONTINUOUS_SURFACE_MODEL_VERSION,
+    meshVersion: input.meshVersion ?? CONTINUOUS_SURFACE_MESH_VERSION,
+    shape: surface.kind,
+    landAreaM2: input.landAreaM2,
+    activeAreaM2: surface.dimensions.activeAreaM2,
+    heightM: surface.dimensions.heightM,
+    ...(input.tiltDeg === undefined ? {} : { tiltDeg: input.tiltDeg }),
+    azimuthSamples: surface.azimuthSamples,
+    integrationSampleCount: samples.length,
+    electricalModel: "local-mpp-area-integral",
+    samples,
+    ...(input.surfaceOptions === undefined ? {} : { surfaceOptions: input.surfaceOptions }),
+  };
 }
 
 /** Static world-space axis-aligned shadow caster. */
@@ -43,13 +133,26 @@ export interface SimulationObstacleBounds {
   max: Vec3;
 }
 
+export type SimulationPlaneTrackingMode =
+  | "single-axis-north-south"
+  | "dual-axis";
+
+/**
+ * Timestamp-resolved tracking for a baseline horizontal plane. The centre is
+ * a world-space pivot shared by the panel pose and all surface samples.
+ */
+export interface SimulationPlaneTracking {
+  mode: SimulationPlaneTrackingMode;
+  centreM: Vec3;
+}
+
 /**
  * A structured-clone-safe panel description. Dynamic visibility arrays are
  * indexed exactly like `SimulationKernelInput.weather`.
  */
 export type SimulationPanelWorkItem = SimulationPanelDefaults & {
   panelId: string;
-  /** World-space pose before the variant's +Y rotation is applied. */
+  /** World-space pose before the variant's rotation or plane tracking. */
   positionM?: Vec3;
   normal?: Vec3;
   /** Three.js-compatible local +Z-front orientation before +Y rotation. */
@@ -71,8 +174,9 @@ export type SimulationPanelWorkItem = SimulationPanelDefaults & {
 
 export interface SimulationVariantWorkItem {
   variantId: string;
-  panelCount: number;
-  totalPanelAreaM2: number;
+  /** Legacy discrete-panel fields. Omit all three for `continuousSurface`. */
+  panelCount?: number;
+  totalPanelAreaM2?: number;
   referenceEfficiency: number;
   /** Optional multiplier applied once to GHI, DNI and DHI. */
   irradianceScale?: number;
@@ -84,11 +188,21 @@ export interface SimulationVariantWorkItem {
   obstacleBounds?: readonly SimulationObstacleBounds[];
   /** Omit panels for a fast aggregate panel with `totalPanelAreaM2`. */
   panels?: readonly SimulationPanelWorkItem[];
+  /** Default comparison path: one continuous skin with absolute-area samples. */
+  continuousSurface?: SimulationContinuousSurfaceWorkItem;
   topology?: "series" | "parallel";
-  /** Supplying circuit options enables detailed per-panel single-diode solving. */
+  /** Circuit options configure the shared-circuit solver when it is selected. */
   circuit?: Omit<CircuitInput, "devices" | "topology"> | false;
+  /**
+   * Explicit electrical comparison contract. `shared-circuit` operates all
+   * zone curves on one circuit MPP; `independent-mppt` sums zone MPPs and feeds
+   * that DC through one optimizer/shared inverter. Omit for legacy behaviour.
+   */
+  electricalFairnessMode?: ElectricalFairnessMode;
   electrical?: InstantElectricalInput;
   inverter?: InverterConfig | false;
+  /** Optional sun tracking; mutually exclusive with the legacy +Y rotation. */
+  planeTracking?: SimulationPlaneTracking;
   rotation?: InstantSimulationInput["rotation"];
   /**
    * Midpoint quadrature density per revolution for fixed-rotation intervals.
@@ -197,6 +311,21 @@ export interface SimulationResultRow {
   inverterStatusByVariant: Record<string, InverterResult["status"] | "disabled">;
   ghiClosureByVariant: Record<string, SimulationGhiClosureDiagnostic>;
   rotationIntervalAveragedByVariant: Record<string, boolean>;
+  surfaceRegionsByVariant: Record<string, Record<string, SimulationSurfaceRegionResult>>;
+}
+
+export interface SimulationSurfaceRegionResult {
+  areaM2: number;
+  directOpticalW: number;
+  diffuseOpticalW: number;
+  groundOpticalW: number;
+  dcPowerW: number;
+  acPowerW: number;
+}
+
+export interface SimulationSurfaceRegionEnergy {
+  dcEnergyWh: number;
+  acEnergyWh: number;
 }
 
 export interface SimulationChunkEvent {
@@ -225,6 +354,11 @@ export interface SimulationCompleteEvent {
   energyWhByVariant: Record<string, number>;
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
+  /** Region energies close exactly to their parent continuous-surface variant. */
+  surfaceRegionEnergyWhByVariant: Record<
+    string,
+    Record<string, SimulationSurfaceRegionEnergy>
+  >;
   monthlyEnergy: SimulationMonthlyEnergy[];
   /** Fixed offset used for `monthlyEnergy`; zero preserves the legacy UTC contract. */
   reportingOffsetMinutes: number;
@@ -334,16 +468,15 @@ export function simulationInputFingerprint(input: SimulationKernelInput): string
   const serialized = stableSerialize(input);
   const first = fnv1a(serialized, 2_166_136_261).toString(16).padStart(8, "0");
   const second = fnv1a(serialized, 2_654_435_761).toString(16).padStart(8, "0");
-  return `sim-v${SIMULATION_WORKER_PROTOCOL_VERSION}-${first}${second}`;
+  return `sim-v${SIMULATION_WORKER_PROTOCOL_VERSION}-cache-v${SIMULATION_CACHE_VERSION}-${first}${second}`;
 }
 
 export function createSimulationRunRequest(
   requestId: string,
   input: SimulationKernelInput,
-  fingerprint = simulationInputFingerprint(input),
 ): SimulationRunRequest {
   if (!requestId.trim()) throw new TypeError("requestId가 비어 있습니다.");
-  if (!fingerprint.trim()) throw new TypeError("fingerprint가 비어 있습니다.");
+  const fingerprint = simulationInputFingerprint(input);
   return {
     protocolVersion: SIMULATION_WORKER_PROTOCOL_VERSION,
     type: "simulation/run",

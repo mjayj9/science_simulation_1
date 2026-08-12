@@ -17,7 +17,7 @@ import {
 } from "../src/lib/geometry";
 import { calculatePOA } from "../src/lib/physics/irradiance";
 
-const KINDS: ContinuousSurfaceKind[] = ["sphere", "cylinder", "cone"];
+const KINDS: ContinuousSurfaceKind[] = ["sphere", "hemisphere", "cylinder", "cone"];
 
 function unitSun(elevationDeg: number, azimuthDeg: number): Vec3 {
   const elevation = elevationDeg * Math.PI / 180;
@@ -82,6 +82,10 @@ describe("continuous PV surface dimensions and equal-area zones", () => {
     expect(sphere.radiusM).toBeCloseTo(Math.sqrt(0.05 / (4 * Math.PI)), 14);
     expect(4 * Math.PI * sphere.radiusM ** 2).toBeCloseTo(TOTAL_ACTIVE_AREA_M2, 14);
 
+    const hemisphere = continuousSurfaceDimensions("hemisphere");
+    expect(2 * Math.PI * hemisphere.radiusM ** 2).toBeCloseTo(TOTAL_ACTIVE_AREA_M2, 14);
+    expect(hemisphere.heightM).toBeCloseTo(hemisphere.radiusM, 14);
+
     const cylinder = continuousSurfaceDimensions("cylinder", { cylinderAspectRatio: 1.7 });
     expect(2 * Math.PI * cylinder.radiusM * cylinder.heightM).toBeCloseTo(TOTAL_ACTIVE_AREA_M2, 14);
     expect(cylinder.heightM / (2 * cylinder.radiusM)).toBeCloseTo(1.7, 14);
@@ -119,7 +123,7 @@ describe("continuous PV surface dimensions and equal-area zones", () => {
       expect(sample.u).toBeLessThan(1);
       expect([...sample.position, ...sample.normal, sample.areaM2].every(Number.isFinite)).toBe(true);
       expect(Math.hypot(...sample.normal)).toBeCloseTo(1, 13);
-      if (kind === "sphere" || kind === "cone") {
+      if (kind === "sphere" || kind === "hemisphere" || kind === "cone") {
         expect(Math.hypot(sample.position[0], sample.position[2])).toBeGreaterThan(1e-8);
       }
     }
@@ -139,6 +143,18 @@ describe("analytic projected area and rotation invariance", () => {
     for (const direction of [[1, 0, 0], [0, 1, 0], [0.3, 0.7, -0.2]] as Vec3[]) {
       expect(projectedAreaForDirection(sphere, direction)).toBeCloseTo(0.0125, 14);
     }
+  });
+
+  it("uses the exact upward-hemisphere projection pi R^2 (1+s_y)/2", () => {
+    const hemisphere = createContinuousSurface("hemisphere", 16);
+    const footprint = hemisphere.dimensions.footprintM2;
+    expect(projectedAreaForDirection(hemisphere, [0, 1, 0])).toBeCloseTo(footprint, 14);
+    expect(projectedAreaForDirection(hemisphere, [1, 0, 0])).toBeCloseTo(footprint / 2, 14);
+    expect(projectedAreaForDirection(hemisphere, [0, -1, 0])).toBeCloseTo(0, 14);
+    expect(projectedAreaForDirection(hemisphere, [3, 4, 0])).toBeCloseTo(
+      footprint * (1 + 4 / 5) / 2,
+      14,
+    );
   });
 
   it("uses the exact lateral-cylinder projection 2rh |s_horizontal|", () => {

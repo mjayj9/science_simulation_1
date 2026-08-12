@@ -1,10 +1,10 @@
 import {
   MAX_PANELS_PER_VARIANT,
-  MAX_VARIANTS,
   PANEL_AREA_M2,
 } from "../lib/geometry";
 import {
   DEFAULT_ELECTRICAL,
+  DEFAULT_INVERTER,
   calculateCircuit,
   calculateInverter,
   createPanelFrame,
@@ -18,12 +18,14 @@ import {
   quaternionFromAxisAngle,
   rotateAroundY,
   rotateVector,
+  scaleElectricalConfigForArea,
   singleDiodeCurve,
   simulateInstant,
   solarPosition,
   sunVector,
   type CircuitDevice,
   type InstantSimulationInput,
+  type InverterConfig,
   type InverterResult,
   type IVCurve,
   type Quaternion,
@@ -31,23 +33,30 @@ import {
 } from "../lib/physics";
 import type { WeatherPoint } from "../lib/weather";
 import {
+  CONTINUOUS_SURFACE_MODEL_VERSION,
+  MAX_SIMULATION_VARIANTS,
   SIMULATION_WORKER_PROTOCOL_VERSION,
   type SimulationChunkEvent,
   type SimulationCompleteEvent,
+  type SimulationContinuousSurfaceSample,
   type SimulationGhiClosureDiagnostic,
   type SimulationKernelInput,
   type SimulationMonthlyEnergy,
   type SimulationPanelWorkItem,
+  type SimulationPlaneTracking,
   type SimulationProgressEvent,
   type SimulationResultRow,
   type SimulationRunRequest,
   type SimulationObstacleBounds,
   type SimulationSurfaceSample,
+  type SimulationSurfaceRegionResult,
   type SimulationVariantWorkItem,
 } from "./protocol";
 
 const MAX_SURFACE_SAMPLES_PER_ZONE = 256;
+const MAX_CONTINUOUS_SURFACE_SAMPLES = 32_768;
 const MAX_OBSTACLE_BOUNDS_PER_VARIANT = 256;
+const WORLD_UP: Readonly<Vec3> = Object.freeze({ x: 0, y: 1, z: 0 });
 
 export class SimulationCancelledError extends Error {
   constructor() {
@@ -83,6 +92,8 @@ export interface SimulationPhysicsStepResult {
   ghiClosure: SimulationGhiClosureDiagnostic;
   /** True when power is an angular midpoint average over [t, t + dt]. */
   rotationIntervalAveraged: boolean;
+  /** Reporting regions only; never electrical strings or normalization units. */
+  surfaceRegions?: Record<string, SimulationSurfaceRegionResult>;
 }
 
 /** Returning a number remains supported as a DC=AC test/custom step. */
@@ -96,7 +107,7 @@ export type SimulationStepFunction = (
  */
 export const computeGrossDcStep: SimulationStepFunction = ({ variant, weather }) =>
   Math.max(0, weather.ghiWm2) *
-  variant.totalPanelAreaM2 *
+  (variant.continuousSurface?.activeAreaM2 ?? variant.totalPanelAreaM2 ?? 0) *
   variant.referenceEfficiency *
   (variant.irradianceScale ?? 1);
 
@@ -145,13 +156,95 @@ function validateDynamicSeries(
   });
 }
 
+function assertPositiveFinite(value: number, label: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${label} must be finite and greater than zero.`);
+  }
+}
+
+function validateContinuousSurfaceVariant(
+  variant: SimulationVariantWorkItem,
+): void {
+  const surface = variant.continuousSurface;
+  if (!surface) return;
+  if (
+    variant.panelCount !== undefined ||
+    variant.totalPanelAreaM2 !== undefined ||
+    variant.panels !== undefined ||
+    variant.topology !== undefined ||
+    variant.circuit !== undefined ||
+    variant.electricalFairnessMode !== undefined
+  ) {
+    throw new RangeError(
+      `${variant.variantId}.continuousSurface cannot include discrete panel/count/circuit fields.`,
+    );
+  }
+  if (surface.modelVersion !== CONTINUOUS_SURFACE_MODEL_VERSION) {
+    throw new RangeError(`${variant.variantId}.continuousSurface.modelVersion is not supported.`);
+  }
+  if (!surface.meshVersion.trim() || surface.meshVersion.length > 200) {
+    throw new RangeError(`${variant.variantId}.continuousSurface.meshVersion is invalid.`);
+  }
+  if (surface.electricalModel !== "local-mpp-area-integral") {
+    throw new RangeError(`${variant.variantId}.continuousSurface.electricalModel is not supported.`);
+  }
+  assertPositiveFinite(surface.landAreaM2, `${variant.variantId}.continuousSurface.landAreaM2`);
+  assertPositiveFinite(surface.activeAreaM2, `${variant.variantId}.continuousSurface.activeAreaM2`);
+  if (!Number.isFinite(surface.heightM) || surface.heightM < 0) {
+    throw new RangeError(`${variant.variantId}.continuousSurface.heightM is invalid.`);
+  }
+  if (
+    surface.tiltDeg !== undefined &&
+    (!Number.isFinite(surface.tiltDeg) || surface.tiltDeg < 0 || surface.tiltDeg > 75)
+  ) {
+    throw new RangeError(`${variant.variantId}.continuousSurface.tiltDeg must be in 0-75 degrees.`);
+  }
+  if (!Number.isInteger(surface.azimuthSamples) || surface.azimuthSamples < 1) {
+    throw new RangeError(`${variant.variantId}.continuousSurface.azimuthSamples is invalid.`);
+  }
+  if (
+    !Array.isArray(surface.samples) ||
+    surface.samples.length < 1 ||
+    surface.samples.length > MAX_CONTINUOUS_SURFACE_SAMPLES ||
+    surface.integrationSampleCount !== surface.samples.length
+  ) {
+    throw new RangeError(
+      `${variant.variantId}.continuousSurface samples must match integrationSampleCount and contain 1-${MAX_CONTINUOUS_SURFACE_SAMPLES} points.`,
+    );
+  }
+  let integratedAreaM2 = 0;
+  surface.samples.forEach((sample, sampleIndex) => {
+    const label = `${variant.variantId}.continuousSurface.samples[${sampleIndex}]`;
+    assertVec3(sample.positionM, `${label}.positionM`, true);
+    assertVec3(sample.normal, `${label}.normal`);
+    assertPositiveFinite(sample.areaM2, `${label}.areaM2`);
+    if (sample.regionId !== undefined && (!sample.regionId.trim() || sample.regionId.length > 100)) {
+      throw new RangeError(`${label}.regionId is invalid.`);
+    }
+    integratedAreaM2 += sample.areaM2;
+  });
+  const areaTolerance = Math.max(1e-10, surface.activeAreaM2 * 1e-8);
+  if (Math.abs(integratedAreaM2 - surface.activeAreaM2) > areaTolerance) {
+    throw new RangeError(
+      `${variant.variantId}.continuousSurface sample area sum must equal activeAreaM2.`,
+    );
+  }
+  const options = surface.surfaceOptions;
+  assertUnitFraction(options?.visibility, `${variant.variantId}.continuousSurface.visibility`);
+  assertUnitFraction(options?.diffuseVisibility, `${variant.variantId}.continuousSurface.diffuseVisibility`);
+  assertUnitFraction(options?.groundVisibility, `${variant.variantId}.continuousSurface.groundVisibility`);
+  assertUnitFraction(options?.albedo, `${variant.variantId}.continuousSurface.albedo`);
+  assertUnitFraction(options?.soilingLossFraction, `${variant.variantId}.continuousSurface.soilingLossFraction`);
+  assertVec3(options?.sampleAxisU, `${variant.variantId}.continuousSurface.sampleAxisU`);
+}
+
 export function validateKernelInput(input: SimulationKernelInput): SimulationKernelInput {
   if (
     !Array.isArray(input.variants) ||
     input.variants.length < 1 ||
-    input.variants.length > MAX_VARIANTS
+    input.variants.length > MAX_SIMULATION_VARIANTS
   ) {
-    throw new RangeError(`비교 형상은 1~${MAX_VARIANTS}개여야 합니다.`);
+    throw new RangeError(`워커 계산 variant는 1~${MAX_SIMULATION_VARIANTS}개여야 합니다.`);
   }
   if (!Array.isArray(input.weather) || input.weather.length < 1) {
     throw new RangeError("워커 기상 시계열이 비어 있습니다.");
@@ -164,22 +257,25 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
       throw new Error("워커 형상 ID가 비어 있거나 중복되었습니다.");
     }
     variantIds.add(variant.variantId);
-    if (
-      !Number.isInteger(variant.panelCount) ||
-      variant.panelCount < 1 ||
-      variant.panelCount > MAX_PANELS_PER_VARIANT
-    ) {
-      throw new RangeError(`형상별 패널 수는 1~${MAX_PANELS_PER_VARIANT}개여야 합니다.`);
-    }
-    totalPanels += variant.panelCount;
-    const expectedArea = variant.panelCount * PANEL_AREA_M2;
-    if (
-      !Number.isFinite(variant.totalPanelAreaM2) ||
-      Math.abs(variant.totalPanelAreaM2 - expectedArea) > 1e-10
-    ) {
-      throw new RangeError(
-        `${variant.variantId}의 패널 면적은 0.0025 m² × 패널 수와 같아야 합니다.`,
-      );
+    validateContinuousSurfaceVariant(variant);
+    if (!variant.continuousSurface) {
+      if (
+        !Number.isInteger(variant.panelCount) ||
+        (variant.panelCount ?? 0) < 1 ||
+        (variant.panelCount ?? 0) > MAX_PANELS_PER_VARIANT
+      ) {
+        throw new RangeError(`형상별 패널 수는 1~${MAX_PANELS_PER_VARIANT}개여야 합니다.`);
+      }
+      totalPanels += variant.panelCount ?? 0;
+      const expectedArea = (variant.panelCount ?? 0) * PANEL_AREA_M2;
+      if (
+        !Number.isFinite(variant.totalPanelAreaM2) ||
+        Math.abs((variant.totalPanelAreaM2 ?? 0) - expectedArea) > 1e-10
+      ) {
+        throw new RangeError(
+          `${variant.variantId}의 패널 면적은 0.0025 m² × 패널 수와 같아야 합니다.`,
+        );
+      }
     }
     if (
       !Number.isFinite(variant.referenceEfficiency) ||
@@ -219,6 +315,23 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
         }
       });
     }
+    if (variant.planeTracking !== undefined) {
+      if (
+        variant.planeTracking.mode !== "single-axis-north-south" &&
+        variant.planeTracking.mode !== "dual-axis"
+      ) {
+        throw new RangeError(`${variant.variantId}.planeTracking.mode is not supported.`);
+      }
+      if (!variant.planeTracking.centreM) {
+        throw new RangeError(`${variant.variantId}.planeTracking.centreM is required.`);
+      }
+      assertVec3(variant.planeTracking.centreM, `${variant.variantId}.planeTracking.centreM`, true);
+      if (variant.rotation !== undefined) {
+        throw new RangeError(
+          `${variant.variantId}.planeTracking and rotation are mutually exclusive.`,
+        );
+      }
+    }
     if (
       variant.rotationPhaseSamples !== undefined &&
       (!Number.isInteger(variant.rotationPhaseSamples) ||
@@ -252,9 +365,44 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
         timestampMilliseconds(variant.rotation.referenceTimestamp);
       }
     }
+    if (
+      variant.electricalFairnessMode !== undefined &&
+      variant.electricalFairnessMode !== "shared-circuit" &&
+      variant.electricalFairnessMode !== "independent-mppt"
+    ) {
+      throw new RangeError(
+        `${variant.variantId}.electricalFairnessMode is not supported.`,
+      );
+    }
+    if (
+      variant.electricalFairnessMode === "independent-mppt" &&
+      variant.circuit !== undefined &&
+      variant.circuit !== false
+    ) {
+      throw new RangeError(
+        `${variant.variantId}.independent-mppt cannot include shared circuit options.`,
+      );
+    }
+    if (
+      variant.electricalFairnessMode === "shared-circuit" &&
+      variant.circuit === false
+    ) {
+      throw new RangeError(
+        `${variant.variantId}.shared-circuit cannot disable the circuit.`,
+      );
+    }
+    if (
+      variant.electricalFairnessMode !== undefined &&
+      (variant.panelCount ?? 0) > 1 &&
+      variant.panels === undefined
+    ) {
+      throw new RangeError(
+        `${variant.variantId}.electricalFairnessMode requires explicit per-zone panels.`,
+      );
+    }
 
     if (variant.panels !== undefined) {
-      if (variant.panels.length !== variant.panelCount) {
+      if (variant.panels.length !== (variant.panelCount ?? 0)) {
         throw new RangeError(`${variant.variantId}.panels 길이는 panelCount와 같아야 합니다.`);
       }
       const panelIds = new Set<string>();
@@ -324,16 +472,40 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
           true,
         );
       });
-      if (Math.abs(explicitArea - variant.totalPanelAreaM2) > 1e-10) {
+      if (Math.abs(explicitArea - (variant.totalPanelAreaM2 ?? 0)) > 1e-10) {
         throw new RangeError(`${variant.variantId}의 명시적 패널 면적 합계가 totalPanelAreaM2와 다릅니다.`);
       }
     }
-    resolvedPanels(input, variant).forEach((panel) => {
-      canonicalPanelPose(panel);
+    if (variant.continuousSurface && variant.planeTracking) {
+      variant.continuousSurface.samples.forEach((sample, sampleIndex) => {
+        if (dot(normalize(sample.normal), WORLD_UP) < 1 - POSE_ALIGNMENT_TOLERANCE) {
+          throw new RangeError(
+            `${variant.variantId}.continuousSurface.samples[${sampleIndex}].normal must be horizontal when planeTracking is enabled.`,
+          );
+        }
+      });
+    }
+    if (!variant.continuousSurface) resolvedPanels(input, variant).forEach((panel) => {
+      const pose = canonicalPanelPose(panel);
+      if (variant.planeTracking) {
+        if (dot(pose.normal, WORLD_UP) < 1 - POSE_ALIGNMENT_TOLERANCE) {
+          throw new RangeError(
+            `${panel.panelId} must have a horizontal baseline normal when planeTracking is enabled.`,
+          );
+        }
+        panel.surfaceSamples?.forEach((sample, sampleIndex) => {
+          if (dot(normalize(sample.normal), WORLD_UP) < 1 - POSE_ALIGNMENT_TOLERANCE) {
+            throw new RangeError(
+              `${panel.panelId}.surfaceSamples[${sampleIndex}].normal must be horizontal when planeTracking is enabled.`,
+            );
+          }
+        });
+      }
     });
   });
-  if (totalPanels > 100) {
-    throw new RangeError("워커 입력의 전체 패널 수는 최대 100개입니다.");
+  const maximumTotalPanels = MAX_SIMULATION_VARIANTS * MAX_PANELS_PER_VARIANT;
+  if (totalPanels > maximumTotalPanels) {
+    throw new RangeError(`워커 입력의 전체 패널 수는 최대 ${maximumTotalPanels}개입니다.`);
   }
 
   let previous = -Infinity;
@@ -409,6 +581,9 @@ function resolvedPanels(
   input: SimulationKernelInput,
   variant: SimulationVariantWorkItem,
 ): SimulationPanelWorkItem[] {
+  if (variant.continuousSurface) {
+    throw new TypeError("A continuous surface cannot be resolved as discrete panels.");
+  }
   const defaults = input.physics?.panelDefaults ?? {};
   if (!variant.panels) {
     return [
@@ -416,7 +591,7 @@ function resolvedPanels(
         ...defaults,
         panelId: `${variant.variantId}:aggregate`,
         normal: { x: 0, y: 1, z: 0 },
-        areaM2: variant.totalPanelAreaM2,
+        areaM2: variant.totalPanelAreaM2 ?? PANEL_AREA_M2,
         efficiency: variant.referenceEfficiency,
       },
     ];
@@ -599,9 +774,76 @@ export function rotatePanelPoseAroundY(
   };
 }
 
-interface RotatedSurfaceSample extends SimulationSurfaceSample {
+/**
+ * Resolves the normal prescribed by the annual plane tracker. A non-positive
+ * solar Y component is night (or the horizon), so every mode deterministically
+ * returns the horizontal stow pose.
+ */
+export function planeTrackingNormal(
+  mode: SimulationPlaneTracking["mode"],
+  sunDirection: Vec3,
+): Vec3 {
+  const sun = normalize(sunDirection);
+  if (sun.y <= 0) return { ...WORLD_UP };
+  if (mode === "dual-axis") return sun;
+  return normalize({ x: sun.x, y: sun.y, z: 0 });
+}
+
+function rotatePointAroundPivot(point: Vec3, pivot: Vec3, quaternion: Quaternion): Vec3 {
+  const rotated = rotateVector(quaternion, {
+    x: point.x - pivot.x,
+    y: point.y - pivot.y,
+    z: point.z - pivot.z,
+  });
+  return {
+    x: pivot.x + rotated.x,
+    y: pivot.y + rotated.y,
+    z: pivot.z + rotated.z,
+  };
+}
+
+/** Applies the tracker as one rigid world-space transform about `centreM`. */
+export function applyPlaneTrackingToPanelPose(
+  panel: SimulationPanelWorkItem,
+  tracking: SimulationPlaneTracking,
+  sunDirection: Vec3,
+): RotatedPanelPose {
+  const base = canonicalPanelPose(panel);
+  const targetNormal = planeTrackingNormal(tracking.mode, sunDirection);
+  const trackerQuaternion = quaternionBetween(WORLD_UP, targetNormal);
+  return {
+    positionM: rotatePointAroundPivot(
+      panel.positionM ?? { x: 0, y: 0, z: 0 },
+      tracking.centreM,
+      trackerQuaternion,
+    ),
+    normal: normalize(rotateVector(trackerQuaternion, base.normal)),
+    quaternion: normalizeQuaternion(multiplyQuaternion(trackerQuaternion, base.quaternion)),
+    sampleAxisU: normalize(rotateVector(trackerQuaternion, base.sampleAxisU)),
+    sampleAxisV: normalize(rotateVector(trackerQuaternion, base.sampleAxisV)),
+    angleRad: 0,
+  };
+}
+
+export interface RotatedSurfaceSample extends SimulationSurfaceSample {
   /** Normalized relative area within the electrical zone. */
   areaWeight: number;
+}
+
+/** Applies the exact same plane-tracker transform and pivot to every sample. */
+export function applyPlaneTrackingToSurfaceSamples(
+  samples: readonly SimulationSurfaceSample[],
+  tracking: SimulationPlaneTracking,
+  sunDirection: Vec3,
+): RotatedSurfaceSample[] {
+  const targetNormal = planeTrackingNormal(tracking.mode, sunDirection);
+  const trackerQuaternion = quaternionBetween(WORLD_UP, targetNormal);
+  const totalAreaWeight = samples.reduce((sum, sample) => sum + sample.areaWeight, 0);
+  return samples.map((sample) => ({
+    positionM: rotatePointAroundPivot(sample.positionM, tracking.centreM, trackerQuaternion),
+    normal: normalize(rotateVector(trackerQuaternion, sample.normal)),
+    areaWeight: sample.areaWeight / totalAreaWeight,
+  }));
 }
 
 function rotateSurfaceSamplesAroundY(
@@ -780,31 +1022,241 @@ interface ZonePhysicsResult {
   ghiClosure: ReturnType<typeof simulateInstant>["irradiance"]["ghiClosure"];
 }
 
+/** Matches the optimizer bus-voltage contract used by continuous-surface Mode B. */
+function optimizerBusVoltage(
+  zones: readonly ZonePhysicsResult[],
+  inverter: InverterConfig,
+): number {
+  const natural = zones.reduce((sum, zone) => sum + zone.dcVoltageV, 0);
+  const lower = Math.max(1e-6, inverter.mpptMinVoltageV);
+  const upper = Math.max(
+    lower,
+    Math.min(inverter.mpptMaxVoltageV, inverter.maxDcVoltageV),
+  );
+  return Math.min(upper, Math.max(lower, natural || lower));
+}
+
+function idealContinuousBusVoltage(
+  dcPowerW: number,
+  vmpV: number,
+  inverter: InverterConfig,
+): number {
+  const lower = Math.max(1e-6, inverter.mpptMinVoltageV);
+  const upper = Math.max(
+    lower,
+    Math.min(inverter.mpptMaxVoltageV, inverter.maxDcVoltageV),
+  );
+  // The default comparison assumes ideal local DC aggregation. Select a bus
+  // voltage without using a panel/string count and avoid an artificial current
+  // bottleneck whenever the configured inverter range permits it.
+  const currentCompatible = inverter.maxInputCurrentA > 0
+    ? dcPowerW / inverter.maxInputCurrentA
+    : upper;
+  return Math.min(upper, Math.max(lower, vmpV, currentCompatible));
+}
+
+function transformedContinuousSample(
+  sample: SimulationContinuousSurfaceSample,
+  angleRad: number,
+  tracking: SimulationPlaneTracking | undefined,
+  sunDirection: Vec3,
+): SimulationContinuousSurfaceSample {
+  if (!tracking) {
+    return {
+      ...sample,
+      positionM: rotateAroundY(sample.positionM, angleRad),
+      normal: normalize(rotateAroundY(sample.normal, angleRad)),
+    };
+  }
+  const targetNormal = planeTrackingNormal(tracking.mode, sunDirection);
+  const trackerQuaternion = quaternionBetween(WORLD_UP, targetNormal);
+  return {
+    ...sample,
+    positionM: rotatePointAroundPivot(sample.positionM, tracking.centreM, trackerQuaternion),
+    normal: normalize(rotateVector(trackerQuaternion, sample.normal)),
+  };
+}
+
+function continuousRegionId(
+  shape: NonNullable<SimulationVariantWorkItem["continuousSurface"]>["shape"],
+  sample: SimulationContinuousSurfaceSample,
+): string {
+  if (sample.regionId) return sample.regionId;
+  if (shape === "cylinder") return normalize(sample.normal).y > 0.5 ? "top" : "lateral";
+  return "surface";
+}
+
+function computeContinuousSurfaceStepAtAngle(
+  { input, variant, weather, stepIndex, isCancelled }: SimulationStepContext,
+  angleRad: number,
+): SimulationPhysicsStepResult {
+  const surface = variant.continuousSurface;
+  if (!surface) throw new TypeError("continuousSurface is required.");
+  const tracking = variant.planeTracking;
+  const needsSunDirection = Boolean(tracking || variant.obstacleBounds?.length);
+  const sunDirection = needsSunDirection
+    ? obstacleSunDirection(input, weather)
+    : { x: 0, y: 1, z: 0 };
+  const irradiance = scaledIrradiance(variant, weather, stepIndex);
+  const simulationWeather = {
+    ...input.physics?.weather,
+    ambientTemperatureC: weather.ambientC,
+    referenceWindSpeedMS: weather.windSpeedMs,
+  };
+  const surfaceOptions = {
+    ...input.physics?.panelDefaults,
+    ...surface.surfaceOptions,
+  };
+  const electrical = {
+    ...input.physics?.electrical,
+    ...variant.electrical,
+    mode: "simple" as const,
+  };
+  const electricalConfig = electrical.config ?? DEFAULT_ELECTRICAL;
+  const regions: Record<string, SimulationSurfaceRegionResult> = {};
+  let dcPowerW = 0;
+  let poaAreaW = 0;
+  let temperatureAreaC = 0;
+  let closure: ReturnType<typeof simulateInstant>["irradiance"]["ghiClosure"] | undefined;
+
+  for (const baseSample of surface.samples) {
+    if (isCancelled?.()) throw new SimulationCancelledError();
+    const sample = transformedContinuousSample(baseSample, angleRad, tracking, sunDirection);
+    const baseVisibility = surfaceOptions.visibility ?? 1;
+    const visibility = variant.obstacleBounds?.length
+      ? baseVisibility * obstacleVisibilityAtPoint(
+          sample.positionM,
+          sunDirection,
+          variant.obstacleBounds,
+        )
+      : baseVisibility;
+    const result = simulateInstant({
+      timestamp: weather.timeUtcMs,
+      location: input.physics?.location,
+      solarOverride: input.physics?.solarOverride,
+      irradiance,
+      panel: {
+        ...surfaceOptions,
+        normal: sample.normal,
+        areaM2: sample.areaM2,
+        efficiency: variant.referenceEfficiency,
+        heightM: surfaceOptions.heightM ?? Math.max(0.01, sample.positionM.y),
+        visibility,
+      },
+      weather: simulationWeather,
+      // ηPV(T) × POA × dA is the local ideal-MPP integrand. There is no
+      // per-zone curve, series current, bypass diode, or sample normalizer.
+      electrical,
+      inverter: false,
+      thermal: input.physics?.thermal,
+    });
+    closure ??= result.irradiance.ghiClosure;
+    dcPowerW += result.dcPowerW;
+    poaAreaW += result.poa.totalWm2 * sample.areaM2;
+    temperatureAreaC += result.moduleTemperatureC * sample.areaM2;
+    const regionId = continuousRegionId(surface.shape, sample);
+    const region = regions[regionId] ??= {
+      areaM2: 0,
+      directOpticalW: 0,
+      diffuseOpticalW: 0,
+      groundOpticalW: 0,
+      dcPowerW: 0,
+      acPowerW: 0,
+    };
+    region.areaM2 += sample.areaM2;
+    region.directOpticalW += result.poa.directPoaWm2 * sample.areaM2;
+    region.diffuseOpticalW += result.poa.diffusePoaWm2 * sample.areaM2;
+    region.groundOpticalW += result.poa.groundPoaWm2 * sample.areaM2;
+    region.dcPowerW += result.dcPowerW;
+  }
+
+  const inverterSelection = variant.inverter !== undefined
+    ? variant.inverter
+    : input.physics?.inverter;
+  const inverterConfig = inverterSelection === false
+    ? undefined
+    : inverterSelection ?? DEFAULT_INVERTER;
+  const dcVoltageV = inverterConfig
+    ? idealContinuousBusVoltage(dcPowerW, electricalConfig.vmpV, inverterConfig)
+    : Math.max(0, electricalConfig.vmpV);
+  const dcCurrentA = dcVoltageV > 0 ? dcPowerW / dcVoltageV : 0;
+  const inverter = inverterConfig
+    ? calculateInverter({ dcPowerW, dcVoltageV, dcCurrentA, config: inverterConfig })
+    : undefined;
+  const reportedDcPowerW = inverter?.acceptedDcPowerW ?? dcPowerW;
+  const reportedAcPowerW = inverter?.acPowerW ?? dcPowerW;
+  const dcScale = dcPowerW > 0 ? reportedDcPowerW / dcPowerW : 0;
+  const acScale = dcPowerW > 0 ? reportedAcPowerW / dcPowerW : 0;
+  Object.values(regions).forEach((region) => {
+    const localDcPowerW = region.dcPowerW;
+    region.dcPowerW = localDcPowerW * dcScale;
+    region.acPowerW = localDcPowerW * acScale;
+  });
+  const fallbackClosure = closure ?? {
+    residualWm2: 0,
+    relativeResidual: 0,
+    toleranceWm2: 0,
+    isClosed: true,
+  };
+  return {
+    dcPowerW: reportedDcPowerW,
+    acPowerW: reportedAcPowerW,
+    poaWm2: poaAreaW / surface.activeAreaM2,
+    moduleTemperatureC: temperatureAreaC / surface.activeAreaM2,
+    mismatchLossFraction: 0,
+    bypassActiveCount: 0,
+    inverterStatus: inverter?.status ?? "disabled",
+    ghiClosure: {
+      residualWm2: fallbackClosure.residualWm2,
+      relativeResidual: fallbackClosure.relativeResidual,
+      toleranceWm2: fallbackClosure.toleranceWm2,
+      isClosed: fallbackClosure.isClosed,
+      policy: "preserve-source-and-warn",
+    },
+    rotationIntervalAveraged: false,
+    surfaceRegions: regions,
+  };
+}
+
 function computePhysicsStepAtAngle(
   { input, variant, weather, stepIndex, isCancelled }: SimulationStepContext,
   angleRad: number,
 ): SimulationPhysicsStepResult {
+  if (variant.continuousSurface) {
+    return computeContinuousSurfaceStepAtAngle(
+      { input, variant, weather, stepIndex, isCancelled },
+      angleRad,
+    );
+  }
   const panels = resolvedPanels(input, variant);
-  const detailedCircuit =
+  const legacySharedCircuit =
     panels.length > 1 && variant.circuit !== undefined && variant.circuit !== false;
+  const useSharedCircuit = variant.electricalFairnessMode === "shared-circuit" || (
+    variant.electricalFairnessMode === undefined && legacySharedCircuit
+  );
+  const useDetailedElectrical = useSharedCircuit ||
+    variant.electricalFairnessMode === "independent-mppt";
   const panelResults: ZonePhysicsResult[] = [];
   const obstacleBounds = variant.obstacleBounds?.length
     ? variant.obstacleBounds
     : undefined;
-  const sunDirection = obstacleBounds
+  const tracking = variant.planeTracking;
+  const sunDirection = obstacleBounds || tracking
     ? obstacleSunDirection(input, weather)
     : undefined;
 
   for (const panel of panels) {
     if (isCancelled?.()) throw new SimulationCancelledError();
-    const pose = rotatePanelPoseAroundY(panel, angleRad);
+    const pose = tracking
+      ? applyPlaneTrackingToPanelPose(panel, tracking, sunDirection!)
+      : rotatePanelPoseAroundY(panel, angleRad);
     const areaM2 = panel.areaM2 ?? PANEL_AREA_M2;
     const efficiency = panel.efficiency ?? variant.referenceEfficiency;
     const electrical: NonNullable<InstantSimulationInput["electrical"]> = {
       ...input.physics?.electrical,
       ...variant.electrical,
       ...panel.electrical,
-      ...(detailedCircuit ? { mode: "single-diode" as const } : {}),
+      ...(useDetailedElectrical ? { mode: "single-diode" as const } : {}),
     };
     const sharedPanelInput = {
       efficiency,
@@ -864,7 +1316,9 @@ function computePhysicsStepAtAngle(
       continue;
     }
 
-    const surfaceSamples = rotateSurfaceSamplesAroundY(panel.surfaceSamples, angleRad);
+    const surfaceSamples = tracking
+      ? applyPlaneTrackingToSurfaceSamples(panel.surfaceSamples, tracking, sunDirection!)
+      : rotateSurfaceSamplesAroundY(panel.surfaceSamples, angleRad);
     const sampleResults = surfaceSamples.map((sample) => {
       if (isCancelled?.()) throw new SimulationCancelledError();
       return {
@@ -904,10 +1358,12 @@ function computePhysicsStepAtAngle(
     const averageEffectivePoaWm2 = average((result) => result.effectivePoaWm2);
     const averageModuleTemperatureC = average((result) => result.moduleTemperatureC);
     const baseElectrical = electrical.config ?? DEFAULT_ELECTRICAL;
+    const zoneElectrical = scaleElectricalConfigForArea(baseElectrical, areaM2);
     const zoneCurve = singleDiodeCurve({
       irradianceWm2: sampleResults[0].result.solar.isDaylight ? averageEffectivePoaWm2 : 0,
       cellTemperatureC: averageModuleTemperatureC,
-      config: { ...baseElectrical, areaM2, efficiency },
+      config: { ...zoneElectrical, efficiency },
+      points: 64,
     });
     panelResults.push({
       panelId: panel.panelId,
@@ -923,13 +1379,19 @@ function computePhysicsStepAtAngle(
   }
 
   const topology = variant.topology ?? "series";
+  const inverterSelection = variant.inverter !== undefined
+    ? variant.inverter
+    : input.physics?.inverter;
+  const optimizerInverter = inverterSelection === false
+    ? undefined
+    : inverterSelection ?? DEFAULT_INVERTER;
   let dcPowerW: number;
   let dcVoltageV: number;
   let dcCurrentA: number;
   let mismatchLossFraction = 0;
   let bypassActiveCount = 0;
 
-  if (detailedCircuit) {
+  if (useSharedCircuit) {
     const devices: CircuitDevice[] = panelResults.map((result) => {
       const zeroPoint = { voltageV: 0, currentA: 0, powerW: 0 };
       return {
@@ -953,10 +1415,14 @@ function computePhysicsStepAtAngle(
     bypassActiveCount = circuit.deviceStates.filter((state) => state.bypassConducting).length;
   } else {
     dcPowerW = panelResults.reduce((sum, result) => sum + result.dcPowerW, 0);
-    if (panels.length === 1 && !variant.panels) {
+    if (variant.electricalFairnessMode === "independent-mppt") {
+      dcVoltageV = optimizerInverter
+        ? optimizerBusVoltage(panelResults, optimizerInverter)
+        : panelResults.reduce((sum, result) => sum + result.dcVoltageV, 0);
+    } else if (panels.length === 1 && !variant.panels) {
       const representative = panelResults[0];
       dcVoltageV = topology === "series"
-        ? representative.dcVoltageV * variant.panelCount
+        ? representative.dcVoltageV * (variant.panelCount ?? 1)
         : representative.dcVoltageV;
     } else {
       dcVoltageV = topology === "series"
@@ -966,9 +1432,6 @@ function computePhysicsStepAtAngle(
     dcCurrentA = dcVoltageV > 0 ? dcPowerW / dcVoltageV : 0;
   }
 
-  const inverterSelection = variant.inverter !== undefined
-    ? variant.inverter
-    : input.physics?.inverter;
   const inverter = inverterSelection === false
     ? undefined
     : calculateInverter({
@@ -977,6 +1440,9 @@ function computePhysicsStepAtAngle(
         dcCurrentA,
         ...(inverterSelection ? { config: inverterSelection } : {}),
       });
+  const reportedDcPowerW = variant.electricalFairnessMode !== undefined && inverter
+    ? inverter.acceptedDcPowerW
+    : dcPowerW;
   const totalArea = panelResults.reduce((sum, result) => sum + result.areaM2, 0);
   const weighted = (selector: (result: (typeof panelResults)[number]) => number) =>
     totalArea > 0
@@ -985,8 +1451,8 @@ function computePhysicsStepAtAngle(
   const closure = panelResults[0].ghiClosure;
 
   return {
-    dcPowerW,
-    acPowerW: inverter?.acPowerW ?? dcPowerW,
+    dcPowerW: reportedDcPowerW,
+    acPowerW: inverter?.acPowerW ?? reportedDcPowerW,
     poaWm2: weighted((result) => result.poaWm2),
     moduleTemperatureC: weighted((result) => result.moduleTemperatureC),
     mismatchLossFraction,
@@ -1000,6 +1466,7 @@ function computePhysicsStepAtAngle(
       policy: "preserve-source-and-warn",
     },
     rotationIntervalAveraged: false,
+    surfaceRegions: {},
   };
 }
 
@@ -1020,6 +1487,22 @@ function averagePhaseResults(
     .sort(([leftStatus, leftCount], [rightStatus, rightCount]) =>
       rightCount - leftCount || leftStatus.localeCompare(rightStatus),
     )[0][0];
+  const regionIds = new Set(results.flatMap((result) => Object.keys(result.surfaceRegions ?? {})));
+  const surfaceRegions = Object.fromEntries([...regionIds].map((regionId) => {
+    const entries = results.map((result) => result.surfaceRegions?.[regionId]);
+    const weighted = (field: keyof SimulationSurfaceRegionResult) => entries.reduce(
+      (sum, entry, index) => sum + (entry?.[field] ?? 0) * samples[index].weight,
+      0,
+    );
+    return [regionId, {
+      areaM2: weighted("areaM2"),
+      directOpticalW: weighted("directOpticalW"),
+      diffuseOpticalW: weighted("diffuseOpticalW"),
+      groundOpticalW: weighted("groundOpticalW"),
+      dcPowerW: weighted("dcPowerW"),
+      acPowerW: weighted("acPowerW"),
+    }];
+  }));
   return {
     dcPowerW: average((result) => result.dcPowerW),
     acPowerW: average((result) => result.acPowerW),
@@ -1038,6 +1521,7 @@ function averagePhaseResults(
         : "preserve-source-and-warn",
     },
     rotationIntervalAveraged: true,
+    surfaceRegions,
   };
 }
 
@@ -1084,6 +1568,7 @@ function normalizedStepResult(
           policy: "not-evaluated" as const,
         },
         rotationIntervalAveraged: false,
+        surfaceRegions: {},
       }
     : {
         ...result,
@@ -1095,6 +1580,7 @@ function normalizedStepResult(
           policy: "not-evaluated" as const,
         },
         rotationIntervalAveraged: result.rotationIntervalAveraged ?? false,
+        surfaceRegions: result.surfaceRegions ?? {},
       };
   const numericValues = [
     normalized.dcPowerW,
@@ -1119,6 +1605,28 @@ function normalizedStepResult(
     normalized.ghiClosure.toleranceWm2 < 0
   ) {
     throw new Error("워커 물리 단계가 유효하지 않은 값을 반환했습니다.");
+  }
+  const surfaceRegions = normalized.surfaceRegions ?? {};
+  const regionValues = Object.values(surfaceRegions);
+  regionValues.forEach((region) => {
+    if (
+      Object.values(region).some((value) => !Number.isFinite(value) || value < 0) ||
+      !(region.areaM2 > 0)
+    ) {
+      throw new Error("워커 연속표면 영역 단계가 유효하지 않은 값을 반환했습니다.");
+    }
+  });
+  if (regionValues.length > 0) {
+    const regionDcW = regionValues.reduce((sum, region) => sum + region.dcPowerW, 0);
+    const regionAcW = regionValues.reduce((sum, region) => sum + region.acPowerW, 0);
+    const toleranceDc = Math.max(1e-10, normalized.dcPowerW * 1e-8);
+    const toleranceAc = Math.max(1e-10, normalized.acPowerW * 1e-8);
+    if (
+      Math.abs(regionDcW - normalized.dcPowerW) > toleranceDc ||
+      Math.abs(regionAcW - normalized.acPowerW) > toleranceAc
+    ) {
+      throw new Error("워커 연속표면 영역 출력 합이 전체 출력과 다릅니다.");
+    }
   }
   return normalized;
 }
@@ -1151,6 +1659,7 @@ function addEnergySegment(
   current: Record<string, SimulationPhysicsStepResult>,
   totalDc: Record<string, number>,
   totalAc: Record<string, number>,
+  regionTotals: SimulationCompleteEvent["surfaceRegionEnergyWhByVariant"],
   reportingOffsetMinutes: number,
 ): void {
   const durationMs = endMs - startMs;
@@ -1193,6 +1702,30 @@ function addEnergySegment(
       bucket.acEnergyWhByVariant[variantId] += acEnergy;
       totalDc[variantId] += dcEnergy;
       totalAc[variantId] += acEnergy;
+      const regionIds = new Set([
+        ...Object.keys(previousStep.surfaceRegions ?? {}),
+        ...Object.keys(currentStep.surfaceRegions ?? {}),
+      ]);
+      const variantRegions = regionTotals[variantId] ??= {};
+      for (const regionId of regionIds) {
+        const previousRegion = previousStep.surfaceRegions?.[regionId];
+        const currentRegion = currentStep.surfaceRegions?.[regionId];
+        const regionDcStart = previousStep.rotationIntervalAveraged
+          ? previousRegion?.dcPowerW ?? 0
+          : interpolate(previousRegion?.dcPowerW ?? 0, currentRegion?.dcPowerW ?? 0, startFraction);
+        const regionDcEnd = previousStep.rotationIntervalAveraged
+          ? previousRegion?.dcPowerW ?? 0
+          : interpolate(previousRegion?.dcPowerW ?? 0, currentRegion?.dcPowerW ?? 0, endFraction);
+        const regionAcStart = previousStep.rotationIntervalAveraged
+          ? previousRegion?.acPowerW ?? 0
+          : interpolate(previousRegion?.acPowerW ?? 0, currentRegion?.acPowerW ?? 0, startFraction);
+        const regionAcEnd = previousStep.rotationIntervalAveraged
+          ? previousRegion?.acPowerW ?? 0
+          : interpolate(previousRegion?.acPowerW ?? 0, currentRegion?.acPowerW ?? 0, endFraction);
+        const accumulator = variantRegions[regionId] ??= { dcEnergyWh: 0, acEnergyWh: 0 };
+        accumulator.dcEnergyWh += 0.5 * (regionDcStart + regionDcEnd) * hours;
+        accumulator.acEnergyWh += 0.5 * (regionAcStart + regionAcEnd) * hours;
+      }
     }
     segmentStart = segmentEnd;
   }
@@ -1215,6 +1748,9 @@ export async function runSimulationKernel(
   const variantIds = input.variants.map((variant) => variant.variantId);
   const dcEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const acEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
+  const surfaceRegionEnergyWhByVariant = Object.fromEntries(
+    variantIds.map((id) => [id, {}]),
+  ) as SimulationCompleteEvent["surfaceRegionEnergyWhByVariant"];
   const monthly = new Map<string, MonthlyAccumulator>();
   const reportingOffsetMinutes = input.reportingOffsetMinutes ?? 0;
   const startedAt = Date.now();
@@ -1223,7 +1759,7 @@ export async function runSimulationKernel(
       const phaseCount = computeStep === computePhysicsStep
         ? rotationPhaseCount({ input, variant, weather, stepIndex })
         : 1;
-      const zoneSampleCount = variant.panels?.reduce(
+      const zoneSampleCount = variant.continuousSurface?.samples.length ?? variant.panels?.reduce(
         (variantWork, panel) => variantWork + (panel.surfaceSamples?.length ?? 1),
         0,
       ) ?? 1;
@@ -1296,6 +1832,7 @@ export async function runSimulationKernel(
           stepResults,
           dcEnergyWhByVariant,
           acEnergyWhByVariant,
+          surfaceRegionEnergyWhByVariant,
           reportingOffsetMinutes,
         );
       }
@@ -1330,6 +1867,9 @@ export async function runSimulationKernel(
         rotationIntervalAveragedByVariant: Object.fromEntries(
           variantIds.map((id) => [id, stepResults[id].rotationIntervalAveraged]),
         ),
+        surfaceRegionsByVariant: Object.fromEntries(
+          variantIds.map((id) => [id, stepResults[id].surfaceRegions ?? {}]),
+        ),
       });
     }
     await hooks.onChunk?.({
@@ -1359,6 +1899,7 @@ export async function runSimulationKernel(
     energyWhByVariant: { ...dcEnergyWhByVariant },
     dcEnergyWhByVariant,
     acEnergyWhByVariant,
+    surfaceRegionEnergyWhByVariant,
     monthlyEnergy,
     reportingOffsetMinutes,
     steps: input.weather.length,

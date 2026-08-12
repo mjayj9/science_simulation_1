@@ -1,25 +1,37 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { PANEL_AREA_M2 } from "../src/lib/geometry";
+import { PANEL_AREA_M2, createComparisonSurface, createContinuousSurface } from "../src/lib/geometry";
 import {
   DEFAULT_ELECTRICAL,
+  DEFAULT_INVERTER,
   calculateCircuit,
   calculateInverter,
   rotateVector,
+  groundReflectionVisibilityScale,
+  scaleElectricalConfigForArea,
+  simulateContinuousSurface,
   simulateInstant,
   singleDiodeCurve,
   solarPosition,
+  sunVector,
 } from "../src/lib/physics";
 import { getOfflineWeather, type WeatherPoint } from "../src/lib/weather";
 import {
+  CONTINUOUS_SURFACE_MODEL_VERSION,
+  MAX_SIMULATION_VARIANTS,
+  SIMULATION_CACHE_VERSION,
   SIMULATION_WORKER_PROTOCOL_VERSION,
   SimulationCancelledError,
   SimulationWorkerRuntime,
+  applyPlaneTrackingToPanelPose,
+  applyPlaneTrackingToSurfaceSamples,
   computePhysicsStep,
+  createContinuousSurfaceWorkItem,
   createSimulationCancelRequest,
   createSimulationRunRequest,
   isSimulationEventStale,
+  planeTrackingNormal,
   rotationIntervalSamples,
   rotationPhaseAngles,
   runSimulationKernel,
@@ -76,9 +88,55 @@ function baseInput(times: number[]): SimulationKernelInput {
   };
 }
 
+function continuousCylinderInput(times: number[]): SimulationKernelInput {
+  const sideAreaM2 = 0.0125;
+  return {
+    mode: "annual",
+    maximumGapHours: 6,
+    chunkSize: 1,
+    variants: [{
+      variantId: "continuous-cylinder",
+      referenceEfficiency: 0.2,
+      inverter: false,
+      continuousSurface: {
+        modelVersion: CONTINUOUS_SURFACE_MODEL_VERSION,
+        meshVersion: "comparison-mesh-v1",
+        shape: "cylinder",
+        landAreaM2: 0.05,
+        activeAreaM2: 0.1,
+        heightM: 0.25,
+        azimuthSamples: 4,
+        integrationSampleCount: 5,
+        electricalModel: "local-mpp-area-integral",
+        surfaceOptions: {
+          albedo: 0,
+          iam: { model: "none" },
+          diffuseModel: "isotropic",
+          soilingLossFraction: 0,
+        },
+        samples: [
+          { positionM: { x: 0, y: 0.25, z: 0 }, normal: { x: 0, y: 1, z: 0 }, areaM2: 0.05, regionId: "top" },
+          { positionM: { x: 1, y: 0.125, z: 0 }, normal: { x: 1, y: 0, z: 0 }, areaM2: sideAreaM2, regionId: "lateral" },
+          { positionM: { x: -1, y: 0.125, z: 0 }, normal: { x: -1, y: 0, z: 0 }, areaM2: sideAreaM2, regionId: "lateral" },
+          { positionM: { x: 0, y: 0.125, z: 1 }, normal: { x: 0, y: 0, z: 1 }, areaM2: sideAreaM2, regionId: "lateral" },
+          { positionM: { x: 0, y: 0.125, z: -1 }, normal: { x: 0, y: 0, z: -1 }, areaM2: sideAreaM2, regionId: "lateral" },
+        ],
+      },
+    }],
+    weather: times.map((time) => ({ ...weather(time), dniWm2: 800, dhiWm2: 200 })),
+    physics: {
+      solarOverride: { azimuthDeg: 180, elevationDeg: 45 },
+      electrical: { mode: "simple", config: DEFAULT_ELECTRICAL },
+      panelDefaults: { soilingLossFraction: 0 },
+      inverter: false,
+    },
+  };
+}
+
 describe("annual worker protocol", () => {
   it("creates a deterministic fingerprint and fingerprint-bound cancel request", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(2);
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(3);
+    expect(SIMULATION_CACHE_VERSION).toBe(3);
     const start = Date.UTC(2026, 0, 1);
     const input = baseInput([start, start + 3_600_000]);
     const cloned = structuredClone(input);
@@ -86,6 +144,17 @@ describe("annual worker protocol", () => {
 
     cloned.weather[1].ghiWm2 += 1;
     expect(simulationInputFingerprint(cloned)).not.toBe(simulationInputFingerprint(input));
+    expect(() => (createSimulationRunRequest as unknown as (
+      requestId: string,
+      requestInput: SimulationKernelInput,
+      forgedFingerprint: string,
+    ) => unknown)("forged", input, "old-cache-result")).not.toThrow();
+    expect((createSimulationRunRequest as unknown as (
+      requestId: string,
+      requestInput: SimulationKernelInput,
+      forgedFingerprint: string,
+    ) => { fingerprint: string })("forged", input, "old-cache-result").fingerprint)
+      .toBe(simulationInputFingerprint(input));
 
     const run = createSimulationRunRequest("annual-1", input);
     const cancel = createSimulationCancelRequest(run, "사용자 취소");
@@ -102,9 +171,153 @@ describe("annual worker protocol", () => {
     expect(isSimulationEventStale(currentEvent, run)).toBe(false);
     expect(isSimulationEventStale({ ...currentEvent, fingerprint: "old" }, run)).toBe(true);
   });
+
+  it("fingerprints every continuous geometry/material/rotation input under cache v3", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = continuousCylinderInput([start, start + 3_600_000]);
+    const baseline = simulationInputFingerprint(input);
+    const mutations: Array<(copy: SimulationKernelInput) => void> = [
+      (copy) => { copy.variants[0].continuousSurface!.shape = "cone"; },
+      (copy) => { copy.variants[0].continuousSurface!.landAreaM2 += 0.001; },
+      (copy) => { copy.variants[0].continuousSurface!.activeAreaM2 += 0.001; },
+      (copy) => { copy.variants[0].continuousSurface!.heightM += 0.01; },
+      (copy) => { copy.variants[0].continuousSurface!.tiltDeg = 20; },
+      (copy) => { copy.variants[0].continuousSurface!.meshVersion = "comparison-mesh-v2"; },
+      (copy) => { copy.variants[0].continuousSurface!.azimuthSamples += 1; },
+      (copy) => { copy.variants[0].continuousSurface!.integrationSampleCount += 1; },
+      (copy) => { copy.variants[0].continuousSurface!.samples[0].areaM2 += 0.001; },
+      (copy) => { copy.variants[0].continuousSurface!.surfaceOptions!.albedo = 0.3; },
+      (copy) => { copy.variants[0].rotation = { mode: "static", angleRad: 0.2 }; },
+      (copy) => { copy.variants[0].electrical = { mode: "simple", aggregateLossFraction: 0.01 }; },
+    ];
+    mutations.forEach((mutate) => {
+      const copy = structuredClone(input);
+      mutate(copy);
+      expect(simulationInputFingerprint(copy)).not.toBe(baseline);
+    });
+    expect(baseline).toMatch(/^sim-v3-cache-v3-/);
+  });
+
+  it("serializes authoritative comparison quadrature as absolute-area worker samples", () => {
+    const surface = createComparisonSurface("cylinder", {
+      landAreaM2: 0.05,
+      cylinderHeightM: 2 * Math.sqrt(0.05 / Math.PI),
+      maxHeightM: 1,
+      maximumActiveAreaM2: 1,
+    }, 16);
+    const continuousSurface = createContinuousSurfaceWorkItem(surface, {
+      landAreaM2: surface.comparison.landAreaM2,
+      surfaceOptions: { albedo: 0.2 },
+    });
+    expect(continuousSurface.samples.reduce((sum, sample) => sum + sample.areaM2, 0))
+      .toBeCloseTo(surface.dimensions.activeAreaM2, 12);
+    expect(continuousSurface.integrationSampleCount).toBe(continuousSurface.samples.length);
+    expect(new Set(continuousSurface.samples.map((sample) => sample.regionId)))
+      .toEqual(new Set(["top", "lateral"]));
+    const input = baseInput([Date.UTC(2026, 5, 21, 3), Date.UTC(2026, 5, 21, 4)]);
+    input.variants = [{
+      variantId: "built-cylinder",
+      referenceEfficiency: 0.2,
+      inverter: false,
+      continuousSurface,
+    }];
+    expect(validateKernelInput(input)).toBe(input);
+  });
+
+  it("accepts twelve Mode A/B variants, 240 explicit panels and accounts their work", async () => {
+    expect(MAX_SIMULATION_VARIANTS).toBe(12);
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    input.variants = Array.from({ length: MAX_SIMULATION_VARIANTS }, (_, index) => {
+      const variantId = `shape-${Math.floor(index / 2) + 1}:${index % 2 ? "mode-b" : "mode-a"}`;
+      return {
+        variantId,
+        panelCount: 20,
+        totalPanelAreaM2: 20 * PANEL_AREA_M2,
+        referenceEfficiency: 0.2,
+        inverter: false,
+        panels: Array.from({ length: 20 }, (_, panelIndex) => ({
+          panelId: `${variantId}:zone-${panelIndex + 1}`,
+          normal: { x: 0, y: 1, z: 0 },
+          areaM2: PANEL_AREA_M2,
+          efficiency: 0.2,
+          soilingLossFraction: 0,
+        })),
+      };
+    });
+    expect(validateKernelInput(input)).toBe(input);
+
+    const progress: SimulationProgressEvent[] = [];
+    await runSimulationKernel(createSimulationRunRequest("twelve-variants", input), {
+      onProgress: (event) => { progress.push(event); },
+      yieldControl: async () => undefined,
+    });
+    expect(progress.map((event) => event.completedWork)).toEqual([0, 240, 480]);
+    expect(progress.every((event) => event.totalWork === 480)).toBe(true);
+
+    const tooMany = structuredClone(input);
+    tooMany.variants.push({ ...tooMany.variants[0], variantId: "shape-7:mode-a" });
+    expect(() => validateKernelInput(tooMany)).toThrow(/1~12/);
+  });
 });
 
 describe("annual physics kernel", () => {
+  it("area-integrates one continuous skin without panelCount and closes cylinder regions", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = continuousCylinderInput([start, start + 3_600_000]);
+    expect(validateKernelInput(input)).toBe(input);
+    const rows: SimulationPhysicsStepResult[] = [];
+    const complete = await runSimulationKernel(createSimulationRunRequest("continuous-cylinder", input), {
+      onChunk: (event) => event.rows.forEach((row) => rows.push({
+        dcPowerW: row.dcPowerWByVariant["continuous-cylinder"],
+        acPowerW: row.acPowerWByVariant["continuous-cylinder"],
+        poaWm2: row.poaWm2ByVariant["continuous-cylinder"],
+        moduleTemperatureC: row.moduleTemperatureCByVariant["continuous-cylinder"],
+        mismatchLossFraction: row.mismatchLossFractionByVariant["continuous-cylinder"],
+        bypassActiveCount: row.bypassActiveCountByVariant["continuous-cylinder"],
+        inverterStatus: row.inverterStatusByVariant["continuous-cylinder"],
+        ghiClosure: row.ghiClosureByVariant["continuous-cylinder"],
+        rotationIntervalAveraged: row.rotationIntervalAveragedByVariant["continuous-cylinder"],
+        surfaceRegions: row.surfaceRegionsByVariant["continuous-cylinder"],
+      })),
+      yieldControl: async () => undefined,
+    });
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => {
+      expect(row.mismatchLossFraction).toBe(0);
+      expect(row.bypassActiveCount).toBe(0);
+      expect(Object.values(row.surfaceRegions ?? {}).reduce((sum, region) => sum + region.areaM2, 0)).toBeCloseTo(0.1, 12);
+      expect((row.surfaceRegions?.top.dcPowerW ?? 0) + (row.surfaceRegions?.lateral.dcPowerW ?? 0)).toBeCloseTo(row.dcPowerW, 12);
+      expect((row.surfaceRegions?.top.acPowerW ?? 0) + (row.surfaceRegions?.lateral.acPowerW ?? 0)).toBeCloseTo(row.acPowerW, 12);
+    });
+    const regionEnergy = complete.surfaceRegionEnergyWhByVariant["continuous-cylinder"];
+    expect(regionEnergy.top.dcEnergyWh + regionEnergy.lateral.dcEnergyWh)
+      .toBeCloseTo(complete.dcEnergyWhByVariant["continuous-cylinder"], 12);
+    expect(regionEnergy.top.acEnergyWh + regionEnergy.lateral.acEnergyWh)
+      .toBeCloseTo(complete.acEnergyWhByVariant["continuous-cylinder"], 12);
+
+    const invalid = structuredClone(input);
+    invalid.variants[0].panelCount = 1;
+    expect(() => validateKernelInput(invalid)).toThrow(/cannot include discrete/);
+    const invalidArea = structuredClone(input);
+    invalidArea.variants[0].continuousSurface!.samples[0].areaM2 *= 0.5;
+    expect(() => validateKernelInput(invalidArea)).toThrow(/area sum/);
+  });
+
+  it("returns exact zero for every continuous-surface night sample", async () => {
+    const start = Date.UTC(2026, 5, 21, 15);
+    const input = continuousCylinderInput([start, start + 3_600_000]);
+    input.physics!.solarOverride = { azimuthDeg: 180, elevationDeg: -10 };
+    const powers: number[] = [];
+    const complete = await runSimulationKernel(createSimulationRunRequest("continuous-night", input), {
+      onChunk: (event) => event.rows.forEach((row) => powers.push(row.dcPowerWByVariant["continuous-cylinder"])),
+      yieldControl: async () => undefined,
+    });
+    expect(powers).toEqual([0, 0]);
+    expect(complete.dcEnergyWhByVariant["continuous-cylinder"]).toBe(0);
+    expect(complete.acEnergyWhByVariant["continuous-cylinder"]).toBe(0);
+  });
+
   it("gives supplied hourly GHI/DNI/DHI priority without synthesizing a daily curve", async () => {
     const start = Date.UTC(2026, 5, 21, 3);
     const input = baseInput([start, start + 3_600_000]);
@@ -321,11 +534,13 @@ describe("annual physics kernel", () => {
       irradianceWm2: curvedPoaWm2,
       cellTemperatureC: curvedTemperatureC,
       config: zoneConfig,
+      points: 64,
     });
     const flatCurve = singleDiodeCurve({
       irradianceWm2: upward.effectivePoaWm2,
       cellTemperatureC: upward.moduleTemperatureC,
       config: zoneConfig,
+      points: 64,
     });
     const expectedCircuit = calculateCircuit({
       devices: [
@@ -378,6 +593,297 @@ describe("annual physics kernel", () => {
     );
     expect(progress.map((event) => event.completedWork)).toEqual([0, 3, 6]);
     expect(progress.every((event) => event.totalWork === 6)).toBe(true);
+  });
+
+  it("scales a dynamic curved-zone I-V nameplate with area and matches the instant physics curve", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const input = baseInput([start, start + 3_600_000]);
+    const runArea = (areaM2: number) => {
+      const variant = {
+        ...input.variants[0],
+        totalPanelAreaM2: areaM2,
+        panels: [{
+          panelId: `dynamic-zone-${areaM2}`,
+          normal: { x: 0, y: 1, z: 0 },
+          areaM2,
+          efficiency: 0.2,
+          heightM: 1,
+          albedo: 0,
+          iam: { model: "none" as const },
+          diffuseModel: "isotropic" as const,
+          soilingLossFraction: 0,
+          surfaceSamples: [{
+            positionM: { x: 0, y: 1, z: 0 },
+            normal: { x: 0, y: 1, z: 0 },
+            areaWeight: 1,
+          }],
+        }],
+      };
+      const worker = computePhysicsStep({
+        input,
+        variant,
+        weather: input.weather[0],
+        stepIndex: 0,
+      }) as SimulationPhysicsStepResult;
+      const sample = simulateInstant({
+        timestamp: start,
+        solarOverride: { azimuthDeg: 180, elevationDeg: 90 },
+        irradiance: { ghiWm2: 1000, dniWm2: 1000, dhiWm2: 0 },
+        panel: {
+          normal: { x: 0, y: 1, z: 0 },
+          areaM2,
+          efficiency: 0.2,
+          heightM: 1,
+          albedo: 0,
+          iam: { model: "none" },
+          diffuseModel: "isotropic",
+          soilingLossFraction: 0,
+        },
+        weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+        electrical: { mode: "simple" },
+        inverter: false,
+      });
+      const expectedCurve = singleDiodeCurve({
+        irradianceWm2: sample.effectivePoaWm2,
+        cellTemperatureC: sample.moduleTemperatureC,
+        config: { ...scaleElectricalConfigForArea(DEFAULT_ELECTRICAL, areaM2), efficiency: 0.2 },
+        points: 64,
+      });
+      expect(worker.dcPowerW).toBeCloseTo(expectedCurve.mpp.powerW, 10);
+      return worker;
+    };
+
+    const legacy = runArea(PANEL_AREA_M2);
+    const doubled = runArea(2 * PANEL_AREA_M2);
+    expect(doubled.dcPowerW).toBeCloseTo(legacy.dcPowerW * 2, 10);
+  });
+
+  it("matches the instant parcel-wide ground-reflection scale through annual worker groundVisibility", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const surface = createContinuousSurface("sphere", 16);
+    const reflectorAreaM2 = surface.dimensions.footprintM2;
+    const groundScale = groundReflectionVisibilityScale(surface, reflectorAreaM2);
+    const input = baseInput([start, start + 3_600_000]);
+    input.weather = input.weather.map((point) => ({
+      ...point,
+      ghiWm2: 1000,
+      dniWm2: 0,
+      dhiWm2: 0,
+    }));
+    const variant = {
+      ...input.variants[0],
+      panelCount: surface.zones.length,
+      totalPanelAreaM2: surface.dimensions.activeAreaM2,
+      panels: surface.zones.map((zone) => ({
+        panelId: zone.id,
+        normal: { x: zone.representativeNormal[0], y: zone.representativeNormal[1], z: zone.representativeNormal[2] },
+        areaM2: zone.areaM2,
+        efficiency: 0.2,
+        heightM: 1,
+        albedo: 0.2,
+        groundVisibility: groundScale,
+        iam: { model: "none" as const },
+        diffuseModel: "isotropic" as const,
+        soilingLossFraction: 0,
+        surfaceSamples: zone.samples.map((sample) => ({
+          positionM: { x: sample.position[0], y: sample.position[1], z: sample.position[2] },
+          normal: { x: sample.normal[0], y: sample.normal[1], z: sample.normal[2] },
+          areaWeight: sample.areaM2 / zone.areaM2,
+        })),
+      })),
+    };
+    input.variants[0] = variant;
+    const workerPoaWm2: number[] = [];
+    await runSimulationKernel(createSimulationRunRequest("ground-reflection-scale", input), {
+      onChunk: (event) => event.rows.forEach((row) => workerPoaWm2.push(row.poaWm2ByVariant.plane)),
+      yieldControl: async () => undefined,
+    });
+    const instant = simulateContinuousSurface({
+      surface,
+      timestamp: start,
+      solarOverride: { azimuthDeg: 180, elevationDeg: 90 },
+      irradiance: { ghiWm2: 1000, dniWm2: 0, dhiWm2: 0 },
+      weather: { ambientTemperatureC: 25, referenceWindSpeedMS: 0 },
+      electricalConfig: DEFAULT_ELECTRICAL,
+      inverterConfig: DEFAULT_INVERTER,
+      topology: "parallel",
+      bypassEnabled: false,
+      albedo: 0.2,
+      iam: { model: "none" },
+      diffuseModel: "isotropic",
+      soilingLossFraction: 0,
+      groundReflectorAreaM2: reflectorAreaM2,
+    });
+    const instantAveragePoaWm2 = instant.zones.reduce(
+      (sum, zone) => sum + zone.averagePoaWm2 * zone.areaM2,
+      0,
+    ) / instant.activeAreaM2;
+
+    expect(groundScale).toBeCloseTo(0.5, 12);
+    expect(instant.groundReflectionBudget.appliedScale).toBeCloseTo(groundScale, 14);
+    expect(workerPoaWm2).toHaveLength(2);
+    expect(workerPoaWm2[0]).toBeCloseTo(instantAveragePoaWm2, 12);
+    expect(workerPoaWm2[1]).toBeCloseTo(instantAveragePoaWm2, 12);
+  });
+
+  it("validates explicit electrical fairness contracts without changing legacy inputs", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const legacy = baseInput([start, start + 3_600_000]);
+    expect(validateKernelInput(legacy)).toBe(legacy);
+
+    const missingZones = structuredClone(legacy);
+    missingZones.variants[0] = {
+      ...missingZones.variants[0],
+      panelCount: 2,
+      totalPanelAreaM2: 2 * PANEL_AREA_M2,
+      electricalFairnessMode: "independent-mppt",
+      circuit: false,
+    };
+    expect(() => validateKernelInput(missingZones)).toThrow(/explicit per-zone panels/);
+
+    const independentWithCircuit = structuredClone(legacy);
+    independentWithCircuit.variants[0].electricalFairnessMode = "independent-mppt";
+    independentWithCircuit.variants[0].circuit = { bypassEnabled: true };
+    expect(() => validateKernelInput(independentWithCircuit)).toThrow(/cannot include shared circuit/);
+
+    const disabledSharedCircuit = structuredClone(legacy);
+    disabledSharedCircuit.variants[0].electricalFairnessMode = "shared-circuit";
+    disabledSharedCircuit.variants[0].circuit = false;
+    expect(() => validateKernelInput(disabledSharedCircuit)).toThrow(/cannot disable/);
+
+    const invalidMode = structuredClone(legacy);
+    (invalidMode.variants[0] as { electricalFairnessMode?: string })
+      .electricalFairnessMode = "zone-average";
+    expect(() => validateKernelInput(invalidMode)).toThrow(/is not supported/);
+  });
+
+  it("matches continuous-surface Mode A and Mode B power and energy definitions", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const surface = createContinuousSurface("sphere", 16);
+    const irradiance = { ghiWm2: 760, dniWm2: 620, dhiWm2: 140 };
+    const inverter = {
+      ...DEFAULT_INVERTER,
+      ratedAcPowerW: 12,
+      mpptMinVoltageV: 20,
+      mpptMaxVoltageV: 180,
+      maxDcVoltageV: 200,
+      wiringLossFraction: 0.03,
+    };
+    const instant = simulateContinuousSurface({
+      surface,
+      timestamp: start,
+      solarOverride: { azimuthDeg: 145, elevationDeg: 38 },
+      irradiance,
+      weather: { ambientTemperatureC: 27, referenceWindSpeedMS: 1.5 },
+      electricalConfig: DEFAULT_ELECTRICAL,
+      inverterConfig: inverter,
+      topology: "series",
+      bypassEnabled: true,
+      albedo: 0.2,
+      iam: { model: "none" },
+      diffuseModel: "isotropic",
+      soilingLossFraction: 0,
+      electricalModel: "distributed-circuit",
+    });
+    const panels = surface.zones.map((zone) => ({
+      panelId: zone.id,
+      normal: {
+        x: zone.representativeNormal[0],
+        y: zone.representativeNormal[1],
+        z: zone.representativeNormal[2],
+      },
+      areaM2: zone.areaM2,
+      efficiency: DEFAULT_ELECTRICAL.efficiency,
+      albedo: 0.2,
+      iam: { model: "none" as const },
+      diffuseModel: "isotropic" as const,
+      soilingLossFraction: 0,
+      surfaceSamples: zone.samples.map((sample) => ({
+        positionM: {
+          x: sample.position[0],
+          y: sample.position[1],
+          z: sample.position[2],
+        },
+        normal: {
+          x: sample.normal[0],
+          y: sample.normal[1],
+          z: sample.normal[2],
+        },
+        areaWeight: sample.areaM2 / zone.areaM2,
+      })),
+    }));
+    const input = baseInput([start, start + 3_600_000]);
+    input.physics = {
+      solarOverride: { azimuthDeg: 145, elevationDeg: 38 },
+      panelDefaults: { soilingLossFraction: 0 },
+    };
+    input.weather = input.weather.map((point) => ({
+      ...point,
+      ...irradiance,
+      ambientC: 27,
+      windSpeedMs: 1.5,
+    }));
+    const sharedBase = {
+      panelCount: surface.zones.length,
+      totalPanelAreaM2: surface.dimensions.activeAreaM2,
+      referenceEfficiency: DEFAULT_ELECTRICAL.efficiency,
+      panels,
+      topology: "series" as const,
+      electrical: { mode: "single-diode" as const, config: DEFAULT_ELECTRICAL },
+      inverter,
+    };
+    input.variants = [
+      {
+        ...sharedBase,
+        variantId: "sphere:shared",
+        electricalFairnessMode: "shared-circuit",
+        circuit: { bypassEnabled: true, bypassForwardVoltageV: 0.5 },
+      },
+      {
+        ...sharedBase,
+        variantId: "sphere:independent",
+        electricalFairnessMode: "independent-mppt",
+        circuit: false,
+      },
+    ];
+
+    const rows: Array<{
+      sharedDcW: number;
+      sharedAcW: number;
+      independentDcW: number;
+      independentAcW: number;
+    }> = [];
+    const complete = await runSimulationKernel(
+      createSimulationRunRequest("fairness-mode-a-b", input),
+      {
+        onChunk: (event) => {
+          event.rows.forEach((row) => rows.push({
+            sharedDcW: row.dcPowerWByVariant["sphere:shared"],
+            sharedAcW: row.acPowerWByVariant["sphere:shared"],
+            independentDcW: row.dcPowerWByVariant["sphere:independent"],
+            independentAcW: row.acPowerWByVariant["sphere:independent"],
+          }));
+        },
+        yieldControl: async () => undefined,
+      },
+    );
+
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => {
+      expect(row.sharedDcW).toBeCloseTo(instant.sharedCircuit.dcPowerW, 9);
+      expect(row.sharedAcW).toBeCloseTo(instant.sharedCircuit.acPowerW, 9);
+      expect(row.independentDcW).toBeGreaterThanOrEqual(row.sharedDcW);
+      expect(row.independentAcW).toBeGreaterThanOrEqual(row.sharedAcW);
+    });
+    expect(rows[0].independentDcW).toBeGreaterThanOrEqual(rows[0].sharedDcW);
+    expect(complete.dcEnergyWhByVariant["sphere:shared"])
+      .toBeCloseTo(instant.sharedCircuit.dcPowerW, 9);
+    expect(complete.acEnergyWhByVariant["sphere:shared"])
+      .toBeCloseTo(instant.sharedCircuit.acPowerW, 9);
+    expect(complete.dcEnergyWhByVariant["sphere:independent"])
+      .toBeCloseTo(rows[0].independentDcW, 9);
+    expect(complete.acEnergyWhByVariant["sphere:independent"])
+      .toBeCloseTo(rows[0].independentAcW, 9);
   });
 
   it("rejects empty or non-positive curved-surface quadrature", () => {
@@ -514,6 +1020,7 @@ describe("annual physics kernel", () => {
         areaM2: PANEL_AREA_M2,
         efficiency: 0.2,
       },
+      points: 64,
     });
     const rows: Array<{ dcPowerW: number; poaWm2: number; temperatureC: number }> = [];
 
@@ -654,6 +1161,231 @@ describe("annual physics kernel", () => {
     const quaternionV = rotateVector(reconstructed.quaternion, { x: 0, y: 1, z: 0 });
     expect(quaternionU.x).toBeCloseTo(reconstructed.sampleAxisU.x, 12);
     expect(quaternionV.y).toBeCloseTo(reconstructed.sampleAxisV.y, 12);
+  });
+
+  it("validates plane tracking modes, centres, horizontal baselines and rotation exclusivity", () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const valid = baseInput([start, start + 3_600_000]);
+    valid.variants[0].planeTracking = {
+      mode: "dual-axis",
+      centreM: { x: 0, y: 0, z: 0 },
+    };
+    expect(validateKernelInput(valid)).toBe(valid);
+
+    const withRotation = structuredClone(valid);
+    withRotation.variants[0].rotation = { mode: "static", angleRad: 0 };
+    expect(() => validateKernelInput(withRotation)).toThrow(/mutually exclusive/);
+
+    const invalidMode = structuredClone(valid);
+    (invalidMode.variants[0].planeTracking as { mode: string }).mode = "east-west";
+    expect(() => validateKernelInput(invalidMode)).toThrow(/mode is not supported/);
+
+    const invalidCentre = structuredClone(valid);
+    invalidCentre.variants[0].planeTracking!.centreM.x = Number.NaN;
+    expect(() => validateKernelInput(invalidCentre)).toThrow(/centreM/);
+
+    const tiltedPanel = structuredClone(valid);
+    tiltedPanel.variants[0].panels = [{
+      panelId: "tilted-baseline",
+      normal: { x: 0, y: 0, z: 1 },
+      areaM2: PANEL_AREA_M2,
+    }];
+    expect(() => validateKernelInput(tiltedPanel)).toThrow(/horizontal baseline/);
+
+    const tiltedSample = structuredClone(valid);
+    tiltedSample.variants[0].panels = [{
+      panelId: "tilted-sample",
+      normal: { x: 0, y: 1, z: 0 },
+      areaM2: PANEL_AREA_M2,
+      surfaceSamples: [{
+        positionM: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 },
+        areaWeight: 1,
+      }],
+    }];
+    expect(() => validateKernelInput(tiltedSample)).toThrow(/must be horizontal/);
+  });
+
+  it("rotates panel pose and surface samples as one rigid body about the tracking centre", () => {
+    const centreM = { x: 10, y: 2, z: -3 };
+    const tracking = { mode: "dual-axis" as const, centreM };
+    const sunDirection = { x: 0, y: 1, z: 1 };
+    const panel = {
+      panelId: "tracked-plane",
+      positionM: { x: 10, y: 2, z: -2 },
+      normal: { x: 0, y: 1, z: 0 },
+    };
+    const pose = applyPlaneTrackingToPanelPose(panel, tracking, sunDirection);
+    const rootHalf = Math.SQRT1_2;
+
+    expect(pose.normal.x).toBeCloseTo(0, 12);
+    expect(pose.normal.y).toBeCloseTo(rootHalf, 12);
+    expect(pose.normal.z).toBeCloseTo(rootHalf, 12);
+    expect(pose.positionM.x).toBeCloseTo(10, 12);
+    expect(pose.positionM.y).toBeCloseTo(2 - rootHalf, 12);
+    expect(pose.positionM.z).toBeCloseTo(-3 + rootHalf, 12);
+    const quaternionNormal = rotateVector(pose.quaternion, { x: 0, y: 0, z: 1 });
+    expect(quaternionNormal.x).toBeCloseTo(pose.normal.x, 12);
+    expect(quaternionNormal.y).toBeCloseTo(pose.normal.y, 12);
+    expect(quaternionNormal.z).toBeCloseTo(pose.normal.z, 12);
+
+    const samples = applyPlaneTrackingToSurfaceSamples([
+      { positionM: panel.positionM, normal: panel.normal, areaWeight: 1 },
+      { positionM: centreM, normal: panel.normal, areaWeight: 3 },
+    ], tracking, sunDirection);
+    expect(samples[0].positionM.x).toBeCloseTo(pose.positionM.x, 12);
+    expect(samples[0].positionM.y).toBeCloseTo(pose.positionM.y, 12);
+    expect(samples[0].positionM.z).toBeCloseTo(pose.positionM.z, 12);
+    expect(samples[0].normal.x).toBeCloseTo(pose.normal.x, 12);
+    expect(samples[0].normal.y).toBeCloseTo(pose.normal.y, 12);
+    expect(samples[0].normal.z).toBeCloseTo(pose.normal.z, 12);
+    expect(samples.map((sample) => sample.areaWeight)).toEqual([0.25, 0.75]);
+
+    const singleAxis = planeTrackingNormal(
+      "single-axis-north-south",
+      { x: 1, y: 1, z: 1 },
+    );
+    expect(singleAxis.x).toBeCloseTo(rootHalf, 12);
+    expect(singleAxis.y).toBeCloseTo(rootHalf, 12);
+    expect(singleAxis.z).toBe(0);
+    expect(planeTrackingNormal("dual-axis", { x: 1, y: -1, z: 0 })).toEqual({
+      x: 0,
+      y: 1,
+      z: 0,
+    });
+  });
+
+  it.each([
+    "single-axis-north-south" as const,
+    "dual-axis" as const,
+  ])("matches timestamp-level instant references and annual energy for %s tracking", async (mode) => {
+    const start = Date.UTC(2026, 5, 21, 2);
+    const times = [start, start + 3_600_000, start + 7_200_000];
+    const location = {
+      latitudeDeg: 37.5665,
+      longitudeDeg: 126.978,
+      elevationM: 38,
+    };
+    const input = baseInput(times);
+    input.physics = {
+      location,
+      panelDefaults: { soilingLossFraction: 0 },
+    };
+    input.weather = times.map((timeUtcMs) => ({
+      ...weather(timeUtcMs, 800),
+      dniWm2: 650,
+      dhiWm2: 150,
+    }));
+    input.variants[0].planeTracking = {
+      mode,
+      centreM: { x: 0, y: 0, z: 0 },
+    };
+
+    const rows: Array<{ dcPowerW: number; poaWm2: number }> = [];
+    const complete = await runSimulationKernel(
+      createSimulationRunRequest(`tracking-${mode}`, input),
+      {
+        onChunk: (event) => {
+          event.rows.forEach((row) => rows.push({
+            dcPowerW: row.dcPowerWByVariant.plane,
+            poaWm2: row.poaWm2ByVariant.plane,
+          }));
+        },
+        yieldControl: async () => undefined,
+      },
+    );
+    const references = input.weather.map((point) => {
+      const solar = solarPosition({
+        timestamp: point.timeUtcMs,
+        ...location,
+        temperatureC: point.ambientC,
+      });
+      const normal = planeTrackingNormal(mode, sunVector(solar));
+      return simulateInstant({
+        timestamp: point.timeUtcMs,
+        location,
+        irradiance: {
+          ghiWm2: point.ghiWm2,
+          dniWm2: point.dniWm2,
+          dhiWm2: point.dhiWm2,
+        },
+        panel: {
+          normal,
+          areaM2: PANEL_AREA_M2,
+          efficiency: 0.2,
+          soilingLossFraction: 0,
+        },
+        weather: {
+          ambientTemperatureC: point.ambientC,
+          referenceWindSpeedMS: point.windSpeedMs,
+        },
+        inverter: false,
+      });
+    });
+
+    expect(rows).toHaveLength(references.length);
+    references.forEach((reference, index) => {
+      expect(rows[index].poaWm2).toBeCloseTo(reference.poa.totalWm2, 10);
+      expect(rows[index].dcPowerW).toBeCloseTo(reference.dcPowerW, 10);
+    });
+    const expectedEnergyWh = references.slice(1).reduce(
+      (sum, reference, index) => sum + 0.5 * (
+        references[index].dcPowerW + reference.dcPowerW
+      ),
+      0,
+    );
+    expect(complete.dcEnergyWhByVariant.plane).toBeCloseTo(expectedEnergyWh, 10);
+  });
+
+  it("stows up and remains zero and deterministic across annual night timestamps", async () => {
+    const start = Date.UTC(2026, 5, 21, 15);
+    const input = baseInput([start, start + 3_600_000]);
+    input.physics = {
+      location: { latitudeDeg: 37.5665, longitudeDeg: 126.978, elevationM: 38 },
+      panelDefaults: { soilingLossFraction: 0 },
+    };
+    input.variants[0].planeTracking = {
+      mode: "dual-axis",
+      centreM: { x: 2, y: 1, z: -4 },
+    };
+    input.weather = input.weather.map((point) => ({
+      ...point,
+      ghiWm2: 900,
+      dniWm2: 800,
+      dhiWm2: 100,
+    }));
+
+    const run = async (requestId: string) => {
+      const rows: number[] = [];
+      const complete = await runSimulationKernel(
+        createSimulationRunRequest(requestId, input),
+        {
+          onChunk: (event) => {
+            event.rows.forEach((row) => rows.push(row.dcPowerWByVariant.plane));
+          },
+          yieldControl: async () => undefined,
+        },
+      );
+      return { rows, energyWh: complete.dcEnergyWhByVariant.plane };
+    };
+
+    const first = await run("tracking-night-a");
+    const second = await run("tracking-night-b");
+    expect(first).toEqual(second);
+    expect(first).toEqual({ rows: [0, 0], energyWh: 0 });
+    const solar = solarPosition({
+      timestamp: start,
+      latitudeDeg: 37.5665,
+      longitudeDeg: 126.978,
+      elevationM: 38,
+      temperatureC: 25,
+    });
+    expect(solar.isDaylight).toBe(false);
+    expect(planeTrackingNormal("dual-axis", sunVector(solar))).toEqual({
+      x: 0,
+      y: 1,
+      z: 0,
+    });
   });
 
   it("advances fixed rotation from weather[0] when referenceTimestamp is omitted", () => {
