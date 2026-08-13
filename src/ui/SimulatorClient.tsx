@@ -81,6 +81,7 @@ import {
   DEFAULT_ELECTRICAL as PHYSICS_DEFAULT_ELECTRICAL,
   DEFAULT_INVERTER as PHYSICS_DEFAULT_INVERTER,
   DEFAULT_THERMAL as PHYSICS_DEFAULT_THERMAL,
+  ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION,
   MODEL_REGISTRY,
   calculateCircuit,
   calculateInverter,
@@ -207,6 +208,139 @@ export function partitionComparisonAnnualVariantStages<T extends { variantId: st
     throw new RangeError(`연간 비교의 단계별 variant 수가 Worker 상한 ${maximumVariants}개를 초과했습니다.`);
   }
   return stages;
+}
+
+export function annualPlaneScenarioFingerprint(input: {
+  mode: PlaneComparisonMode;
+  appliedTiltDeg: number;
+}): string {
+  if (!Number.isFinite(input.appliedTiltDeg)) {
+    throw new RangeError("appliedTiltDeg must be finite");
+  }
+  return JSON.stringify({ mode: input.mode, appliedTiltDeg: input.appliedTiltDeg });
+}
+
+export function resolveComparisonFootprintMode(input: {
+  mode: "static" | "fixed" | "auto";
+  selfStarting: "none" | "user-cq";
+}): "static" | "swept" {
+  if (input.mode === "static") return "static";
+  if (input.mode === "auto" && input.selfStarting === "none") return "static";
+  return "swept";
+}
+
+export function electricalConnectionDeltaKWh(input: {
+  idealQuasiWh: number;
+  engineeringQuasiWh: number;
+}): number {
+  if (!Number.isFinite(input.idealQuasiWh) || !Number.isFinite(input.engineeringQuasiWh)) {
+    throw new RangeError("Annual electrical energies must be finite.");
+  }
+  return (input.engineeringQuasiWh - input.idealQuasiWh) / 1000;
+}
+
+export function annualRunScopeLabelKo(input: {
+  steps: number;
+  intervals: number;
+  durationHours: number;
+  authoritativePath: "worker-quasi-steady" | "annual-transient-e11";
+}): string {
+  if (!Number.isInteger(input.steps) || !Number.isInteger(input.intervals)
+    || input.steps < 2 || input.intervals < 1 || input.steps !== input.intervals + 1) {
+    throw new RangeError("Annual run must contain one closing endpoint after its integration intervals.");
+  }
+  if (!Number.isFinite(input.durationHours) || input.durationHours <= 0) {
+    throw new RangeError("Annual run duration must be finite and positive.");
+  }
+  if ((input.durationHours === 8_760 || input.durationHours === 8_784)
+    && input.intervals !== input.durationHours) {
+    throw new RangeError("A calendar-year hourly run must have one interval per integrated hour.");
+  }
+  const model = input.authoritativePath === "annual-transient-e11"
+    ? "\uACFC\uB3C4 \uC5F4 E11"
+    : "\uC900\uC815\uC0C1 \uAD11\uD559 \uD68C\uC804\u00B7\uC5F4\uC774\uB825 \uBBF8\uD3EC\uD568";
+  return `\uC2E4\uC81C ${input.durationHours}h \u00B7 ${input.intervals}\uAC1C \uC801\uBD84 \uAD6C\uAC04 \u00B7 closing endpoint \uD3EC\uD568 ${input.steps}\uC810 \u00B7 ${model}`;
+}
+
+export interface AnnualPublishedRunMetadata {
+  runId: string;
+  steps: number;
+  intervals: number;
+  durationHours: number;
+  elapsedMs: number;
+}
+
+export function omitAnnualVariantRecords<T>(
+  record: Readonly<Record<string, T>>,
+  variantIds: readonly string[],
+): Record<string, T> {
+  const omitted = new Set(variantIds);
+  return Object.fromEntries(Object.entries(record).filter(([variantId]) => !omitted.has(variantId)));
+}
+
+export function annualRunCohortReady(input: {
+  variantIds: readonly string[];
+  metadataByVariant: Readonly<Record<string, AnnualPublishedRunMetadata | undefined>>;
+  expectedSteps: number;
+  expectedIntervals: number;
+  expectedDurationHours: number;
+}): boolean {
+  if (input.variantIds.length === 0
+    || !Number.isInteger(input.expectedSteps)
+    || !Number.isInteger(input.expectedIntervals)
+    || input.expectedSteps !== input.expectedIntervals + 1
+    || !Number.isFinite(input.expectedDurationHours)
+    || input.expectedDurationHours <= 0) return false;
+  const metadata = input.variantIds.map((variantId) => input.metadataByVariant[variantId]);
+  const first = metadata[0];
+  if (!first?.runId.trim()) return false;
+  return metadata.every((entry) => entry !== undefined
+    && entry.runId === first.runId
+    && entry.steps === input.expectedSteps
+    && entry.intervals === input.expectedIntervals
+    && entry.durationHours === input.expectedDurationHours
+    && entry.steps === entry.intervals + 1);
+}
+
+export function engineeringAnnualResultReady(input: {
+  energyWh?: number;
+  layoutId?: string;
+}): boolean {
+  return Number.isFinite(input.energyWh)
+    && (input.energyWh ?? -1) >= 0
+    && input.layoutId?.startsWith(`${ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION}|`) === true;
+}
+
+export function annualTransientResultReady(input: {
+  energyWh?: number;
+  authoritativePath?: "worker-quasi-steady" | "annual-transient-e11";
+  decomposition?: { annual: { e11Wh: number; closureResidualWh: number } };
+}): boolean {
+  if (!Number.isFinite(input.energyWh) || (input.energyWh ?? -1) < 0
+    || input.authoritativePath !== "annual-transient-e11" || !input.decomposition) return false;
+  const { e11Wh, closureResidualWh } = input.decomposition.annual;
+  if (!Number.isFinite(e11Wh) || !Number.isFinite(closureResidualWh)) return false;
+  const energyWh = input.energyWh as number;
+  const scale = Math.max(1, Math.abs(energyWh), Math.abs(e11Wh));
+  return Math.abs(e11Wh - energyWh) <= 1e-10 * scale
+    && Math.abs(closureResidualWh) <= 1e-10 * scale;
+}
+export function resolveAnnualComparisonRankEligibility(input: {
+  transientReady: boolean;
+  engineeringReady: boolean;
+  naturalRotationEligible: boolean;
+  officialHeight: boolean;
+  generalPreset: boolean;
+  geometryEligible: boolean;
+}): { idealTransient: boolean; engineering: boolean } {
+  const common = input.naturalRotationEligible
+    && input.officialHeight
+    && input.generalPreset
+    && input.geometryEligible;
+  return {
+    idealTransient: common && input.transientReady,
+    engineering: common && input.engineeringReady,
+  };
 }
 type WeatherPreset = "clear" | "partly" | "overcast" | "rain" | "night";
 type EnvironmentName = "mountain" | "coast" | "plain" | "suburban" | "urban";
@@ -474,7 +608,7 @@ const DEFAULT_LAND_COMPARISON_SETTINGS: LandComparisonSettings = {
   landAreaM2: DEFAULT_COMPARISON_LAND_AREA_M2,
   maximumHeightM: officialMaximumHeightM(DEFAULT_COMPARISON_LAND_AREA_M2),
   structureHeightM: officialMaximumHeightM(DEFAULT_COMPARISON_LAND_AREA_M2),
-  supportHeightM: 0.01,
+  supportHeightM: 0,
   structureSpacingM: 0,
   maintenanceMarginM: 0,
   maximumAspectRatio: 4,
@@ -2017,12 +2151,8 @@ export default function SimulatorClient() {
   const [annualThermalMetadataByVariant, setAnnualThermalMetadataByVariant] = useState<Record<string, ThermalModelMetadata>>({});
   const [annualAuthoritativePathByVariant, setAnnualAuthoritativePathByVariant] = useState<Record<string, "worker-quasi-steady" | "annual-transient-e11">>({});
   const [annualTransientByVariant, setAnnualTransientByVariant] = useState<Record<string, AnnualRotationDecompositionResult>>({});
-  const [annualRunMetadataByVariant, setAnnualRunMetadataByVariant] = useState<Record<string, {
-    steps: number;
-    intervals: number;
-    durationHours: number;
-    elapsedMs: number;
-  }>>({});
+  const [annualElectricalLayoutIdByVariant, setAnnualElectricalLayoutIdByVariant] = useState<Record<string, string>>({});
+  const [annualRunMetadataByVariant, setAnnualRunMetadataByVariant] = useState<Record<string, AnnualPublishedRunMetadata>>({});
   const [annualScope, setAnnualScope] = useState<"current" | "compare" | null>(null);
   const [annualAuditCode, setAnnualAuditCode] = useState<DiagnosticReasonCode | null>(null);
   const annualWorker = useRef<Worker | null>(null);
@@ -2162,7 +2292,7 @@ export default function SimulatorClient() {
     maxHeightM: comparisonSettings.maximumHeightM,
     maximumAspectRatio: comparisonSettings.maximumAspectRatio,
     layoutMode: "independent",
-    footprintMode: comparisonRotation.mode === "static" ? "static" : "swept",
+    footprintMode: resolveComparisonFootprintMode(comparisonRotation),
     spacingM: 0,
     maintenanceClearanceM: 0,
     planeTiltDeg: appliedComparisonPlaneTiltDeg,
@@ -2172,7 +2302,7 @@ export default function SimulatorClient() {
     coneHeightM: comparisonSettings.structureHeightM,
     groundClearanceM: comparisonSettings.supportHeightM,
     azimuthSamples: surfaceAzimuthSamples,
-  }), [comparisonSettings.landAreaM2, comparisonSettings.maximumHeightM, comparisonSettings.maximumAspectRatio, comparisonSettings.structureHeightM, comparisonSettings.supportHeightM, comparisonSettings.planeTrackingMode, comparisonRotation.mode, appliedComparisonPlaneTiltDeg, panelAzimuthDeg, surfaceAzimuthSamples]);
+  }), [comparisonSettings.landAreaM2, comparisonSettings.maximumHeightM, comparisonSettings.maximumAspectRatio, comparisonSettings.structureHeightM, comparisonSettings.supportHeightM, comparisonSettings.planeTrackingMode, comparisonRotation.mode, comparisonRotation.selfStarting, appliedComparisonPlaneTiltDeg, panelAzimuthDeg, surfaceAzimuthSamples]);
   const comparisonSurfaceByShape = useMemo(() => {
     if (screen !== "compare") return {} as Partial<Record<PresetName, ComparisonSurfaceModel>>;
     return Object.fromEntries(compareShapes.map((shapeName) => [
@@ -2539,6 +2669,9 @@ export default function SimulatorClient() {
         depthM: Math.max(1e-9, geometry.dimensions.depthM),
         heightM: Math.max(1e-9, geometry.dimensions.heightM),
         radiusM: geometry.dimensions.radiusM,
+        planeTiltDeg: geometry.dimensions.planeTiltDeg,
+        planeAzimuthDeg: geometry.dimensions.planeAzimuthDeg,
+        planeSlantLengthM: geometry.dimensions.planeSlantLengthM,
         massKg,
       });
       const cq0 = Math.max(0, comparisonRotation.torqueCoefficientByShape[shapeName as ComparisonShapeKind] ?? 0);
@@ -2553,6 +2686,7 @@ export default function SimulatorClient() {
         projectedAreaM2: analytic.projectedAreaM2,
         forceApplicationRadiusM: analytic.forceApplicationRadiusM,
         inertiaKgM2: analytic.inertiaKgM2,
+        directionalAerodynamics: analytic.directionalAerodynamics,
         structureCentreHeightM: Math.max(0.01, surface.dimensions.centreY),
         referenceHeightM: Math.max(0.1, comparisonRotation.referenceHeightM),
         maximumRpm: Math.max(0, comparisonRotation.maximumRpm),
@@ -2573,7 +2707,7 @@ export default function SimulatorClient() {
               shadowIncludedInPvYield: false,
             },
             provenance: userSource,
-            label: `${shapeName} user C_Q(lambda)`,
+            label: `${shapeName} exploratory C_Q(lambda)=C_Q(0)*max(0,1-lambda/3); auxiliary A_ref/R_ref missing`,
             torqueCoefficient: (tipSpeedRatio: number) => cq0
               * Math.max(0, 1 - tipSpeedRatio / 3),
           },
@@ -2624,15 +2758,15 @@ export default function SimulatorClient() {
       return [{
         shape: shapeName as ComparisonShapeKind,
         label: PRESET_LABELS[shapeName],
-        projectedAreaM2: entry.model.projectedAreaM2,
-        forceApplicationRadiusM: entry.model.forceApplicationRadiusM,
+        projectedAreaM2: entry.history.annual.timeWeightedMeanProjectedAreaM2,
+        forceApplicationRadiusM: entry.history.annual.timeWeightedMeanForceApplicationRadiusM,
         inertiaKgM2: entry.model.inertiaKgM2,
         staticFrictionNm: entry.model.staticFrictionNm,
         bearingViscousNmPerRadS: entry.model.bearingViscousNmPerRadS,
         airDragNmPerRadS2: entry.model.airDragNmPerRadS2,
         torqueCoefficientSource: entry.history.audit.torqueCoefficientInput === "absent"
           ? "미입력 · 자체기동 0"
-          : "형상별 사용자 C_Q(λ)",
+          : "사용자 C_Q(0) 탐색곡선 · λ=3에서 0 가정 · 보조 로터 A_ref/R_ref 미입력",
         annualTimeWeightedRpm: entry.history.annual.timeWeightedMeanRpm,
         confidence: entry.history.audit.torqueCoefficientInput === "absent"
           ? "0 RPM 규칙 · C_Q 자료 없음"
@@ -2761,15 +2895,15 @@ export default function SimulatorClient() {
       const selectedIdealEnergy = transientWorkerEnergy ?? quasiWorkerEnergy;
       const selectedIdealMonthlyWh = annualMonthlyByVariant[selectedIdealId]?.map((item) => item.energy);
       const selectedRunMetadata = annualRunMetadataByVariant[selectedIdealId];
+      const selectedAuthoritativePath = annualAuthoritativePathByVariant[selectedIdealId];
+      const idealScope = selectedIdealEnergy !== undefined && selectedRunMetadata && selectedAuthoritativePath
+        ? annualRunScopeLabelKo({ ...selectedRunMetadata, authoritativePath: selectedAuthoritativePath })
+        : "12\uAC1C \uB300\uD45C\uC77C \uD658\uC0B0";
       return [shapeName, {
         idealWh: selectedIdealEnergy ?? idealRepresentativeWh,
         idealIsWorker: selectedIdealEnergy !== undefined,
         idealMonthlyWh: selectedIdealMonthlyWh ?? idealRepresentativeMonthlyWh,
-        idealScope: transientWorkerEnergy !== undefined
-          ? `실제 ${selectedRunMetadata?.durationHours ?? 0}h · ${selectedRunMetadata?.steps ?? 0}시간점 · 과도 열 E11`
-          : quasiWorkerEnergy !== undefined
-            ? `실제 ${selectedRunMetadata?.durationHours ?? 0}h · ${selectedRunMetadata?.steps ?? 0}시간점 · 준정상`
-            : "12개 대표일 환산",
+        idealScope,
         idealThermalModel: annualThermalMetadataByVariant[selectedIdealId]?.labelKo
           ?? "대표일 환산 · 준정상 광학 회전·열이력 미포함",
         quasiWh: quasiWorkerEnergy,
@@ -2826,15 +2960,52 @@ export default function SimulatorClient() {
       pvLandRatio: ideal.pvLandRatio,
     }];
   })), [compareShapes, compareMetricsByShape, compareEnergyModesByShape]);
-  const actualTransientComparisonReady = transientComparisonSupport.supported
-    && compareShapes.every((shapeName) => compareEnergyModesByShape[shapeName]?.transientWh !== undefined);
-  const engineeringComparisonReady = compareShapes.every(
-    (shapeName) => compareEnergyModesByShape[shapeName]?.engineeringWh !== undefined,
+  const expectedComparisonAnnualVariantIds = compareShapes.flatMap((shapeName) => (
+    transientComparisonSupport.supported
+      ? (["ideal-quasi", "engineering", "ideal-transient"] as const)
+      : (["ideal-quasi", "engineering"] as const)
+  ).map((model) => comparisonAnnualVariantId(shapeName, model)));
+  const expectedAnnualSteps = seasonalWeatherSeries.points.length;
+  const expectedAnnualIntervals = Math.max(0, expectedAnnualSteps - 1);
+  const expectedAnnualDurationHours = expectedAnnualSteps > 1
+    ? (seasonalWeatherSeries.points.at(-1)!.timeUtcMs - seasonalWeatherSeries.points[0].timeUtcMs) / 3_600_000
+    : 0;
+  const comparisonAnnualRunCohortReady = annualRunCohortReady({
+    variantIds: expectedComparisonAnnualVariantIds,
+    metadataByVariant: annualRunMetadataByVariant,
+    expectedSteps: expectedAnnualSteps, expectedIntervals: expectedAnnualIntervals, expectedDurationHours: expectedAnnualDurationHours,
+  });
+  const actualTransientComparisonReady = comparisonAnnualRunCohortReady && transientComparisonSupport.supported
+    && compareShapes.every((shapeName) => {
+      const variantId = comparisonAnnualVariantId(shapeName, "ideal-transient");
+      return annualTransientResultReady({
+        energyWh: annualEnergyWhByVariant[variantId],
+        authoritativePath: annualAuthoritativePathByVariant[variantId],
+        decomposition: annualTransientByVariant[variantId],
+      });
+    });
+  const engineeringComparisonReady = comparisonAnnualRunCohortReady && compareShapes.every(
+    (shapeName) => {
+      const variantId = comparisonAnnualVariantId(shapeName, "engineering");
+      return engineeringAnnualResultReady({
+        energyWh: annualEnergyWhByVariant[variantId],
+        layoutId: annualElectricalLayoutIdByVariant[variantId],
+      });
+    },
   );
-  const officialComparisonRankEligible = actualTransientComparisonReady
-    && naturalRotationOfficialEligible
-    && officialComparisonHeight
-    && comparisonSettings.researchPresetId === "general";
+  const geometryOfficialEligible = compareShapes.every((shapeName) => (
+    comparisonSurfaceByShape[shapeName]?.comparison.constraints.officialComparisonEligible === true
+  ));
+  const comparisonRankEligibility = resolveAnnualComparisonRankEligibility({
+    transientReady: actualTransientComparisonReady,
+    engineeringReady: engineeringComparisonReady,
+    naturalRotationEligible: naturalRotationOfficialEligible,
+    officialHeight: officialComparisonHeight,
+    generalPreset: comparisonSettings.researchPresetId === "general",
+    geometryEligible: geometryOfficialEligible,
+  });
+  const officialComparisonRankEligible = comparisonRankEligibility.idealTransient;
+  const engineeringOfficialRankEligible = comparisonRankEligibility.engineering;
   const compareScore = useCallback(
     (shapeName: PresetName) => compareMetricsByShape[shapeName]?.kWhPerLandM2 ?? 0,
     [compareMetricsByShape],
@@ -2899,7 +3070,7 @@ export default function SimulatorClient() {
       id: shapeName,
       label: PRESET_LABELS[shapeName],
       landAreaM2: metrics?.actualLandAreaM2 ?? comparisonSettings.landAreaM2,
-      heightM: surface?.dimensions.heightM ?? 0,
+      heightM: surface?.comparison.constraints.effectiveHeightM ?? 0,
       maximumHeightM: comparisonSettings.maximumHeightM,
       activeAreaM2: metrics?.activeAreaM2 ?? surface?.dimensions.activeAreaM2 ?? 0,
       pvLandRatio: metrics?.pvLandRatio ?? 0,
@@ -2926,7 +3097,7 @@ export default function SimulatorClient() {
   const rankExplanations = useMemo<ShapeRankExplanation[]>(() => {
     const planeResult = compareInstantByShape.plane;
     const planeArea = compareMetricsByShape.plane?.activeAreaM2 ?? comparisonSettings.landAreaM2;
-    const planeHeight = comparisonSurfaceByShape.plane?.dimensions.heightM ?? 0;
+    const planeHeight = comparisonSurfaceByShape.plane?.comparison.constraints.effectiveHeightM ?? 0;
     return [...compareShapes]
       .sort((left, right) => compareScore(right) - compareScore(left))
       .map((shapeName, index) => {
@@ -2936,7 +3107,7 @@ export default function SimulatorClient() {
         const directShare = shapeResult ? shapeResult.directOpticalW / Math.max(shapeResult.directOpticalW + shapeResult.diffuseOpticalW + shapeResult.groundOpticalW, 1e-9) : 0;
         const diffuseShare = shapeResult ? shapeResult.diffuseOpticalW / Math.max(shapeResult.directOpticalW + shapeResult.diffuseOpticalW + shapeResult.groundOpticalW, 1e-9) : 0;
         const groundShare = shapeResult ? shapeResult.groundOpticalW / Math.max(shapeResult.directOpticalW + shapeResult.diffuseOpticalW + shapeResult.groundOpticalW, 1e-9) : 0;
-        const heightRatio = (comparisonSurfaceByShape[shapeName]?.dimensions.heightM ?? 0) / Math.max(planeHeight || comparisonSettings.maximumHeightM, 1e-9);
+        const heightRatio = (comparisonSurfaceByShape[shapeName]?.comparison.constraints.effectiveHeightM ?? 0) / Math.max(planeHeight || comparisonSettings.maximumHeightM, 1e-9);
         const averageTemp = shapeResult?.panels.length
           ? shapeResult.panels.reduce((sum, panel) => sum + panel.temperatureC, 0) / shapeResult.panels.length
           : 0;
@@ -3037,11 +3208,15 @@ export default function SimulatorClient() {
       {
         title: "회전과 표면 재료점 열이력 계산",
         easy: "같은 표면 재료점의 회전 자세·상대풍속·흡수열·복사와 열용량을 시간순으로 적분합니다.",
-        formula: "m·n_i(t) = R_y(ωt+φ₀)n_i(0);  C_A dT_i/dt = q_in − q_out",
+        formula: "u_rel,i = u_wind − ω×r_i;  C_A dT_i/dt = q_in − q_out + q_conduction",
         variables: "ω [rad/s], RPM [min⁻¹], T_i [°C], C_A [J/m²K]",
         currentInput: `${comparisonRotationModeLabel} · ${comparisonAppliedRpm.toFixed(2)} RPM · 위상 ${comparisonRotation.initialPhaseDeg.toFixed(1)}°`,
-        currentResult: "대표 실제 기상일: 비정상 재료점 열이력 · 연간 Worker: 준정상 Faiman",
-        assumption: "표면 구적점 사이 전도는 현재 단열(q_conduction=0)이며, 대표일 밖의 기간 집계는 준정상으로 명시합니다.",
+        currentResult: actualTransientComparisonReady
+          ? "연간 Worker: 실제 전년 비정상 재료점 열이력 · authoritative E11"
+          : "연간 과도 E11 미완료 또는 미지원 · 준정상 결과와 대표일 진단은 별도 표시",
+        assumption: actualTransientComparisonReady
+          ? "저해상도 열노드망의 인접 전도, 열용량과 warm-up을 포함하며 E00/E10/E01/E11 폐합을 검사합니다."
+          : "준정상 연간값에는 과도 열이력이 없으며, 대표일 비정상 진단을 전년 결과로 환산하지 않습니다.",
         scope: "월드 Y축 회전",
         reference: "회전 좌표계 에너지 평형",
       },
@@ -3054,7 +3229,7 @@ export default function SimulatorClient() {
         currentResult: leadingShape ? `${PRESET_LABELS[leadingShape]} 평균 ${averageTemperatureC.toFixed(1)}°C · AC ${(leadingResult?.independentMppt.acPowerW ?? 0).toFixed(3)} W` : "—",
         assumption: "현재 비교 스킨은 국소 MPP를 면적 적분해 회로 불일치를 형상 순위와 분리합니다.",
         scope: "현재 시간점과 시간 적분의 각 샘플",
-        reference: "Faiman 열모델 · PV 온도계수 · PVWatts 계열 인버터",
+        reference: "전년 과도 열수지 · Faiman 준정상 대조 · PV 온도계수 · PVWatts 계열 인버터",
       },
       {
         title: "일간·월간·연간 시간 적분",
@@ -3068,7 +3243,7 @@ export default function SimulatorClient() {
         reference: "사다리꼴/구간평균 시간 적분 · annual Worker",
       },
     ];
-  }, [compareShapes, compareScore, compareMetricsByShape, compareInstantByShape, comparisonSettings.landAreaM2, comparisonSettings.maximumHeightM, officialComparisonHeight, surfaceAzimuthSamples, latitude, longitude, dateTime, solar.elevationDeg, solar.azimuthDeg, provenance.provider, provenance.kind, instantWeather, iamB0, comparisonObstaclesIncluded, comparisonRotationModeLabel, comparisonAppliedRpm, comparisonRotation.initialPhaseDeg, electrical.gammaPmp, electrical.referenceC, compareEnergyModesByShape, simulationYear, compareLandRank]);
+  }, [compareShapes, compareScore, compareMetricsByShape, compareInstantByShape, comparisonSettings.landAreaM2, comparisonSettings.maximumHeightM, officialComparisonHeight, surfaceAzimuthSamples, latitude, longitude, dateTime, solar.elevationDeg, solar.azimuthDeg, provenance.provider, provenance.kind, instantWeather, iamB0, comparisonObstaclesIncluded, comparisonRotationModeLabel, comparisonAppliedRpm, comparisonRotation.initialPhaseDeg, electrical.gammaPmp, electrical.referenceC, compareEnergyModesByShape, simulationYear, compareLandRank, actualTransientComparisonReady]);
   const summerAnalysis = useMemo<SummerAnalysisValue>(() => {
     if (!clientReady) {
       return {
@@ -3308,6 +3483,10 @@ export default function SimulatorClient() {
     comparisonSettings,
     comparisonRotation,
     comparisonObstaclesIncluded,
+    comparisonPlane: annualPlaneScenarioFingerprint({
+      mode: planeComparisonMode,
+      appliedTiltDeg: appliedComparisonPlaneTiltDeg,
+    }),
     tiltDeg,
     panelAzimuthDeg,
     cylinderAspectRatio,
@@ -3333,6 +3512,8 @@ export default function SimulatorClient() {
     comparisonSettings,
     comparisonRotation,
     comparisonObstaclesIncluded,
+    planeComparisonMode,
+    appliedComparisonPlaneTiltDeg,
     tiltDeg,
     panelAzimuthDeg,
     cylinderAspectRatio,
@@ -3455,6 +3636,11 @@ export default function SimulatorClient() {
             restored.researchPresetId = "general";
           }
           const safeRestored = fixedComparisonSettings(restored);
+          const restoredOfficialHeight = safeRestored.researchPresetId === "general"
+            && Math.abs(safeRestored.maximumHeightM - officialMaximumHeightM(safeRestored.landAreaM2)) < 1e-10
+            && Math.abs(safeRestored.structureHeightM - safeRestored.maximumHeightM) < 1e-10
+            && Math.abs(safeRestored.supportHeightM) < 1e-12;
+          setOfficialComparisonHeight(restoredOfficialHeight);
           const safeShapes: PresetName[] = safeRestored.researchPresetId === "general"
             ? (restoredShapes.length > 0 ? restoredShapes : [...COMPARISON_SHAPES])
             : applyResearchComparisonInputs(
@@ -3544,6 +3730,7 @@ export default function SimulatorClient() {
     setAnnualThermalMetadataByVariant({});
     setAnnualAuthoritativePathByVariant({});
     setAnnualTransientByVariant({});
+    setAnnualElectricalLayoutIdByVariant({});
     setAnnualRunMetadataByVariant({});
     if (hadAnnualState) setAnnualAuditCode("STALE_WORKER_RESULT");
   }, [annualScenarioKey, annualEnergyWhByVariant, annualMonthlyByVariant, annualSurfaceRegionsByVariant]);
@@ -3814,6 +4001,7 @@ export default function SimulatorClient() {
     if (officialComparisonHeight && normalizedNext.researchPresetId === "general") {
       const maximumHeightM = officialMaximumHeightM(normalizedNext.landAreaM2);
       normalizedNext.maximumHeightM = maximumHeightM;
+      normalizedNext.supportHeightM = 0;
       normalizedNext.structureHeightM = maximumHeightM;
     }
     let applied = normalizedNext;
@@ -3886,6 +4074,7 @@ export default function SimulatorClient() {
     handleComparisonSettingsChange({
       ...comparisonSettings,
       maximumHeightM,
+      supportHeightM: 0,
       structureHeightM: maximumHeightM,
     });
     setToast(`공식 H_max ${maximumHeightM.toFixed(4)} m와 원기둥·원뿔 높이를 함께 잠갔습니다.`);
@@ -4150,6 +4339,42 @@ export default function SimulatorClient() {
         maximumGapHours: 2,
         reportingOffsetMinutes: timezoneHours * 60,
       });
+      const targetVariantIds = variants.map((variant) => variant.variantId);
+      const annualRunId = `${annualScenarioKey}:${scope}:${startMs}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      const expectedRunClock = {
+        steps: weatherSeries.points.length,
+        intervals: Math.max(0, weatherSeries.points.length - 1),
+        durationHours: weatherSeries.points.length > 1
+          ? (weatherSeries.points.at(-1)!.timeUtcMs - weatherSeries.points[0].timeUtcMs) / 3_600_000
+          : 0,
+      };
+      const stagedAnnual = {
+        energy: {} as Record<string, number>,
+        motor: {} as Record<string, number>,
+        monthly: {} as Record<string, { month: string; energy: number; normalized: number }[]>,
+        monthlyMotor: {} as Record<string, { month: string; motorEnergyWh: number; netAcEnergyWh: number }[]>,
+        regions: {} as Record<string, Record<string, SimulationSurfaceRegionEnergy>>,
+        thermal: {} as Record<string, ThermalModelMetadata>,
+        authoritative: {} as Record<string, "worker-quasi-steady" | "annual-transient-e11">,
+        transient: {} as Record<string, AnnualRotationDecompositionResult>,
+        layout: {} as Record<string, string>,
+        metadata: {} as Record<string, AnnualPublishedRunMetadata>,
+        rpm: {} as Record<string, number>,
+      };
+      // Remove the previous cohort before any stage starts. Stage results stay
+      // local until every stage succeeds, so cancellation/error cannot combine
+      // new quasi-steady values with a stale transient E11 result.
+      setAnnualEnergyWhByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualMotorEnergyWhByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualMonthlyByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualMonthlyMotorWhByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualSurfaceRegionsByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualRotationRpmByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualThermalMetadataByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualAuthoritativePathByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualTransientByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualElectricalLayoutIdByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
+      setAnnualRunMetadataByVariant((current) => omitAnnualVariantRecords(current, targetVariantIds));
       setAnnualScope(scope);
       setAnnualRunning(true);
       setAnnualProgress(0);
@@ -4176,8 +4401,26 @@ export default function SimulatorClient() {
           if (event.type === "simulation/complete") {
             accumulatedElapsedMs += event.elapsedMs;
             const eventVariantIds = Object.keys(event.acEnergyWhByVariant);
-            setAnnualEnergyWhByVariant((current) => ({ ...current, ...event.acEnergyWhByVariant }));
-            setAnnualMotorEnergyWhByVariant((current) => ({ ...current, ...Object.fromEntries(eventVariantIds.map((variantId) => [variantId, event.motorEnergyWhByVariant?.[variantId] ?? 0])) }));
+            const expectedStageVariantIds = stageVariants.map((variant) => variant.variantId).sort();
+            const returnedStageVariantIds = [...eventVariantIds].sort();
+            const completeClock = event.steps === expectedRunClock.steps
+              && event.intervals === expectedRunClock.intervals
+              && event.durationHours === expectedRunClock.durationHours
+              && event.steps === event.intervals + 1;
+            const completeStage = returnedStageVariantIds.length === expectedStageVariantIds.length
+              && returnedStageVariantIds.every((variantId, index) => variantId === expectedStageVariantIds[index]);
+            if (!completeClock || !completeStage) {
+              worker.terminate();
+              annualWorker.current = null;
+              annualRequest.current = null;
+              setAnnualRunning(false);
+              setAnnualProgress(0);
+              setAnnualAuditCode("STALE_WORKER_RESULT");
+              setToast("연간 Worker가 불완전하거나 다른 시계의 결과를 반환해 전체 실행을 폐기했습니다.");
+              return;
+            }
+            Object.assign(stagedAnnual.energy, event.acEnergyWhByVariant);
+            Object.assign(stagedAnnual.motor, Object.fromEntries(eventVariantIds.map((variantId) => [variantId, event.motorEnergyWhByVariant?.[variantId] ?? 0])));
             const monthly = Object.fromEntries(eventVariantIds.map((variantId) => [variantId, event.monthlyEnergy.map((item) => {
               const energy = item.acEnergyWhByVariant[variantId] ?? 0;
               const variant = variants.find((candidate) => candidate.variantId === variantId);
@@ -4188,22 +4431,24 @@ export default function SimulatorClient() {
               motorEnergyWh: item.motorEnergyWhByVariant?.[variantId] ?? 0,
               netAcEnergyWh: item.acEnergyWhByVariant[variantId] ?? 0,
             }))]));
-            setAnnualMonthlyByVariant((current) => ({ ...current, ...monthly }));
-            setAnnualMonthlyMotorWhByVariant((current) => ({ ...current, ...monthlyMotor }));
-            setAnnualSurfaceRegionsByVariant((current) => ({ ...current, ...event.surfaceRegionEnergyWhByVariant }));
-            setAnnualThermalMetadataByVariant((current) => ({ ...current, ...event.thermalModelMetadataByVariant }));
-            setAnnualAuthoritativePathByVariant((current) => ({ ...current, ...event.authoritativeEnergyPathByVariant }));
-            setAnnualTransientByVariant((current) => ({ ...current, ...(event.annualTransientRotationByVariant ?? {}) }));
-            setAnnualRunMetadataByVariant((current) => ({ ...current, ...Object.fromEntries(eventVariantIds.map((variantId) => [variantId, {
+            Object.assign(stagedAnnual.monthly, monthly);
+            Object.assign(stagedAnnual.monthlyMotor, monthlyMotor);
+            Object.assign(stagedAnnual.regions, event.surfaceRegionEnergyWhByVariant);
+            Object.assign(stagedAnnual.thermal, event.thermalModelMetadataByVariant);
+            Object.assign(stagedAnnual.authoritative, event.authoritativeEnergyPathByVariant);
+            Object.assign(stagedAnnual.transient, event.annualTransientRotationByVariant ?? {});
+            Object.assign(stagedAnnual.layout, event.electricalLayoutIdByVariant);
+            Object.assign(stagedAnnual.metadata, Object.fromEntries(eventVariantIds.map((variantId) => [variantId, {
+              runId: annualRunId,
               steps: event.steps,
               intervals: event.intervals,
               durationHours: event.durationHours,
               elapsedMs: event.elapsedMs,
-            }])) }));
-            setAnnualRotationRpmByVariant((current) => ({ ...current, ...Object.fromEntries(eventVariantIds.map((variantId) => [
+            }])));
+            Object.assign(stagedAnnual.rpm, Object.fromEntries(eventVariantIds.map((variantId) => [
               variantId,
               scope === "compare" ? comparisonRpmForShape(variantId.split(":")[1] as PresetName) : rotationRpmAtRun,
-            ])) }));
+            ])));
             worker.terminate();
             annualWorker.current = null;
             annualRequest.current = null;
@@ -4217,10 +4462,39 @@ export default function SimulatorClient() {
               startStage(stageIndex + 1);
               return;
             }
+            const stagedCohortComplete = targetVariantIds.every((variantId) =>
+              Object.hasOwn(stagedAnnual.energy, variantId))
+              && annualRunCohortReady({
+                variantIds: targetVariantIds,
+                metadataByVariant: stagedAnnual.metadata,
+                expectedSteps: expectedRunClock.steps,
+                expectedIntervals: expectedRunClock.intervals,
+                expectedDurationHours: expectedRunClock.durationHours,
+              });
+            if (!stagedCohortComplete) {
+              setAnnualRunning(false);
+              setAnnualProgress(0);
+              setAnnualAuditCode("STALE_WORKER_RESULT");
+              setToast("연간 단계 중 일부가 누락되어 전체 실행을 게시하지 않았습니다.");
+              return;
+            }
+            // React batches these setters in the same worker callback. No
+            // partial stage can become visible before the complete cohort.
+            setAnnualEnergyWhByVariant((current) => ({ ...current, ...stagedAnnual.energy }));
+            setAnnualMotorEnergyWhByVariant((current) => ({ ...current, ...stagedAnnual.motor }));
+            setAnnualMonthlyByVariant((current) => ({ ...current, ...stagedAnnual.monthly }));
+            setAnnualMonthlyMotorWhByVariant((current) => ({ ...current, ...stagedAnnual.monthlyMotor }));
+            setAnnualSurfaceRegionsByVariant((current) => ({ ...current, ...stagedAnnual.regions }));
+            setAnnualThermalMetadataByVariant((current) => ({ ...current, ...stagedAnnual.thermal }));
+            setAnnualAuthoritativePathByVariant((current) => ({ ...current, ...stagedAnnual.authoritative }));
+            setAnnualTransientByVariant((current) => ({ ...current, ...stagedAnnual.transient }));
+            setAnnualElectricalLayoutIdByVariant((current) => ({ ...current, ...stagedAnnual.layout }));
+            setAnnualRunMetadataByVariant((current) => ({ ...current, ...stagedAnnual.metadata }));
+            setAnnualRotationRpmByVariant((current) => ({ ...current, ...stagedAnnual.rpm }));
             setAnnualProgress(100);
             setAnnualRunning(false);
             setAnnualAuditCode(null);
-            setToast(`연간 ${event.steps.toLocaleString("ko-KR")}시간점 · ${variantStages.length}단계 계산 완료 · ${(accumulatedElapsedMs / 1000).toFixed(1)}초`);
+            setToast(`연간 ${event.intervals.toLocaleString("ko-KR")}개 적분 구간 · closing endpoint 포함 ${event.steps.toLocaleString("ko-KR")}점 · ${variantStages.length}단계 완료 · ${(accumulatedElapsedMs / 1000).toFixed(1)}초`);
             return;
           }
           if (event.type === "simulation/cancelled") {
@@ -4326,9 +4600,8 @@ export default function SimulatorClient() {
   };
 
   const exportAnnualComparisonCsv = () => {
-    const workerResultAvailable = compareShapes.some((shapeName) => ([
-      "ideal-quasi", "ideal-transient", "engineering",
-    ] as const).some((model) => annualEnergyWhByVariant[comparisonAnnualVariantId(shapeName, model)] !== undefined));
+    const workerResultAvailable = comparisonAnnualRunCohortReady
+      && expectedComparisonAnnualVariantIds.every((variantId) => annualEnergyWhByVariant[variantId] !== undefined);
     if (!workerResultAvailable) {
       setToast("먼저 3모델 실제 전년 계산을 실행해 주세요. 대표일 환산값은 이 CSV에 섞지 않습니다.");
       return;
@@ -4339,7 +4612,7 @@ export default function SimulatorClient() {
     };
     const header = [
       "record_type", "shape", "model", "month", "A_land_m2", "A_PV_m2", "A_PV_per_A_land",
-      "total_AC_kWh", "kWh_per_m2_land", "kWh_per_m2_PV", "electrical_connection", "thermal_model",
+      "total_AC_kWh", "kWh_per_m2_land", "kWh_per_m2_PV", "electrical_connection", "electrical_layout_id", "thermal_model",
       "rotation_model", "rpm_time_weighted", "rotation_provenance", "weather_source", "time_resolution",
       "integration_scope", "official_rank_eligible", "E00_kWh", "E10_kWh", "E01_kWh", "E11_kWh",
       "optical_kWh", "thermal_kWh", "interaction_kWh", "net_kWh", "closure_residual_Wh",
@@ -4367,20 +4640,29 @@ export default function SimulatorClient() {
         if (energyWh === undefined) return;
         const decomposition = annualTransientByVariant[variantId];
         const kWh = energyWh / 1000;
-        rows.push(["annual", PRESET_LABELS[shapeName], modelLabel, "", landAreaM2, pvAreaM2, pvAreaM2 / landAreaM2, kWh, kWh / landAreaM2, kWh / pvAreaM2, connection, annualThermalMetadataByVariant[variantId]?.labelKo ?? "준정상 광학 회전·열이력 미포함", comparisonRotationModeLabel, annualRotationRpmByVariant[variantId] ?? comparisonRpmForShape(shapeName), rotationProvenance, `${seasonalWeatherSeries.provenance.labelKo} · ${seasonalWeatherSeries.provenance.provider}`, seasonalWeatherSeries.provenance.temporalResolution, model === "ideal-transient" ? "실제 전년 시간 적분 · authoritative E11" : "실제 전년 시간 적분 · 준정상 광학 회전·열이력 미포함", model === "ideal-transient" && officialComparisonRankEligible, decomposition?.annual.e00Wh / 1000, decomposition?.annual.e10Wh / 1000, decomposition?.annual.e01Wh / 1000, decomposition?.annual.e11Wh / 1000, decomposition?.annual.opticalWh / 1000, decomposition?.annual.thermalWh / 1000, decomposition?.annual.interactionWh / 1000, decomposition?.annual.netWh / 1000, decomposition?.annual.closureResidualWh]);
-        decomposition?.monthly.forEach((month) => rows.push(["monthly-decomposition", PRESET_LABELS[shapeName], modelLabel, month.month, landAreaM2, pvAreaM2, pvAreaM2 / landAreaM2, month.e11Wh / 1000, month.e11Wh / 1000 / landAreaM2, month.e11Wh / 1000 / pvAreaM2, connection, decomposition.thermalModel.labelKo, comparisonRotationModeLabel, annualRotationRpmByVariant[variantId] ?? comparisonRpmForShape(shapeName), rotationProvenance, `${seasonalWeatherSeries.provenance.labelKo} · ${seasonalWeatherSeries.provenance.provider}`, seasonalWeatherSeries.provenance.temporalResolution, "실제 전년의 해당 월 시간 적분", model === "ideal-transient" && officialComparisonRankEligible, month.e00Wh / 1000, month.e10Wh / 1000, month.e01Wh / 1000, month.e11Wh / 1000, month.opticalWh / 1000, month.thermalWh / 1000, month.interactionWh / 1000, month.netWh / 1000, month.closureResidualWh]));
+        const rankEligible = model === "ideal-transient"
+          ? officialComparisonRankEligible
+          : model === "engineering" && engineeringOfficialRankEligible;
+        rows.push(["annual", PRESET_LABELS[shapeName], modelLabel, "", landAreaM2, pvAreaM2, pvAreaM2 / landAreaM2, kWh, kWh / landAreaM2, kWh / pvAreaM2, connection, annualElectricalLayoutIdByVariant[variantId], annualThermalMetadataByVariant[variantId]?.labelKo ?? "준정상 광학 회전·열이력 미포함", comparisonRotationModeLabel, annualRotationRpmByVariant[variantId] ?? comparisonRpmForShape(shapeName), rotationProvenance, `${seasonalWeatherSeries.provenance.labelKo} · ${seasonalWeatherSeries.provenance.provider}`, seasonalWeatherSeries.provenance.temporalResolution, model === "ideal-transient" ? "실제 전년 시간 적분 · authoritative E11" : "실제 전년 시간 적분 · 준정상 광학 회전·열이력 미포함", rankEligible, decomposition?.annual.e00Wh / 1000, decomposition?.annual.e10Wh / 1000, decomposition?.annual.e01Wh / 1000, decomposition?.annual.e11Wh / 1000, decomposition?.annual.opticalWh / 1000, decomposition?.annual.thermalWh / 1000, decomposition?.annual.interactionWh / 1000, decomposition?.annual.netWh / 1000, decomposition?.annual.closureResidualWh]);
+        decomposition?.monthly.forEach((month) => rows.push(["monthly-decomposition", PRESET_LABELS[shapeName], modelLabel, month.month, landAreaM2, pvAreaM2, pvAreaM2 / landAreaM2, month.e11Wh / 1000, month.e11Wh / 1000 / landAreaM2, month.e11Wh / 1000 / pvAreaM2, connection, annualElectricalLayoutIdByVariant[variantId], decomposition.thermalModel.labelKo, comparisonRotationModeLabel, annualRotationRpmByVariant[variantId] ?? comparisonRpmForShape(shapeName), rotationProvenance, `${seasonalWeatherSeries.provenance.labelKo} · ${seasonalWeatherSeries.provenance.provider}`, seasonalWeatherSeries.provenance.temporalResolution, "실제 전년의 해당 월 시간 적분", rankEligible, month.e00Wh / 1000, month.e10Wh / 1000, month.e01Wh / 1000, month.e11Wh / 1000, month.opticalWh / 1000, month.thermalWh / 1000, month.interactionWh / 1000, month.netWh / 1000, month.closureResidualWh]));
       });
     });
+    const exportedRunMetadata = annualRunMetadataByVariant[expectedComparisonAnnualVariantIds[0]];
+    const closingEndpointPresent = exportedRunMetadata?.steps === (exportedRunMetadata?.intervals ?? -2) + 1;
     const meta = [
       `# scenario=${scenarioName}`,
+      `# annual_run_id=${exportedRunMetadata?.runId ?? ""}`,
       "# quasi_steady_label=준정상 광학 회전·열이력 미포함",
       "# transient_label=전년 시간 적분·과도 열이력 포함",
       `# weather_source=${seasonalWeatherSeries.provenance.labelKo} · ${seasonalWeatherSeries.provenance.provider}`,
       `# time_resolution=${seasonalWeatherSeries.provenance.temporalResolution}`,
-      `# weather_points=${seasonalWeatherSeries.points.length}`,
-      `# integration_hours=${seasonalWeatherSeries.points.length > 1 ? (seasonalWeatherSeries.points.at(-1)!.timeUtcMs - seasonalWeatherSeries.points[0].timeUtcMs) / 3_600_000 : 0}`,
+      `# weather_points=${exportedRunMetadata?.steps ?? seasonalWeatherSeries.points.length}`,
+      `# integration_intervals=${exportedRunMetadata?.intervals ?? ""}`,
+      `# integration_hours=${exportedRunMetadata?.durationHours ?? ""}`,
+      `# closing_endpoint_present=${closingEndpointPresent}`,
       `# rotation_provenance=${rotationProvenance}`,
       "# engineering_topology=nominal_cell_area_0.0025_m2;parallel_strings_2;cells_per_bypass_10",
+      `# engineering_layout_ids=${JSON.stringify(annualElectricalLayoutIdByVariant)}`,
       "# representative_day_values_excluded=true",
     ];
     downloadBlob(`\uFEFF${[...meta, header.map(csvCell).join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\n")}`, "text/csv;charset=utf-8", `${scenarioName.replace(/\s+/g, "-")}-annual-comparison.csv`);
@@ -4779,6 +5061,12 @@ export default function SimulatorClient() {
                   const idealQuasiId = comparisonAnnualVariantId(name, "ideal-quasi");
                   const selectedIdealId = energyModes?.transientWh === undefined ? idealQuasiId : idealTransientId;
                   const annualMotorEnergyWh = annualMotorEnergyWhByVariant[selectedIdealId];
+                  const engineeringId = comparisonAnnualVariantId(name, "engineering");
+                  const engineeringLayoutId = annualElectricalLayoutIdByVariant[engineeringId];
+                  const connectionDeltaKWh = energyModes?.quasiWh !== undefined
+                    && energyModes.engineeringWh !== undefined
+                    ? electricalConnectionDeltaKWh({ idealQuasiWh: energyModes.quasiWh, engineeringQuasiWh: energyModes.engineeringWh })
+                    : undefined;
                   const basePanels = scenePanelsFromSurface(comparisonSurface);
                   const sceneRotationAngle = name === "plane" && comparisonSettings.planeTrackingMode !== "fixed"
                     ? 0
@@ -4792,20 +5080,22 @@ export default function SimulatorClient() {
                     : undefined;
                   const footprintIndex = normalized?.footprintIndex ?? 100;
                   const heightM = comparisonGeometry?.dimensions.heightM ?? comparisonSurface?.dimensions.heightM ?? 0;
+                  const installedHeightM = comparisonGeometry?.constraints.effectiveHeightM ?? heightM;
                   return <article className="compare-card surface-card" key={name} aria-label={`${PRESET_LABELS[name]} 단일 연속 PV 스킨 결과`}>
-                    <div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div><div className="compare-ranks"><Pill tone={officialComparisonRankEligible && (compareLandRank.get(name) ?? 0) === 1 ? "good" : "neutral"}>{officialComparisonRankEligible ? "과도 토지" : "탐색 토지"} #{compareLandRank.get(name)}</Pill><Pill tone={officialComparisonRankEligible && (comparePvRank.get(name) ?? 0) === 1 ? "data" : "neutral"}>{officialComparisonRankEligible ? "과도 PV" : "탐색 PV"} #{comparePvRank.get(name)}</Pill>{engineeringComparisonReady ? <><Pill tone={naturalRotationOfficialEligible && (compareEngineeringLandRank.get(name) ?? 0) === 1 ? "good" : "neutral"}>{naturalRotationOfficialEligible ? "공학 준정상 토지" : "탐색 공학 토지"} #{compareEngineeringLandRank.get(name)}</Pill><Pill tone={naturalRotationOfficialEligible && (compareEngineeringPvRank.get(name) ?? 0) === 1 ? "data" : "neutral"}>{naturalRotationOfficialEligible ? "공학 준정상 PV" : "탐색 공학 PV"} #{compareEngineeringPvRank.get(name)}</Pill></> : null}</div></div>
+                    <div className="compare-head"><div><span>0{index + 1}</span><h3>{PRESET_LABELS[name]}</h3></div><div className="compare-ranks"><Pill tone={officialComparisonRankEligible && (compareLandRank.get(name) ?? 0) === 1 ? "good" : "neutral"}>{officialComparisonRankEligible ? "과도 토지" : "탐색 토지"} #{compareLandRank.get(name)}</Pill><Pill tone={officialComparisonRankEligible && (comparePvRank.get(name) ?? 0) === 1 ? "data" : "neutral"}>{officialComparisonRankEligible ? "과도 PV" : "탐색 PV"} #{comparePvRank.get(name)}</Pill>{engineeringComparisonReady ? <><Pill tone={engineeringOfficialRankEligible && (compareEngineeringLandRank.get(name) ?? 0) === 1 ? "good" : "neutral"}>{engineeringOfficialRankEligible ? "공학 준정상 토지" : "탐색 공학 토지"} #{compareEngineeringLandRank.get(name)}</Pill><Pill tone={engineeringOfficialRankEligible && (compareEngineeringPvRank.get(name) ?? 0) === 1 ? "data" : "neutral"}>{engineeringOfficialRankEligible ? "공학 준정상 PV" : "탐색 공학 PV"} #{compareEngineeringPvRank.get(name)}</Pill></> : null}</div></div>
                     <div className="mini-scene"><ThreeWorkspace panels={renderPanelsFromBase(basePanels, compareResult.panels)} obstacles={obstacles} selectedPanelId={null} onSelectPanel={() => undefined} onPanelTransform={() => undefined} transformMode="translate" gridSnap={false} surfaceSnap={false} showNormals={showNormals} showRays={false} sunVector={solar.vector} sunElevationDeg={solar.elevationDeg} rotationAngleRad={sceneRotationAngle} idealSurfaceModel={comparisonSurface ?? null} continuousSurface={!comparisonSurface && isContinuousSurfacePreset(name) ? { kind: name, cylinderAspectRatio, coneAspectRatio } : null} showZoneBoundaries={false} showSurfaceSamples={showSurfaceSamples} cameraView={compareCameraView} parcelAreaM2={parcelAreaM2} parcelShape={parcelGeometry?.shape ?? "rectangle"} parcelWidthM={parcelGeometry?.widthM} parcelDepthM={parcelGeometry?.depthM} parcelRotationRad={parcelGeometry?.rotationRad} showParcelBoundary={comparisonSettings.showParcel} sweptFootprintM2={comparisonGeometry?.footprint.sweptAreaM2 ?? compareResult.footprintM2} showSweptFootprint={comparisonSettings.showSweptFootprint} supportHeightM={comparisonSettings.supportHeightM} structureHeightM={heightM} showHeightGuide quality="fast" /></div>
                     <div className="continuous-skin-contract"><Check size={13} /><span>단일 연속 PV 스킨 · 경계·간격·중복 없음</span>{name === "cylinder" ? <small><i className="region-top" /> 윗면 활성 <i className="region-side" /> 옆면 활성</small> : null}</div>
                     <div className="compare-kpis">
+                    {engineeringLayoutId ? <div className="continuous-skin-contract"><CircuitBoard size={13} /><span>공학 배선 layout</span><code>{engineeringLayoutId}</code></div> : null}
                       <div><span>토지 투영면적 A_land</span><strong>{(normalized?.actualLandAreaM2 ?? comparisonSettings.landAreaM2).toFixed(4)} m²</strong></div>
                       <div><span>면적지수</span><strong>{footprintIndex.toFixed(2)}</strong></div>
                       <div><span>실제 PV 활성면적 A_PV</span><strong>{(normalized?.activeAreaM2 ?? compareResult.activeAreaM2).toFixed(4)} m²</strong></div>
                       <div><span>A_PV / A_land</span><strong>{(normalized?.pvLandRatio ?? 0).toFixed(3)}×</strong></div>
-                      <div><span>형상 높이 / H_max</span><strong>{heightM.toFixed(3)} / {comparisonSettings.maximumHeightM.toFixed(3)} m</strong></div>
+                      <div><span>설치 최고높이(지지대 포함) / H_max</span><strong>{installedHeightM.toFixed(3)} / {comparisonSettings.maximumHeightM.toFixed(3)} m</strong></div>
                       <div><span>순간 태양 투영면적 A_sun(t)</span><strong>{compareResult.projectedAreaM2.toFixed(4)} m²</strong></div>
                       <div><span>이상적 연속막 상한 AC</span><strong>{(normalized?.kWh ?? 0).toFixed(3)} kWh/year</strong></div>
                       <div><span>공학적 연결 AC</span><strong>{engineeringNormalized ? `${engineeringNormalized.kWh.toFixed(3)} kWh/year` : "계산 대기"}</strong></div>
-                      <div><span>연결 손실 · 공학−상한</span><strong>{engineeringNormalized && normalized ? `${(engineeringNormalized.kWh - normalized.kWh).toFixed(3)} kWh/year` : "계산 대기"}</strong></div>
+                      <div><span>연결 손실 · 공학 준정상−이상적 준정상</span><strong>{connectionDeltaKWh === undefined ? "계산 대기" : `${connectionDeltaKWh.toFixed(3)} kWh/year`}</strong></div>
                       <div><span>순간 이상적 연속막 AC</span><strong>{compareResult.independentMppt.acPowerW.toFixed(3)} W</strong></div>
                       <div><span>토지 생산성</span><strong>{(normalized?.kWhPerLandM2 ?? 0).toFixed(2)} kWh/m²-land/year</strong></div>
                       <div><span>PV 면적당 생산성</span><strong>{(normalized?.kWhPerPvM2 ?? 0).toFixed(2)} kWh/m²-PV/year</strong></div>
@@ -4821,10 +5111,10 @@ export default function SimulatorClient() {
                 <AnnualComparisonChart title="이상적 연속막 상한 · 총 AC" subtitle={officialComparisonRankEligible ? "실제 전년 과도 열 E11 공식 순위" : "과도 E11 미완료 또는 공식 조건 불충족 · 탐색 순위"} unit="kWh/year" dataKey="absoluteKWh" data={compareChartData} />
                 <AnnualComparisonChart title="토지 생산성 · 이상적 상한" subtitle="E_absolute / A_land" unit="kWh/m²-land/year" dataKey="landKWhM2" data={compareChartData} />
                 <AnnualComparisonChart title="PV 면적당 생산성 · 이상적 상한" subtitle="E_absolute / A_PV" unit="kWh/m²-PV/year" dataKey="pvKWhM2" data={compareChartData} />
-                {engineeringComparisonReady ? <><AnnualComparisonChart title="공학적 전기 연결 · 총 AC" subtitle={naturalRotationOfficialEligible ? "명시적 직렬·병렬·바이패스 · 준정상 열" : "사용자 C_Q 보조 로터 공정 미포함 · 탐색 순위"} unit="kWh/year" dataKey="absoluteKWh" data={compareEngineeringChartData} /><AnnualComparisonChart title="공학적 연결 · 토지 생산성" subtitle={naturalRotationOfficialEligible ? "E_engineering / A_land · 준정상 열" : "탐색 전용 · 공식 제외"} unit="kWh/m²-land/year" dataKey="landKWhM2" data={compareEngineeringChartData} /><AnnualComparisonChart title="공학적 연결 · PV 면적당 생산성" subtitle={naturalRotationOfficialEligible ? "E_engineering / A_PV · 준정상 열" : "탐색 전용 · 공식 제외"} unit="kWh/m²-PV/year" dataKey="pvKWhM2" data={compareEngineeringChartData} /></> : null}
+                {engineeringComparisonReady ? <><AnnualComparisonChart title="공학적 전기 연결 · 총 AC" subtitle={engineeringOfficialRankEligible ? "명시적 직렬·병렬·바이패스 · 준정상 열" : "공식 조건 불충족 · 탐색 순위"} unit="kWh/year" dataKey="absoluteKWh" data={compareEngineeringChartData} /><AnnualComparisonChart title="공학적 연결 · 토지 생산성" subtitle={engineeringOfficialRankEligible ? "E_engineering / A_land · 준정상 열" : "탐색 전용 · 공식 제외"} unit="kWh/m²-land/year" dataKey="landKWhM2" data={compareEngineeringChartData} /><AnnualComparisonChart title="공학적 연결 · PV 면적당 생산성" subtitle={engineeringOfficialRankEligible ? "E_engineering / A_PV · 준정상 열" : "탐색 전용 · 공식 제외"} unit="kWh/m²-PV/year" dataKey="pvKWhM2" data={compareEngineeringChartData} /></> : null}
                 <section className="surface-card fairness-card"><PanelHeader title="비교 공정성 확인" subtitle="형상 보정계수 없이 동일 A_land 적용" /><div className="fairness-list"><div><Check size={15} /><span>공통 토지 투영면적</span><strong>{comparisonSettings.landAreaM2.toFixed(4)} m²</strong></div><div><Check size={15} /><span>상한 모델</span><strong>local-MPP-area-integral</strong></div><div><Check size={15} /><span>공학 모델</span><strong>explicit-series-parallel-bypass</strong></div><div><Check size={15} /><span>기상 시계열</span><strong>{seasonalWeatherSeries.provenance.labelKo}</strong></div><div><Check size={15} /><span>시간 해상도</span><strong>{seasonalWeatherSeries.provenance.temporalResolution}</strong></div><div><Check size={15} /><span>회전축</span><strong>월드 Y축</strong></div></div><p>이상적 상한과 공학 연결은 같은 A_land, A_PV, 셀 밀도와 기상을 쓰며 형상별 multiplier는 없습니다. 대표일 환산값은 실제 전년 Worker 결과와 같은 순위로 취급하지 않습니다.</p></section>
               </div>
-              <section className="surface-card preliminary-diagnosis" aria-label="이상적 local MPP와 공학적 전기 연결 비교"><PanelHeader title="이상적 상한 vs 공학적 전기 연결" subtitle="동일 셀 밀도 · 2 parallel strings · 10 cells/bypass substring" /><div className="diagnosis-table-wrap"><table className="diagnosis-table"><thead><tr><th>형상</th><th>A_land</th><th>A_PV</th><th>A_PV/A_land</th><th>이상적 AC</th><th>공학 AC</th><th>차이</th><th>공학 토지 순위</th><th>공학 PV 순위</th><th>전기 연결</th><th>열모델</th><th>회전모델</th><th>기상</th><th>시간 해상도</th><th>적분 범위</th></tr></thead><tbody>{compareShapes.map((shapeName) => { const ideal = compareMetricsByShape[shapeName]; const engineering = compareEngineeringMetricsByShape[shapeName]; const energyModes = compareEnergyModesByShape[shapeName]; const rankScope = naturalRotationOfficialEligible ? "준정상 공학" : "탐색·공식 제외"; return <tr key={`${shapeName}-electrical`}><th>{PRESET_LABELS[shapeName]}</th><td>{(ideal?.actualLandAreaM2 ?? 0).toFixed(4)} m²</td><td>{(ideal?.activeAreaM2 ?? 0).toFixed(4)} m²</td><td>{(ideal?.pvLandRatio ?? 0).toFixed(3)}×</td><td>{(ideal?.kWh ?? 0).toFixed(3)} kWh</td><td>{engineering ? `${engineering.kWh.toFixed(3)} kWh` : "계산 대기"}</td><td>{engineering && ideal ? `${(engineering.kWh - ideal.kWh).toFixed(3)} kWh` : "—"}</td><td>{engineering ? `${rankScope} #${compareEngineeringLandRank.get(shapeName)}` : "—"}</td><td>{engineering ? `${rankScope} #${compareEngineeringPvRank.get(shapeName)}` : "—"}</td><td>explicit series/parallel/bypass</td><td>{energyModes?.engineeringThermalModel ?? "준정상 광학 회전·열이력 미포함"}</td><td>{comparisonRotationModeLabel} · {comparisonRpmForShape(shapeName).toFixed(2)} RPM</td><td>{seasonalWeatherSeries.provenance.labelKo}</td><td>{seasonalWeatherSeries.provenance.temporalResolution}</td><td>{engineering ? "실제 전년 시간 적분 · 준정상" : "계산 대기"}</td></tr>; })}</tbody></table></div></section>
+              <section className="surface-card preliminary-diagnosis" aria-label="이상적 local MPP와 공학적 전기 연결 비교"><PanelHeader title="이상적 상한 vs 공학적 전기 연결" subtitle="동일 준정상 열·회전·기상 · 동일 셀 밀도 · 2 parallel strings · 10 cells/bypass substring" /><div className="diagnosis-table-wrap"><table className="diagnosis-table"><thead><tr><th>형상</th><th>A_land</th><th>A_PV</th><th>A_PV/A_land</th><th>이상적 준정상 AC</th><th>공학 준정상 AC</th><th>연결 차이</th><th>공학 토지 순위</th><th>공학 PV 순위</th><th>전기 연결</th><th>열모델</th><th>회전모델</th><th>기상</th><th>시간 해상도</th><th>적분 범위</th></tr></thead><tbody>{compareShapes.map((shapeName) => { const ideal = compareMetricsByShape[shapeName]; const engineering = compareEngineeringMetricsByShape[shapeName]; const energyModes = compareEnergyModesByShape[shapeName]; const idealQuasiKWh = energyModes?.quasiWh === undefined ? undefined : energyModes.quasiWh / 1000; const connectionDelta = energyModes?.quasiWh !== undefined && energyModes.engineeringWh !== undefined ? electricalConnectionDeltaKWh({ idealQuasiWh: energyModes.quasiWh, engineeringQuasiWh: energyModes.engineeringWh }) : undefined; const rankScope = engineeringOfficialRankEligible ? "준정상 공학" : "탐색·공식 제외"; return <tr key={`${shapeName}-electrical`}><th>{PRESET_LABELS[shapeName]}</th><td>{(ideal?.actualLandAreaM2 ?? 0).toFixed(4)} m²</td><td>{(ideal?.activeAreaM2 ?? 0).toFixed(4)} m²</td><td>{(ideal?.pvLandRatio ?? 0).toFixed(3)}×</td><td>{idealQuasiKWh === undefined ? "계산 대기" : `${idealQuasiKWh.toFixed(3)} kWh`}</td><td>{engineering ? `${engineering.kWh.toFixed(3)} kWh` : "계산 대기"}</td><td>{connectionDelta === undefined ? "—" : `${connectionDelta.toFixed(3)} kWh`}</td><td>{engineering ? `${rankScope} #${compareEngineeringLandRank.get(shapeName)}` : "—"}</td><td>{engineering ? `${rankScope} #${compareEngineeringPvRank.get(shapeName)}` : "—"}</td><td>explicit series/parallel/bypass</td><td>{energyModes?.engineeringThermalModel ?? "준정상 광학 회전·열이력 미포함"}</td><td>{comparisonRotationModeLabel} · {comparisonRpmForShape(shapeName).toFixed(2)} RPM</td><td>{seasonalWeatherSeries.provenance.labelKo}</td><td>{seasonalWeatherSeries.provenance.temporalResolution}</td><td>{engineering ? "실제 전년 시간 적분 · 준정상" : "계산 대기"}</td></tr>; })}</tbody></table></div></section>
               <AnnualTransientDecompositionPanel rows={annualTransientDecompositionRows} unsupportedReason={transientComparisonSupport.reasonKo} />
               <div className="comparison-analysis-grid">
                 <RankExplanationPanel rows={rankExplanations} officialComparison={officialComparisonRankEligible} />

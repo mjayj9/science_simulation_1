@@ -42,14 +42,44 @@ describe("official equal-land/equal-height geometry contract", () => {
       const hMax = commonMaximumHeightM(landAreaM2);
       for (const shape of SHAPES) {
         const geometry = calculateComparisonGeometry(shape, { landAreaM2 });
-        const effectiveHeightM = geometry.dimensions.trackingEnvelopeHeightM
-          ?? geometry.dimensions.heightM;
+        const surface = createComparisonSurface(shape, { landAreaM2 });
+        const maximumSampleY = Math.max(
+          ...surface.zones.flatMap((zone) => zone.samples.map((sample) => sample.position[1])),
+        );
+        const effectiveHeightM = geometry.constraints.effectiveHeightM;
         expect(effectiveHeightM, `${shape} at A_land=${landAreaM2}`)
           .toBeLessThanOrEqual(hMax + 1e-12);
+        expect(maximumSampleY, `${shape} world top at A_land=${landAreaM2}`).toBeLessThanOrEqual(hMax + 1e-12);
         expect(geometry.constraints.commonMaximumHeightM, shape).toBeCloseTo(hMax, 14);
         expect(geometry.constraints.heightExceeded, shape).toBe(false);
       }
     }
+  });
+
+  it("counts support clearance inside H_max and keeps actual world samples below it", () => {
+    const landAreaM2 = 0.05;
+    const hMax = commonMaximumHeightM(landAreaM2);
+    const clearanceM = 0.01;
+    expect(() => createComparisonSurface("sphere", {
+      landAreaM2,
+      groundClearanceM: clearanceM,
+    })).toThrow(/maximum height/);
+    expect(() => createComparisonSurface("cylinder", {
+      landAreaM2,
+      groundClearanceM: clearanceM,
+      cylinderHeightM: hMax,
+    })).toThrow(/H_max minus ground clearance/);
+
+    const cylinder = createComparisonSurface("cylinder", {
+      landAreaM2,
+      groundClearanceM: clearanceM,
+    });
+    const samples = cylinder.zones.flatMap((zone) => zone.samples);
+    const maximumSampleY = Math.max(...samples.map((sample) => sample.position[1]));
+    expect(cylinder.comparison.dimensions.heightM).toBeCloseTo(hMax - clearanceM, 14);
+    expect(cylinder.comparison.constraints.groundClearanceM).toBe(clearanceM);
+    expect(cylinder.comparison.constraints.effectiveHeightM).toBeCloseTo(hMax, 14);
+    expect(maximumSampleY).toBeLessThanOrEqual(hMax + 1e-12);
   });
 
   it("rejects H > H_max and excludes a valid custom cylinder height from official ranking", () => {

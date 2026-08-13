@@ -43,6 +43,7 @@ export interface ComparisonSurfaceInput {
   landAreaM2?: number;
   activeAreaM2?: number;
   maximumActiveAreaM2?: number;
+  /** Total installed height from the ground datum, including groundClearanceM. */
   maxHeightM?: number;
   /** Maximum structure height / footprint diameter. */
   maximumAspectRatio?: number;
@@ -61,6 +62,7 @@ export interface ComparisonSurfaceInput {
   planeAspectRatio?: number;
   cylinderHeightM?: number;
   coneHeightM?: number;
+  /** Support/clearance counted inside maxHeightM, never added outside H_max. */
   groundClearanceM?: number;
   azimuthSamples?: number;
   /** Composite GL2 intervals. This is numerical resolution, not a panel count. */
@@ -104,7 +106,11 @@ export interface FootprintBreakdown {
 export interface ComparisonConstraints {
   /** Formula value 2*sqrt(A_land/pi), independent of any tighter user limit. */
   commonMaximumHeightM: number;
+  /** Total installed-height limit from the ground datum. */
   maxHeightM: number;
+  /** Clearance/support height counted inside the total maxHeightM envelope. */
+  groundClearanceM: number;
+  maximumBodyHeightM: number;
   maximumAspectRatio: number;
   maximumActiveAreaM2: number;
   requestedLandAreaM2: number;
@@ -159,6 +165,7 @@ interface NormalizedInput {
   targetActiveAreaM2: number;
   maximumActiveAreaM2: number;
   maxHeightM: number;
+  maximumBodyHeightM: number;
   maximumAspectRatio: number;
   layoutMode: ComparisonLayoutMode;
   footprintMode: ComparisonFootprintMode;
@@ -216,13 +223,18 @@ function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
     positiveFinite(input.maxHeightM ?? fairMaximumHeightM, "최대 높이"),
     fairMaximumHeightM,
   );
+  const groundClearanceM = nonnegativeFinite(input.groundClearanceM ?? 0, "지면 여유");
+  if (groundClearanceM >= maxHeightM) {
+    throw new RangeError("Ground clearance must be smaller than the total H_max envelope.");
+  }
+  const maximumBodyHeightM = maxHeightM - groundClearanceM;
   const nativeRadiusM = Math.sqrt(requestedLandAreaM2 / Math.PI);
   const cylinderHeightM = positiveFinite(
-    input.cylinderHeightM ?? 2 * nativeRadiusM,
+    input.cylinderHeightM ?? Math.min(2 * nativeRadiusM, maximumBodyHeightM),
     "원기둥 높이",
   );
   const coneHeightM = positiveFinite(
-    input.coneHeightM ?? 2 * nativeRadiusM,
+    input.coneHeightM ?? Math.min(2 * nativeRadiusM, maximumBodyHeightM),
     "원뿔 높이",
   );
   const requestedPlaneTiltDeg = input.planeTiltDeg ?? 30;
@@ -250,6 +262,7 @@ function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
     ),
     maximumActiveAreaM2,
     maxHeightM,
+    maximumBodyHeightM,
     maximumAspectRatio: positiveFinite(
       input.maximumAspectRatio ?? DEFAULT_MAXIMUM_ASPECT_RATIO,
       "최대 높이/직경비",
@@ -274,7 +287,7 @@ function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
     cylinderHeightM,
     coneHeightM,
     commonMaximumHeightM: fairMaximumHeightM,
-    groundClearanceM: nonnegativeFinite(input.groundClearanceM ?? 0.003, "지면 여유"),
+    groundClearanceM,
     azimuthSamples: validateSurfaceAzimuthSamples(
       input.azimuthSamples ?? DEFAULT_SURFACE_AZIMUTH_SAMPLES,
     ),
@@ -307,12 +320,12 @@ function planeGeometry(input: NormalizedInput): RawGeometry {
       const slant = Math.sqrt(projectedAreaM2 / (aspect * Math.max(Math.cos(candidate), 1e-15)));
       return slant * Math.sin(candidate);
     };
-    if (heightAt(tilt) > input.maxHeightM) {
+    if (heightAt(tilt) > input.maximumBodyHeightM) {
       let lower = 0;
       let upper = tilt;
       for (let iteration = 0; iteration < 80; iteration += 1) {
         const midpoint = (lower + upper) / 2;
-        if (heightAt(midpoint) <= input.maxHeightM) lower = midpoint;
+        if (heightAt(midpoint) <= input.maximumBodyHeightM) lower = midpoint;
         else upper = midpoint;
       }
       tilt = lower;
@@ -353,7 +366,7 @@ function cubeGeometry(input: NormalizedInput): RawGeometry {
   const sideM = input.basis === "active"
     ? Math.sqrt(input.targetActiveAreaM2 / 5)
     : Math.sqrt(input.landAreaM2);
-  if (sideM > input.maxHeightM + 1e-12) {
+  if (sideM > input.maximumBodyHeightM + 1e-12) {
     throw new RangeError("The cube footprint cannot fit inside maximum height without underfilling land.");
   }
   if (5 * sideM * sideM > input.maximumActiveAreaM2 + 1e-12) {
@@ -385,7 +398,7 @@ function circularGeometry(
     radiusM = Math.sqrt(input.landAreaM2 / Math.PI);
     if (shape === "sphere") {
       heightM = 2 * radiusM;
-      if (heightM > input.maxHeightM + 1e-12) {
+      if (heightM > input.maximumBodyHeightM + 1e-12) {
         throw new RangeError("The sphere footprint requires a diameter above maximum height.");
       }
       if (4 * input.landAreaM2 > input.maximumActiveAreaM2 + 1e-12) {
@@ -393,7 +406,7 @@ function circularGeometry(
       }
     } else if (shape === "hemisphere") {
       heightM = radiusM;
-      if (heightM > input.maxHeightM + 1e-12) {
+      if (heightM > input.maximumBodyHeightM + 1e-12) {
         throw new RangeError("The hemisphere footprint requires a radius above maximum height.");
       }
       if (2 * input.landAreaM2 > input.maximumActiveAreaM2 + 1e-12) {
@@ -401,9 +414,9 @@ function circularGeometry(
       }
     } else {
       const requestedHeightM = shape === "cylinder" ? input.cylinderHeightM : input.coneHeightM;
-      if (requestedHeightM > input.maxHeightM + 1e-12) {
+      if (requestedHeightM > input.maximumBodyHeightM + 1e-12) {
         throw new RangeError(
-          `${shape} height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+          `${shape} height must satisfy 0 < H <= H_max minus ground clearance (${input.maximumBodyHeightM.toFixed(6)} m).`,
         );
       }
       const aspectHeightM = 2 * radiusM * input.maximumAspectRatio;
@@ -420,11 +433,11 @@ function circularGeometry(
       }
       heightM = Math.max(0, Math.min(
         requestedHeightM,
-        input.maxHeightM,
+        input.maximumBodyHeightM,
         aspectHeightM,
         activeAreaHeightM,
       ));
-      heightLimited = requestedHeightM > input.maxHeightM;
+      heightLimited = requestedHeightM > input.maximumBodyHeightM;
       aspectLimited = requestedHeightM > aspectHeightM;
       activeAreaLimited = requestedHeightM > activeAreaHeightM;
     }
@@ -435,9 +448,9 @@ function circularGeometry(
     radiusM = Math.sqrt(input.targetActiveAreaM2 / (2 * Math.PI));
     heightM = radiusM;
   } else if (shape === "cylinder") {
-    if (input.cylinderHeightM > input.maxHeightM + 1e-12) {
+    if (input.cylinderHeightM > input.maximumBodyHeightM + 1e-12) {
       throw new RangeError(
-        `cylinder height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+        `cylinder height must satisfy 0 < H <= H_max minus ground clearance (${input.maximumBodyHeightM.toFixed(6)} m).`,
       );
     }
     heightM = input.cylinderHeightM;
@@ -452,9 +465,9 @@ function circularGeometry(
       aspectLimited = true;
     }
   } else {
-    if (input.coneHeightM > input.maxHeightM + 1e-12) {
+    if (input.coneHeightM > input.maximumBodyHeightM + 1e-12) {
       throw new RangeError(
-        `cone height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+        `cone height must satisfy 0 < H <= H_max minus ground clearance (${input.maximumBodyHeightM.toFixed(6)} m).`,
       );
     }
     heightM = input.coneHeightM;
@@ -664,7 +677,8 @@ function calculateComparisonGeometryFromNormalized(
   // In rotating comparisons A_land(shape) is the maximum swept occupation;
   // in static comparisons it is the instantaneous orthogonal projection.
   const landAreaM2 = footprint.selectedStructureAreaM2;
-  const effectiveConstraintHeightM = dimensions.trackingEnvelopeHeightM ?? dimensions.heightM;
+  const effectiveConstraintHeightM = input.groundClearanceM
+    + (dimensions.trackingEnvelopeHeightM ?? dimensions.heightM);
   const heightExceeded = effectiveConstraintHeightM > input.maxHeightM + 1e-12;
   const landAreaExceeded = footprint.parcelAreaM2 > input.landAreaM2 + 1e-12;
   const officialComparisonExclusionReasons: string[] = [];
@@ -674,7 +688,7 @@ function calculateComparisonGeometryFromNormalized(
   if (raw.aspectLimited) officialComparisonExclusionReasons.push("aspect-ratio-cap-altered-geometry");
   if (
     (shape === "cylinder" || shape === "cone")
-    && Math.abs(dimensions.heightM - input.commonMaximumHeightM) > 1e-10
+    && Math.abs(dimensions.heightM - input.maximumBodyHeightM) > 1e-10
   ) {
     officialComparisonExclusionReasons.push("user-custom-height");
   }
@@ -695,6 +709,8 @@ function calculateComparisonGeometryFromNormalized(
       maxHeightM: input.maxHeightM,
       maximumAspectRatio: input.maximumAspectRatio,
       maximumActiveAreaM2: input.maximumActiveAreaM2,
+      groundClearanceM: input.groundClearanceM,
+      maximumBodyHeightM: input.maximumBodyHeightM,
       requestedLandAreaM2: input.landAreaM2,
       effectiveParcelAreaM2: footprint.parcelAreaM2,
       requestedActiveAreaM2: input.activeAreaM2,

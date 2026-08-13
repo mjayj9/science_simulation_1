@@ -32,7 +32,7 @@ source-backed 자가기동 `C_Q`가 없는 대칭 형상의 공식 자연 RPM은
 
 ## 전기 연결별 비교
 
-각 회전 group은 두 전기 계약을 별도 순위로 제시한다.
+각 회전 group은 두 전기 계약을 분리해 제시한다. 다만 공학적 연결은 현재 mesh 수렴 기준을 통과하지 못했으므로 공식 순위가 아니라 `not-evaluated` 탐색 순서와 수렴 실패 근거만 보고한다.
 
 - 이상적 연속막 상한: `local-mpp-area-integral`.
 - 공학적 전기 연결: 동일 명목 셀 밀도, 명시적 셀 직렬·스트링 병렬·bypass substring·배선 저항을 쓰는 `explicit-series-parallel-bypass`.

@@ -12,7 +12,37 @@ function sample(
   poaWm2 = 1_000,
   cellTemperatureC = 25,
 ): EngineeringSurfaceElectricalSample {
-  return { id, areaM2, poaWm2, cellTemperatureC };
+  const hash = [...id].reduce((value, character) =>
+    (value * 33 + character.charCodeAt(0)) % 10_000, 5381);
+  const u = (hash + 0.5) / 10_001;
+  return {
+    id,
+    areaM2,
+    poaWm2,
+    cellTemperatureC,
+    zoneId: "test-skin",
+    zoneIndex: 0,
+    u,
+    v: 0.5,
+    positionM: { x: u, y: 0, z: 0 },
+  };
+}
+
+function grid(rows: number, columns: number): EngineeringSurfaceElectricalSample[] {
+  return Array.from({ length: rows * columns }, (_, index) => {
+    const row = Math.floor(index / columns);
+    const column = index % columns;
+    const u = (row + 0.5) / rows;
+    const v = (column + 0.5) / columns;
+    return {
+      id: `grid-${row}-${column}`,
+      areaM2: 1 / (rows * columns),
+      poaWm2: 300 + 600 * u + 100 * v,
+      cellTemperatureC: 20 + 20 * u,
+      zoneId: "plane-skin", zoneIndex: 0, u, v,
+      positionM: { x: v - 0.5, y: 0, z: u - 0.5 },
+    };
+  });
 }
 
 describe("engineering surface series/parallel/bypass connection", () => {
@@ -102,5 +132,48 @@ describe("engineering surface series/parallel/bypass connection", () => {
     expect(second).toEqual(first);
     expect(first.activeAreaM2).toBeCloseTo(0.111, 12);
     expect(first.nominalCellDensityPerM2).toBe(100);
+  });
+
+  it("is exactly invariant to quadrature input permutation because wiring uses material coordinates", () => {
+    const samples = grid(8, 8);
+    const permuted = samples.filter((_, index) => index % 2 === 0).reverse()
+      .concat(samples.filter((_, index) => index % 2 === 1).reverse());
+    const config = {
+      nominalCellAreaM2: 0.125,
+      parallelStrings: 2,
+      cellsPerBypassSubstring: 2,
+      bypassForwardVoltageV: 0.5,
+      stringWiringResistanceOhm: 0.01,
+      arrayWiringResistanceOhm: 0.01,
+      circuitSamples: 512,
+    } as const;
+    const ordered = solveEngineeringSurfaceElectrical(samples, DEFAULT_ELECTRICAL, config);
+    const shuffled = solveEngineeringSurfaceElectrical(permuted, DEFAULT_ELECTRICAL, config);
+    expect(shuffled).toEqual(ordered);
+    expect(ordered.layoutId).toContain("surface-spatial-u-v-row-major-v1");
+    expect(ordered.layoutId).toContain("zones=0:plane-skin");
+  });
+
+  it("keeps the physical cell/string result stable when optical quadrature is refined", () => {
+    const config = {
+      nominalCellAreaM2: 0.125,
+      parallelStrings: 2,
+      cellsPerBypassSubstring: 2,
+      bypassForwardVoltageV: 0.5,
+      stringWiringResistanceOhm: 0.01,
+      arrayWiringResistanceOhm: 0.01,
+      circuitSamples: 512,
+    } as const;
+    const coarse = solveEngineeringSurfaceElectrical(grid(8, 8), DEFAULT_ELECTRICAL, config);
+    const refined = solveEngineeringSurfaceElectrical(grid(16, 16), DEFAULT_ELECTRICAL, config);
+    expect(refined.layoutId).toBe(coarse.layoutId);
+    expect(refined.cellCount).toBe(coarse.cellCount);
+    expect(refined.seriesCellCountByString).toEqual(coarse.seriesCellCountByString);
+    expect(refined.bypassSubstringCount).toBe(coarse.bypassSubstringCount);
+    expect(refined.activeAreaM2).toBeCloseTo(coarse.activeAreaM2, 12);
+    expect(refined.dcPowerW).toBeCloseTo(coarse.dcPowerW, 10);
+    expect(refined.idealLocalMppDcPowerW).toBeCloseTo(coarse.idealLocalMppDcPowerW, 10);
+    expect(refined.mismatchAndWiringLossFraction)
+      .toBeCloseTo(coarse.mismatchAndWiringLossFraction, 10);
   });
 });

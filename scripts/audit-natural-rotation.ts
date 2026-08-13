@@ -16,6 +16,7 @@ const markdownPath = process.argv[4] ?? "docs/natural-rotation-audit-2026.md";
 const year = 2025;
 const landAreaM2 = 0.05;
 const maximumHeightM = commonMaximumHeightM(landAreaM2);
+const groundClearanceM = 0;
 const location = { latitudeDeg: 37.5665, longitudeDeg: 126.978, elevationM: 38 };
 const offsetMinutes = 540;
 const offsetMs = offsetMinutes * 60_000;
@@ -40,11 +41,11 @@ function shapeModel(shape: ComparisonShapeKind, withUserTorque: boolean): Natura
   const surface = createComparisonSurface(shape, {
     landAreaM2,
     maxHeightM: maximumHeightM,
-    cylinderHeightM: maximumHeightM,
-    coneHeightM: maximumHeightM,
+    cylinderHeightM: maximumHeightM - groundClearanceM,
+    coneHeightM: maximumHeightM - groundClearanceM,
     planeTiltDeg: 30,
     footprintMode: "swept",
-    groundClearanceM: 0.01,
+    groundClearanceM,
     maximumActiveAreaM2: 100_000,
     maximumAspectRatio: 4,
     azimuthSamples: 16,
@@ -58,6 +59,9 @@ function shapeModel(shape: ComparisonShapeKind, withUserTorque: boolean): Natura
     depthM: dimensions.depthM,
     heightM: dimensions.heightM,
     radiusM: dimensions.radiusM,
+    planeTiltDeg: dimensions.planeTiltDeg,
+    planeAzimuthDeg: dimensions.planeAzimuthDeg,
+    planeSlantLengthM: dimensions.planeSlantLengthM,
     massKg,
   });
   return {
@@ -65,6 +69,7 @@ function shapeModel(shape: ComparisonShapeKind, withUserTorque: boolean): Natura
     projectedAreaM2: analytic.projectedAreaM2,
     forceApplicationRadiusM: analytic.forceApplicationRadiusM,
     inertiaKgM2: analytic.inertiaKgM2,
+    directionalAerodynamics: analytic.directionalAerodynamics,
     structureCentreHeightM: Math.max(0.01, surface.dimensions.centreY),
     referenceHeightM: 10,
     maximumRpm: 30,
@@ -75,11 +80,17 @@ function shapeModel(shape: ComparisonShapeKind, withUserTorque: boolean): Natura
     windProfile: { model: "power", exponent: 0.16 },
     ...(withUserTorque ? {
       torqueModel: {
-        // The fair auxiliary-rotor geometry is intentionally absent, so this
-        // sensitivity is computed but excluded from the official ranking.
         kind: "auxiliary-rotor" as const,
-        label: "unverified asymmetric rotor sensitivity",
+        label: "unverified auxiliary rotor; C_Q(lambda)=0.12*max(0,1-lambda/3)",
         provenance: userSource,
+        auxiliaryRotor: {
+          referenceProjectedAreaM2: 0.01, referenceRadiusM: 0.06,
+          footprintAreaM2: Math.PI * 0.06 ** 2, assemblyHeightM: maximumHeightM,
+          shadowLossFraction: 0.02,
+          footprintIncludedInLandConstraint: false,
+          heightIncludedInCommonEnvelope: false,
+          shadowIncludedInPvYield: false,
+        },
         torqueCoefficient: (tipSpeedRatio: number) => 0.12 * Math.max(0, 1 - tipSpeedRatio / 3),
       },
     } : {}),
@@ -106,6 +117,8 @@ function run(shape: ComparisonShapeKind, withUserTorque: boolean) {
     forceApplicationRadiusM: model.forceApplicationRadiusM,
     inertiaKgM2: model.inertiaKgM2,
     annualTimeWeightedMeanRpm: history.annual.timeWeightedMeanRpm,
+    timeWeightedProjectedAreaM2: history.annual.timeWeightedMeanProjectedAreaM2,
+    timeWeightedForceRadiusM: history.annual.timeWeightedMeanForceApplicationRadiusM,
     finalRpm: history.annual.finalRpm,
     integratedHours: history.annual.integratedHours,
     maximumDynamicBalanceResidualNmS: history.annual.maximumAbsoluteDynamicBalanceResidualNmS,
@@ -114,6 +127,10 @@ function run(shape: ComparisonShapeKind, withUserTorque: boolean) {
     officialComparisonEligible: history.audit.officialComparisonEligible,
     exclusionReasons: history.audit.exclusionReasons,
     parameterSources: history.audit.parameterSources,
+    directionalGeometryDefinition: history.audit.directionalGeometryDefinition,
+    torqueCoefficientReference: history.audit.torqueCoefficientReference,
+    rotationScheduleDefinition: history.audit.rotationScheduleDefinition,
+    phaseScheduleClosureRad: history.audit.phaseScheduleClosureRad,
     months: history.months,
   };
 }
@@ -129,9 +146,12 @@ if (officialNoCq.some((row) => row.integratedHours !== 8_760)) {
 if (unverifiedUserCqSensitivity.some((row) => row.officialComparisonEligible)) {
   throw new Error("Unverified auxiliary-rotor sensitivity must be excluded from official ranking.");
 }
+if ([...officialNoCq, ...unverifiedUserCqSensitivity].some((row) => Math.abs(row.phaseScheduleClosureRad) > 1e-9)) {
+  throw new Error("Interval-mean RPM schedule does not close the integrated body phase.");
+}
 
 const report = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt: new Date().toISOString(),
   conditions: {
     year,
@@ -144,6 +164,9 @@ const report = {
     intervals: weather.points.length - 1,
     equation: "I*domega/dt=tau_aero(V,omega,shape)-tau_loss(omega)",
     integration: "backward Euler at every weather interval; time-weighted monthly/annual RPM",
+    windDirection: "shortest-arc interpolation; A_projected and R_ref evaluated from wind azimuth minus body yaw",
+    inertia: "uniform PV thin-skin mass distribution; no solid-volume body assumption",
+    cqDefinition: "C_Q=tau/(0.5*rho*V^2*A_ref*R_ref), lambda=omega*R_ref/V",
     windElectricityIncluded: false,
   },
   officialNoCq,
@@ -152,9 +175,9 @@ const report = {
 writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
 const table = (rows: typeof officialNoCq) => [
-  "| Shape | A_projected (m2) | I_y (kg m2) | Annual RPM | C_Q input | Confidence | Official |",
-  "|---|---:|---:|---:|---|---|---|",
-  ...rows.map((row) => `| ${row.shape} | ${row.projectedAreaM2.toFixed(6)} | ${row.inertiaKgM2.toFixed(8)} | ${row.annualTimeWeightedMeanRpm.toFixed(6)} | ${row.torqueCoefficientInput} | ${row.confidence} | ${row.officialComparisonEligible ? "yes" : "no"} |`),
+  "| Shape | mean A_projected (m2) | mean R_ref (m) | thin-skin I_y (kg m2) | Annual RPM | C_Q input | C_Q reference | phase closure (rad) | Official |",
+  "|---|---:|---:|---:|---:|---|---|---:|---|",
+  ...rows.map((row) => `| ${row.shape} | ${row.timeWeightedProjectedAreaM2.toFixed(6)} | ${row.timeWeightedForceRadiusM.toFixed(6)} | ${row.inertiaKgM2.toFixed(8)} | ${row.annualTimeWeightedMeanRpm.toFixed(6)} | ${row.torqueCoefficientInput} | ${row.torqueCoefficientReference} | ${row.phaseScheduleClosureRad.toExponential(3)} | ${row.officialComparisonEligible ? "yes" : "no"} |`),
 ].join("\n");
 const markdown = [
   "# Shape-specific natural-rotation audit",
@@ -169,7 +192,7 @@ const markdown = [
   "",
   table(unverifiedUserCqSensitivity),
   "",
-  "This sensitivity omits a fair auxiliary rotor footprint, complete height, and PV-shadow model. It is deliberately excluded from the official ranking and is not a prediction.",
+  "The sensitivity uses explicit auxiliary C_Q A_ref=0.01 m2, R_ref=0.06 m and a stated lambda=3 linear zero. Its footprint, complete height and 2% shadow are not applied to A_land, H_max or PV yield, so it is excluded and is not a prediction.",
   "",
 ].join("\n");
 writeFileSync(markdownPath, markdown, "utf8");

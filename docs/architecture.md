@@ -29,7 +29,7 @@ flowchart LR
   E4 --> REPORT
 ```
 
-worker wire contract는 protocol v4, 계산 cache는 v5다. fingerprint에는 기하 표본, 광학·전기·열·인버터 입력, 기상, 장애물, 회전 schedule, 모터 부하와 모델 version이 포함된다. 완료 결과는 request ID, worker identity와 fingerprint가 현재 요청과 모두 맞을 때만 UI에 반영한다.
+worker wire contract는 protocol v5, 계산 cache는 v6다. fingerprint에는 기하 표본, 광학·전기·열·인버터 입력, 기상, 장애물, 회전 schedule, 모터 부하와 모델 version이 포함된다. 완료 결과는 request ID, worker identity와 fingerprint가 현재 요청과 모두 맞을 때만 UI에 반영한다.
 
 ## 기하와 광학
 
@@ -80,7 +80,7 @@ src/lib/physics/engineering-surface-electrical.ts
                                                명시적 셀·스트링·bypass 연결
 src/lib/physics/annual-transient.ts           지속 열상태와 E00/E10/E01/E11
 src/lib/physics/natural-rotation.ts           형상별 동역학과 시간가중 RPM
-src/workers/protocol.ts                       protocol v4/cache v5 결과 계약
+src/workers/protocol.ts                       protocol v5/cache v6 결과 계약
 src/workers/kernel.ts                         시계열·연간 적분과 원장
 src/ui/SimulatorClient.tsx                    입력 snapshot·worker·결과 표시
 ```

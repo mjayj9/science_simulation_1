@@ -9,14 +9,18 @@ import {
   DEFAULT_INVERTER,
   calculateCircuit,
   calculateInverter,
+  compareEngineeringSurfaceSpatialAddress,
   createPanelFrame,
   cross,
   dot,
+  engineeringSurfaceLayoutId,
+  engineeringSurfaceSpatialKey,
   fixedRotation,
   multiplyQuaternion,
   motorDrivePowerW,
   normalize,
   normalizeQuaternion,
+  prepareInstantEnvironment,
   quaternionBetween,
   quaternionFromAxisAngle,
   rotateAroundY,
@@ -25,14 +29,17 @@ import {
   singleDiodeCurve,
   solveEngineeringSurfaceElectrical,
   simulateInstant,
+  simulateSimplePanelAtPreparedEnvironment,
   solarPosition,
   sunVector,
   type CircuitDevice,
+  type EngineeringSurfaceElectricalSample,
   type ElectricalConfig,
   type InstantSimulationInput,
   type InverterConfig,
   type InverterResult,
   type IVCurve,
+  type PreparedInstantEnvironment,
   type Quaternion,
   type Vec3,
 } from "../lib/physics";
@@ -63,6 +70,30 @@ const MAX_CONTINUOUS_SURFACE_SAMPLES = 32_768;
 const MAX_ENGINEERING_SURFACE_CELLS = 4_096;
 const MAX_OBSTACLE_BOUNDS_PER_VARIANT = 256;
 const WORLD_UP: Readonly<Vec3> = Object.freeze({ x: 0, y: 1, z: 0 });
+
+const SPATIALLY_ORDERED_SURFACE_SAMPLES = new WeakMap<
+  readonly SimulationContinuousSurfaceSample[],
+  readonly SimulationContinuousSurfaceSample[]
+>();
+
+function spatiallyOrderedContinuousSurfaceSamples(
+  samples: readonly SimulationContinuousSurfaceSample[],
+): readonly SimulationContinuousSurfaceSample[] {
+  const cached = SPATIALLY_ORDERED_SURFACE_SAMPLES.get(samples);
+  if (cached) return cached;
+  let alreadyOrdered = true;
+  for (let index = 1; index < samples.length; index += 1) {
+    if (compareEngineeringSurfaceSpatialAddress(samples[index - 1], samples[index]) > 0) {
+      alreadyOrdered = false;
+      break;
+    }
+  }
+  const ordered = alreadyOrdered
+    ? samples
+    : [...samples].sort(compareEngineeringSurfaceSpatialAddress);
+  SPATIALLY_ORDERED_SURFACE_SAMPLES.set(samples, ordered);
+  return ordered;
+}
 
 export class SimulationCancelledError extends Error {
   constructor() {
@@ -297,6 +328,17 @@ function validateContinuousSurfaceVariant(
     assertVec3(sample.positionM, `${label}.positionM`, true);
     assertVec3(sample.normal, `${label}.normal`);
     assertPositiveFinite(sample.areaM2, `${label}.areaM2`);
+    if (!sample.zoneId.trim() || sample.zoneId.length > 100) {
+      throw new RangeError(`${label}.zoneId is invalid.`);
+    }
+    if (!Number.isInteger(sample.zoneIndex) || sample.zoneIndex < 0) {
+      throw new RangeError(`${label}.zoneIndex must be a non-negative integer.`);
+    }
+    for (const coordinate of ["u", "v"] as const) {
+      if (!Number.isFinite(sample[coordinate]) || sample[coordinate] < 0 || sample[coordinate] > 1) {
+        throw new RangeError(`${label}.${coordinate} must be finite and in [0, 1].`);
+      }
+    }
     if (sample.regionId !== undefined && (!sample.regionId.trim() || sample.regionId.length > 100)) {
       throw new RangeError(`${label}.regionId is invalid.`);
     }
@@ -1371,22 +1413,17 @@ function continuousRegionId(
 }
 
 function computeContinuousSurfaceStepAtAngle(
-  { input, variant, weather, stepIndex, isCancelled }: SimulationStepContext,
+  { input, variant, isCancelled }: SimulationStepContext,
   angleRad: number,
+  preparedEnvironment: PreparedInstantEnvironment,
 ): SimulationPhysicsStepResult {
   const surface = variant.continuousSurface;
   if (!surface) throw new TypeError("continuousSurface is required.");
   const tracking = variant.planeTracking;
   const needsSunDirection = Boolean(tracking || variant.obstacleBounds?.length);
   const sunDirection = needsSunDirection
-    ? obstacleSunDirection(input, weather)
+    ? preparedEnvironment.sunDirection
     : { x: 0, y: 1, z: 0 };
-  const irradiance = scaledIrradiance(variant, weather, stepIndex);
-  const simulationWeather = {
-    ...input.physics?.weather,
-    ambientTemperatureC: weather.ambientC,
-    referenceWindSpeedMS: weather.windSpeedMs,
-  };
   const surfaceOptions = {
     ...input.physics?.panelDefaults,
     ...surface.surfaceOptions,
@@ -1406,13 +1443,9 @@ function computeContinuousSurfaceStepAtAngle(
     1, Math.max(0, electrical.aggregateLossFraction ?? 0),
   );
 
-  const engineeringSamples: Array<{
-    id: string;
-    areaM2: number;
-    poaWm2: number;
-    cellTemperatureC: number;
-  }> = [];
-  for (const [sampleIndex, baseSample] of surface.samples.entries()) {
+  const engineeringSamples: EngineeringSurfaceElectricalSample[] = [];
+  const orderedSurfaceSamples = spatiallyOrderedContinuousSurfaceSamples(surface.samples);
+  for (const baseSample of orderedSurfaceSamples) {
     if (isCancelled?.()) throw new SimulationCancelledError();
     const sample = transformedContinuousSample(baseSample, angleRad, tracking, sunDirection);
     const baseVisibility = surfaceOptions.visibility ?? 1;
@@ -1423,11 +1456,7 @@ function computeContinuousSurfaceStepAtAngle(
           variant.obstacleBounds,
         )
       : baseVisibility;
-    const result = simulateInstant({
-      timestamp: weather.timeUtcMs,
-      location: input.physics?.location,
-      solarOverride: input.physics?.solarOverride,
-      irradiance,
+    const result = simulateSimplePanelAtPreparedEnvironment(preparedEnvironment, {
       panel: {
         ...surfaceOptions,
         normal: sample.normal,
@@ -1436,11 +1465,9 @@ function computeContinuousSurfaceStepAtAngle(
         heightM: surfaceOptions.heightM ?? Math.max(0.01, sample.positionM.y),
         visibility,
       },
-      weather: simulationWeather,
       // ηPV(T) × POA × dA is the local ideal-MPP integrand. There is no
       // per-zone curve, series current, bypass diode, or sample normalizer.
       electrical,
-      inverter: false,
       thermal: input.physics?.thermal,
     });
     closure ??= result.irradiance.ghiClosure;
@@ -1448,8 +1475,13 @@ function computeContinuousSurfaceStepAtAngle(
     poaAreaW += result.poa.totalWm2 * sample.areaM2;
     temperatureAreaC += result.moduleTemperatureC * sample.areaM2;
     engineeringSamples.push({
-      id: `${variant.variantId}:surface-sample-${sampleIndex + 1}`,
+      id: `${variant.variantId}:${engineeringSurfaceSpatialKey(baseSample)}`,
       areaM2: sample.areaM2,
+      zoneId: baseSample.zoneId,
+      zoneIndex: baseSample.zoneIndex,
+      u: baseSample.u,
+      v: baseSample.v,
+      positionM: baseSample.positionM,
       poaWm2: result.solar.isDaylight ? result.effectivePoaWm2 * aggregateElectricalAvailability : 0,
       cellTemperatureC: result.moduleTemperatureC,
     });
@@ -1552,11 +1584,16 @@ function computeContinuousSurfaceStepAtAngle(
 function computePhysicsStepAtAngle(
   { input, variant, weather, stepIndex, isCancelled }: SimulationStepContext,
   angleRad: number,
+  preparedContinuousEnvironment?: PreparedInstantEnvironment,
 ): SimulationPhysicsStepResult {
   if (variant.continuousSurface) {
+    if (!preparedContinuousEnvironment) {
+      throw new TypeError("Prepared continuous-surface environment is required.");
+    }
     return computeContinuousSurfaceStepAtAngle(
       { input, variant, weather, stepIndex, isCancelled },
       angleRad,
+      preparedContinuousEnvironment,
     );
   }
   const panels = resolvedPanels(input, variant);
@@ -1865,8 +1902,25 @@ function averagePhaseResults(
  */
 export const computePhysicsStep: SimulationStepFunction = (context) => {
   const samples = rotationIntervalSamples(context);
+  const preparedContinuousEnvironment = context.variant.continuousSurface
+    ? prepareInstantEnvironment({
+        timestamp: context.weather.timeUtcMs,
+        location: context.input.physics?.location,
+        solarOverride: context.input.physics?.solarOverride,
+        irradiance: scaledIrradiance(context.variant, context.weather, context.stepIndex),
+        weather: {
+          ...context.input.physics?.weather,
+          ambientTemperatureC: context.weather.ambientC,
+          referenceWindSpeedMS: context.weather.windSpeedMs,
+        },
+      })
+    : undefined;
   if (samples.length === 1) {
-    const result = computePhysicsStepAtAngle(context, samples[0].angleRad);
+    const result = computePhysicsStepAtAngle(
+      context,
+      samples[0].angleRad,
+      preparedContinuousEnvironment,
+    );
     return applyMotorDrive(context.variant, {
       ...result,
       rotationIntervalAveraged: samples[0].intervalAveraged,
@@ -1875,7 +1929,11 @@ export const computePhysicsStep: SimulationStepFunction = (context) => {
   const results: SimulationPhysicsStepResult[] = [];
   for (const sample of samples) {
     if (context.isCancelled?.()) throw new SimulationCancelledError();
-    results.push(computePhysicsStepAtAngle(context, sample.angleRad));
+    results.push(computePhysicsStepAtAngle(
+      context,
+      sample.angleRad,
+      preparedContinuousEnvironment,
+    ));
   }
   return applyMotorDrive(context.variant, averagePhaseResults(results, samples));
 };
@@ -2112,6 +2170,19 @@ function addEnergySegment(
   }
 }
 
+function variantElectricalLayoutId(variant: SimulationVariantWorkItem): string {
+  const surface = variant.continuousSurface;
+  if (!surface) return "not-applicable:discrete-panel-or-scalar";
+  if (surface.electricalModel === "local-mpp-area-integral") {
+    return "ideal-local-mpp-area-integral";
+  }
+  return engineeringSurfaceLayoutId(
+    surface.samples,
+    surface.engineeringConnection,
+    surface.engineeringConnection.nominalCellAreaM2,
+  );
+}
+
 export async function runSimulationKernel(
   request: SimulationRunRequest,
   hooks: SimulationKernelHooks = {},
@@ -2127,6 +2198,9 @@ export async function runSimulationKernel(
   const chunkSize = input.chunkSize ?? 24;
   const mode = input.mode ?? "time-series";
   const variantIds = input.variants.map((variant) => variant.variantId);
+  const electricalLayoutIdByVariant = Object.fromEntries(input.variants.map((variant) => [
+    variant.variantId, variantElectricalLayoutId(variant),
+  ]));
   const dcEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const acEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const hasMotorDrive = input.variants.some((variant) => variant.motorDrive !== undefined);
@@ -2313,6 +2387,7 @@ export async function runSimulationKernel(
         bypassActiveCountByVariant: Object.fromEntries(
           variantIds.map((id) => [id, stepResults[id].bypassActiveCount]),
         ),
+        electricalLayoutIdByVariant: { ...electricalLayoutIdByVariant },
         inverterStatusByVariant: Object.fromEntries(
           variantIds.map((id) => [id, stepResults[id].inverterStatus]),
         ),
@@ -2401,6 +2476,7 @@ export async function runSimulationKernel(
     energyWhByVariant: { ...dcEnergyWhByVariant },
     dcEnergyWhByVariant,
     acEnergyWhByVariant,
+    electricalLayoutIdByVariant,
     ...(hasMotorDrive ? { motorEnergyWhByVariant } : {}),
     authoritativeEnergyPathByVariant,
     surfaceRegionEnergyWhByVariant,

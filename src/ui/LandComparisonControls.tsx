@@ -120,7 +120,7 @@ export function LandComparisonControls({
         <NumericField key={`land:${value.landAreaM2}`} label="공통 A_land" unit="m²" value={value.landAreaM2} min={0.0001} max={10_000} step={0.001} onChange={(landAreaM2) => patch({ landAreaM2 })} />
         <NumericField key={`height:${value.maximumHeightM}`} label="공통 최대높이 H_max" unit="m" value={value.maximumHeightM} min={0.01} max={100} step={0.001} disabled={officialHeightLocked} onChange={(maximumHeightM) => patch({ maximumHeightM })} />
         <NumericField key={`structure:${value.structureHeightM}`} label="원기둥·원뿔 높이 H" unit="m" value={value.structureHeightM} min={0.01} max={value.maximumHeightM} step={0.001} disabled={officialHeightLocked} onChange={(structureHeightM) => patch({ structureHeightM })} />
-        <NumericField key={`support:${value.supportHeightM}`} label="구 지지대·지면 여유" unit="m" value={value.supportHeightM} min={0} max={100} step={0.01} onChange={(supportHeightM) => patch({ supportHeightM })} />
+        <NumericField key={`support:${value.supportHeightM}`} label="구 지지대·지면 여유" unit="m" value={value.supportHeightM} min={0} max={100} step={0.01} disabled={officialHeightLocked} onChange={(supportHeightM) => patch({ supportHeightM })} />
         <NumericField key={`albedo:${value.groundAlbedo}`} label="지면 albedo" unit="—" value={value.groundAlbedo} min={0} max={1} step={0.01} onChange={(groundAlbedo) => patch({ groundAlbedo })} />
       </div>
 

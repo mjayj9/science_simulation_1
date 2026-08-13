@@ -2,6 +2,7 @@ import {
   createComparisonSurface,
   projectedAreaForDirection,
 } from "../geometry";
+import { externalConvectionCoefficient } from "../physics/transient-thermal";
 import { RESEARCH_PRESET_IDS, RESEARCH_PRESETS } from "./presets";
 
 export type ResearchBenchmarkVerdict = "pass" | "partial" | "fail" | "not-evaluated";
@@ -291,11 +292,20 @@ function sutherlandKinematicViscosity(
 
 function rotatingDiskDimensionless(fixture: RotatingDiskFixture, propertyTemperatureK: number) {
   const viscosity = sutherlandKinematicViscosity(propertyTemperatureK, fixture);
-  const reynolds = fixture.angularVelocityRadS * fixture.evaluationRadiusM ** 2 / viscosity;
+  const productionCorrelation = externalConvectionCoefficient(
+    "rotating-disk",
+    fixture.angularVelocityRadS * fixture.evaluationRadiusM,
+    fixture.evaluationRadiusM,
+    {
+      thermalConductivityWmK: 0.0263,
+      kinematicViscosityM2s: viscosity,
+      prandtl: 0.707,
+    },
+  );
   return {
     viscosity,
-    reynolds,
-    nusselt: fixture.laminarNusseltCoefficient * Math.sqrt(reynolds),
+    reynolds: productionCorrelation.reynolds,
+    nusselt: productionCorrelation.nusselt,
   };
 }
 
@@ -391,7 +401,7 @@ export function runRotatingThermalBenchmark(): ResearchBenchmarkResult {
     benchmarkId: "source-equivalent:rotating-disk-laminar-exp1",
     studyId: "source:F",
     title: RESEARCH_CONDITION_MATRIX.find((row) => row.studyId === "source:F")?.title ?? "source:F",
-    scope: "source-equivalent experiment-1 rotating-flow heat-transfer dimensionless benchmark; not a PV module calibration",
+    scope: "source-equivalent experiment-1 benchmark executed through the production rotating-disk convection correlation; not a PV module calibration",
     verdict: metrics.every((metric) => metric.verdict === "pass") ? "pass" : "fail",
     reportedTrend: "Experiment 1 remains laminar over the evaluated radius and follows Nu=0.36 sqrt(Re_omega); Table 5 reports Re_omega=83,908.",
     simulationResult: `Sutherland air properties at the reported film temperature give Re=${baseline.reynolds.toFixed(3)} and Nu=${baseline.nusselt.toFixed(6)}.`,
@@ -401,6 +411,7 @@ export function runRotatingThermalBenchmark(): ResearchBenchmarkResult {
       "reported wall 52.1 C and ambient 22.2 C film-temperature method",
       "reported Sutherland reference viscosity, temperature and constant",
       "paper's laminar coefficient K=0.36",
+      "production external-convection API cati-laminar-rotating-disk branch",
       "paper uncertainty is used as the pre-registered tolerance, not as a fitted multiplier",
     ],
     unmatchedConditions: [

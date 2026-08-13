@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-12T10:30:41.821Z",
+  "generatedAt": "2026-08-13T16:06:51.672Z",
   "policy": {
     "sourceInputsOnly": true,
     "missingInputsEstimated": false,
@@ -314,7 +314,7 @@
       "benchmarkId": "source-equivalent:rotating-disk-laminar-exp1",
       "studyId": "source:F",
       "title": "Investigation of Convective Heat Transfer and Stability on a Rotating Disk: A Novel Experimental Method and Thermal Modeling",
-      "scope": "source-equivalent experiment-1 rotating-flow heat-transfer dimensionless benchmark; not a PV module calibration",
+      "scope": "source-equivalent experiment-1 benchmark executed through the production rotating-disk convection correlation; not a PV module calibration",
       "verdict": "pass",
       "reportedTrend": "Experiment 1 remains laminar over the evaluated radius and follows Nu=0.36 sqrt(Re_omega); Table 5 reports Re_omega=83,908.",
       "simulationResult": "Sutherland air properties at the reported film temperature give Re=82955.051 and Nu=103.686907.",
@@ -347,6 +347,7 @@
         "reported wall 52.1 C and ambient 22.2 C film-temperature method",
         "reported Sutherland reference viscosity, temperature and constant",
         "paper's laminar coefficient K=0.36",
+        "production external-convection API cati-laminar-rotating-disk branch",
         "paper uncertainty is used as the pre-registered tolerance, not as a fitted multiplier"
       ],
       "unmatchedConditions": [

@@ -67,6 +67,18 @@ describe("rotating material-node transient heat balance", () => {
     expect(sphere.sourceUrl).toContain("10.1002/aic.690180219");
   });
 
+
+  it("executes the rotating-disk source correlation through the production convection API", () => {
+    const result = externalConvectionCoefficient("rotating-disk", 34.55 * 0.194, 0.194, {
+      thermalConductivityWmK: 0.0263,
+      kinematicViscosityM2s: 15.68e-6,
+      prandtl: 0.707,
+    });
+    expect(result.correlation).toBe("cati-laminar-rotating-disk");
+    expect(result.reynolds).toBeCloseTo(34.55 * 0.194 ** 2 / 15.68e-6, 10);
+    expect(result.nusselt).toBeCloseTo(0.36 * Math.sqrt(result.reynolds), 12);
+    expect(result.sourceUrl).toContain("10.3390/fluids9070167");
+  });
   it("conserves paired conduction energy and closes the node energy ledger", () => {
     const result = advanceMaterialThermalState({
       nodes: [node("hot", 60, -0.1), node("cold", 20, 0.1)],

@@ -1,6 +1,6 @@
 # Primary-source-equivalent reproduction audit
 
-Generated at: 2026-08-12T10:30:41.821Z
+Generated at: 2026-08-13T16:06:51.672Z
 
 No coefficient or multiplier was reverse-fitted to a reported output. Fixtures contain only values confirmed in a primary source or author-maintained public code. Studies A-D lack required inputs and are excluded from successful reproductions.
 
@@ -88,11 +88,11 @@ No numerical run: required source inputs are missing, so this study remains `not
 
 ### source:F: Investigation of Convective Heat Transfer and Stability on a Rotating Disk: A Novel Experimental Method and Thermal Modeling
 
-- Scope: source-equivalent experiment-1 rotating-flow heat-transfer dimensionless benchmark; not a PV module calibration
+- Scope: source-equivalent experiment-1 benchmark executed through the production rotating-disk convection correlation; not a PV module calibration
 - Reported result or trend: Experiment 1 remains laminar over the evaluated radius and follows Nu=0.36 sqrt(Re_omega); Table 5 reports Re_omega=83,908.
 - Simulated result: Sutherland air properties at the reported film temperature give Re=82955.051 and Nu=103.686907.
 - Verdict: **pass**
-- Matched conditions: experiment 1 omega=34.55 rad/s and outer evaluated radius 0.194 m; reported wall 52.1 C and ambient 22.2 C film-temperature method; reported Sutherland reference viscosity, temperature and constant; paper's laminar coefficient K=0.36; paper uncertainty is used as the pre-registered tolerance, not as a fitted multiplier
+- Matched conditions: experiment 1 omega=34.55 rad/s and outer evaluated radius 0.194 m; reported wall 52.1 C and ambient 22.2 C film-temperature method; reported Sutherland reference viscosity, temperature and constant; paper's laminar coefficient K=0.36; production external-convection API cati-laminar-rotating-disk branch; paper uncertainty is used as the pre-registered tolerance, not as a fitted multiplier
 - Unmatched conditions: raw IR pixel temperatures and fitted local h(r) data are not published as machine-readable data; uniform heater heat flux magnitude is not tabulated for experiment 1; this heated aluminium disk is not a PV laminate and has no optical or electrical conversion
 - Possible difference causes: Table 5 Reynolds is rounded and may use spatially varying film properties; OCR-rendered air-property precision is limited to the digits printed in Table 4; ambient-property evaluation instead of the reported film-temperature method changes the result
 

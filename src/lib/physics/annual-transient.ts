@@ -10,6 +10,7 @@ import {
   materialPoseAtWorldYPhase,
   relativeSurfaceWindSpeedMS,
   temperatureAdjustedEfficiency,
+  type AirProperties,
   type MaterialThermalConfig,
   type MaterialThermalEdge,
   type MaterialThermalNode,
@@ -86,6 +87,96 @@ export interface AnnualReducedThermalMesh {
   neighboursPerNode: number;
 }
 
+type AnnualSurfaceSample = IdealSurfaceModel["zones"][number]["samples"][number];
+
+interface AnnualSurfaceZoneSamples {
+  id: string;
+  index: number;
+  areaM2: number;
+  samples: AnnualSurfaceSample[];
+}
+
+function compareSurfaceSamples(
+  left: AnnualSurfaceSample,
+  right: AnnualSurfaceSample,
+): number {
+  return left.zoneIndex - right.zoneIndex
+    || left.zoneId.localeCompare(right.zoneId)
+    || left.u - right.u
+    || left.v - right.v
+    || left.position[0] - right.position[0]
+    || left.position[1] - right.position[1]
+    || left.position[2] - right.position[2];
+}
+
+/**
+ * Allocates at least one reduced node to every separate surface chart. A
+ * requested count smaller than the chart count is therefore treated as a
+ * target, not a licence to join thermally unrelated faces into one centroid.
+ */
+function allocateThermalNodeCountsByZone(
+  zones: readonly AnnualSurfaceZoneSamples[],
+  targetNodeCount: number,
+): number[] {
+  const totalSampleCount = zones.reduce((sum, zone) => sum + zone.samples.length, 0);
+  const totalNodeCount = Math.min(
+    totalSampleCount,
+    Math.max(targetNodeCount, zones.length),
+  );
+  const counts = zones.map(() => 1);
+  for (let allocated = zones.length; allocated < totalNodeCount; allocated += 1) {
+    let selected = -1;
+    let selectedAreaPerNode = -Infinity;
+    zones.forEach((zone, index) => {
+      if (counts[index] >= zone.samples.length) return;
+      const areaPerNode = zone.areaM2 / counts[index];
+      if (areaPerNode > selectedAreaPerNode + 1e-15) {
+        selected = index;
+        selectedAreaPerNode = areaPerNode;
+      }
+    });
+    if (selected < 0) throw new RangeError("Unable to allocate the requested thermal nodes.");
+    counts[selected] += 1;
+  }
+  return counts;
+}
+
+/**
+ * Deterministic two-dimensional chart partition. Recursive u/v splits keep
+ * every group local on its source chart instead of concatenating azimuthal
+ * rings whose area centroid can collapse onto the rotation axis.
+ */
+function partitionZoneSamplesLocally(
+  samples: readonly AnnualSurfaceSample[],
+  groupCount: number,
+): AnnualSurfaceSample[][] {
+  if (groupCount === 1) return [samples.slice().sort(compareSurfaceSamples)];
+  if (groupCount > samples.length) {
+    throw new RangeError("A thermal sample group cannot be empty.");
+  }
+  const uValues = samples.map((sample) => sample.u);
+  const vValues = samples.map((sample) => sample.v);
+  const uRange = Math.max(...uValues) - Math.min(...uValues);
+  const vRange = Math.max(...vValues) - Math.min(...vValues);
+  const primary: "u" | "v" = vRange > uRange ? "v" : "u";
+  const secondary: "u" | "v" = primary === "u" ? "v" : "u";
+  const ordered = samples.slice().sort((left, right) =>
+    left[primary] - right[primary]
+    || left[secondary] - right[secondary]
+    || compareSurfaceSamples(left, right));
+  const leftGroupCount = Math.floor(groupCount / 2);
+  const rightGroupCount = groupCount - leftGroupCount;
+  const proportionalIndex = Math.round(ordered.length * leftGroupCount / groupCount);
+  const splitIndex = Math.max(
+    leftGroupCount,
+    Math.min(ordered.length - rightGroupCount, proportionalIndex),
+  );
+  return [
+    ...partitionZoneSamplesLocally(ordered.slice(0, splitIndex), leftGroupCount),
+    ...partitionZoneSamplesLocally(ordered.slice(splitIndex), rightGroupCount),
+  ];
+}
+
 function positiveFinite(value: number, label: string): number {
   if (!Number.isFinite(value) || value <= 0) {
     throw new RangeError(`${label} must be a positive finite number.`);
@@ -123,27 +214,34 @@ export function createAnnualReducedThermalMesh(
     throw new RangeError("Initial material temperature must be finite.");
   }
   const config = normalizedMeshConfig(patch);
-  const opticalSamples = surface.zones
-    .flatMap((zone) => zone.samples)
-    .slice()
-    .sort((left, right) => left.u - right.u || left.v - right.v || left.zoneIndex - right.zoneIndex);
-  if (opticalSamples.length === 0) throw new RangeError("At least one optical sample is required.");
-  const thermalNodeCount = Math.min(config.targetNodeCount, opticalSamples.length);
-  const groups = Array.from({ length: thermalNodeCount }, () => [] as typeof opticalSamples);
-  opticalSamples.forEach((sample, index) => {
-    const groupIndex = Math.min(
-      thermalNodeCount - 1,
-      Math.floor(index * thermalNodeCount / opticalSamples.length),
-    );
-    groups[groupIndex].push(sample);
-  });
-  const fallbackLengthM = Math.max(
-    1e-4,
-    surface.dimensions.radiusM
-      ?? surface.dimensions.widthM
-      ?? surface.dimensions.depthM
-      ?? Math.sqrt(surface.dimensions.activeAreaM2),
-  );
+  const zones = surface.zones
+    .filter((zone) => zone.samples.length > 0)
+    .map((zone): AnnualSurfaceZoneSamples => ({
+      id: zone.id,
+      index: zone.index,
+      areaM2: zone.samples.reduce((sum, sample) => sum + sample.areaM2, 0),
+      samples: zone.samples.slice().sort(compareSurfaceSamples),
+    }))
+    .sort((left, right) => left.index - right.index || left.id.localeCompare(right.id));
+  const opticalSampleCount = zones.reduce((sum, zone) => sum + zone.samples.length, 0);
+  if (opticalSampleCount === 0) throw new RangeError("At least one optical sample is required.");
+  const nodeCountsByZone = allocateThermalNodeCountsByZone(zones, config.targetNodeCount);
+  const groups = zones.flatMap((zone, index) =>
+    partitionZoneSamplesLocally(zone.samples, nodeCountsByZone[index]));
+  // Comparison plane/cube models retain radiusM=0 for a stable serialized
+  // schema. Nullish coalescing would accept that sentinel and collapse the
+  // convection length to the numerical 1e-4 m floor. Select only a physical,
+  // positive shape dimension instead.
+  const fallbackLengthM = [
+    surface.dimensions.radiusM,
+    surface.dimensions.widthM,
+    surface.dimensions.depthM,
+    Math.sqrt(surface.dimensions.activeAreaM2),
+  ].find((candidate): candidate is number =>
+    candidate !== undefined && Number.isFinite(candidate) && candidate > 0);
+  if (fallbackLengthM === undefined) {
+    throw new RangeError("A positive surface length scale is required for convection.");
+  }
   const opticalSamplesByNodeId: Record<string, AnnualThermalOpticalSample[]> = {};
   const nodes = groups.map((samples, index): MaterialThermalNode => {
     const id = `thermal:${index}`;
@@ -177,7 +275,7 @@ export function createAnnualReducedThermalMesh(
         z: weighted((sample) => sample.position[2]),
       },
       bodyNormal,
-      characteristicLengthM: Math.max(1e-4, Math.min(fallbackLengthM, Math.sqrt(areaM2))),
+      characteristicLengthM: fallbackLengthM,
       shape: surface.kind,
       temperatureC: initialTemperatureC,
     };
@@ -219,13 +317,74 @@ export function createAnnualReducedThermalMesh(
     nodes,
     edges: [...edgeByPair.values()],
     opticalSamplesByNodeId,
-    opticalSampleCount: opticalSamples.length,
+    opticalSampleCount,
     requestedThermalNodeCount: config.targetNodeCount,
     thermalNodeCount: nodes.length,
     conductionModel: "nearest-neighbour-laminate-network",
     inPlaneThermalConductivityWmK: config.inPlaneThermalConductivityWmK,
     laminateThicknessM: config.laminateThicknessM,
     neighboursPerNode: config.neighboursPerNode,
+  };
+}
+
+export interface AnnualNodeConvectionAverage {
+  coefficientWm2K: number;
+  relativeWindSpeedMS: number;
+  sampleCount: number;
+  areaM2: number;
+}
+
+/**
+ * Resolves |u_wind - omega x r| and the external-convection correlation at
+ * every original optical sample. The thermal-node centroid is intentionally
+ * absent: it is retained only for conduction topology and temperature
+ * reporting, and cannot cancel the rotational surface velocity here.
+ */
+export function calculateAreaWeightedNodeConvection(
+  node: Pick<MaterialThermalNode, "id" | "areaM2" | "shape" | "characteristicLengthM">,
+  samples: readonly AnnualThermalOpticalSample[],
+  phaseRad: number,
+  angularVelocityRadS: number,
+  windVelocityMS: Vec3,
+  minimumConvectionWm2K: number,
+  air: AirProperties,
+): AnnualNodeConvectionAverage {
+  if (samples.length === 0) throw new RangeError(`${node.id} has no optical samples.`);
+  if (!Number.isFinite(minimumConvectionWm2K) || minimumConvectionWm2K < 0) {
+    throw new RangeError("Minimum convection must be a finite nonnegative number.");
+  }
+  let areaM2 = 0;
+  let coefficientAreaWPerK = 0;
+  let relativeSpeedAreaM3S = 0;
+  samples.forEach((sample) => {
+    positiveFinite(sample.areaM2, `${node.id} optical sample area`);
+    const pose = materialPoseAtWorldYPhase(sample, phaseRad);
+    const relativeSpeedMS = relativeSurfaceWindSpeedMS(
+      windVelocityMS,
+      angularVelocityRadS,
+      pose.positionM,
+    );
+    const coefficientWm2K = Math.max(
+      minimumConvectionWm2K,
+      externalConvectionCoefficient(
+        node.shape,
+        relativeSpeedMS,
+        node.characteristicLengthM,
+        air,
+      ).coefficientWm2K,
+    );
+    areaM2 += sample.areaM2;
+    coefficientAreaWPerK += coefficientWm2K * sample.areaM2;
+    relativeSpeedAreaM3S += relativeSpeedMS * sample.areaM2;
+  });
+  if (Math.abs(areaM2 - node.areaM2) > Math.max(1e-10, node.areaM2 * 1e-8)) {
+    throw new RangeError(`${node.id} optical sample area does not close to its thermal-node area.`);
+  }
+  return {
+    coefficientWm2K: coefficientAreaWPerK / areaM2,
+    relativeWindSpeedMS: relativeSpeedAreaM3S / areaM2,
+    sampleCount: samples.length,
+    areaM2,
   };
 }
 
@@ -638,17 +797,19 @@ function integrateThermalInterval(
         return sampleSum + poa * sample.areaM2;
       }, 0), 0) / node.areaM2 * soilingFactor;
   });
-  const frontHByNode = nodes.map((node) => convectionPhases.reduce((sum, phase) => {
-    const pose = materialPoseAtWorldYPhase(node, phase.angleRad);
-    const relativeSpeedMS = relativeSurfaceWindSpeedMS(wind, convectionOmega, pose.positionM);
-    const correlation = externalConvectionCoefficient(
-      node.shape,
-      relativeSpeedMS,
-      node.characteristicLengthM,
-      config.air,
-    );
-    return sum + phase.weight * Math.max(config.minimumConvectionWm2K, correlation.coefficientWm2K);
-  }, 0));
+  const frontHByNode = nodes.map((node) => {
+    const samples = mesh.opticalSamplesByNodeId[node.id];
+    return convectionPhases.reduce((sum, phase) => sum + phase.weight
+      * calculateAreaWeightedNodeConvection(
+        node,
+        samples,
+        phase.angleRad,
+        convectionOmega,
+        wind,
+        config.minimumConvectionWm2K,
+        config.air,
+      ).coefficientWm2K, 0);
+  });
   const indexById = new Map(nodes.map((node, index) => [node.id, index]));
   const conductanceByNode = Array(nodes.length).fill(0) as number[];
   mesh.edges.forEach((edge) => {

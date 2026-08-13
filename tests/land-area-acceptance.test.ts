@@ -37,7 +37,7 @@ const LAND_INPUT = {
   maximumActiveAreaM2: 1,
   cylinderHeightM: 0.2,
   coneHeightM: 0.2,
-  groundClearanceM: 0.01,
+  groundClearanceM: 0,
 };
 
 function runSurface(

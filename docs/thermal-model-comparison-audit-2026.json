@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-12T11:42:07.374Z",
+  "generatedAt": "2026-08-13T16:15:15.014Z",
   "scenario": {
     "weatherSource": "same deterministic synthetic 8761-boundary fixture as annual transient audit",
     "year": 2025,
@@ -29,9 +29,9 @@
       "includesThermalHistory": false,
       "periodIntegration": "pointwise-quasi-steady"
     },
-    "staticAcEnergyWh": 37708.03443783207,
-    "rotatingAcEnergyWh": 37712.98133683494,
-    "rotatingMinusStaticWh": 4.946899002869031
+    "staticAcEnergyWh": 37704.72980360528,
+    "rotatingAcEnergyWh": 37709.676550560966,
+    "rotatingMinusStaticWh": 4.9467469556839205
   },
   "transient": {
     "model": {
@@ -40,15 +40,15 @@
       "includesThermalHistory": true,
       "periodIntegration": "actual-weather-clock"
     },
-    "staticAcEnergyWh": 38651.525957407335,
-    "rotatingAcEnergyWh": 38653.69891800725,
-    "rotatingMinusStaticWh": 2.1729605999134947
+    "staticAcEnergyWh": 38561.615392519685,
+    "rotatingAcEnergyWh": 38652.1384346527,
+    "rotatingMinusStaticWh": 90.5230421330125
   },
   "differences": {
-    "staticTransientMinusQuasiWh": 943.4915195752619,
-    "staticTransientMinusQuasiPercent": 2.5020967908862066,
-    "rotatingTransientMinusQuasiWh": 940.7175811723064,
-    "rotatingTransientMinusQuasiPercent": 2.4944131909653366
+    "staticTransientMinusQuasiWh": 856.8855889144033,
+    "staticTransientMinusQuasiPercent": 2.2726209506810178,
+    "rotatingTransientMinusQuasiWh": 942.4618840917319,
+    "rotatingTransientMinusQuasiPercent": 2.4992574063266844
   },
-  "requestFingerprint": "sim-v4-cache-v5-d588ee105d9a953c"
+  "requestFingerprint": "sim-v5-cache-v6-242f779eef57234a"
 }

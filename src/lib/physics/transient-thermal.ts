@@ -14,7 +14,8 @@ export type ThermalCorrelationShape =
   | "cylinder"
   | "sphere"
   | "hemisphere"
-  | "cone";
+  | "cone"
+  | "rotating-disk";
 
 export interface AirProperties {
   thermalConductivityWmK: number;
@@ -38,7 +39,8 @@ export interface ConvectionCorrelationResult {
     | "whitaker-sphere"
     | "mixed-flat-plate"
     | "whitaker-hemisphere-approximation"
-    | "flat-plate-cone-approximation";
+    | "flat-plate-cone-approximation"
+    | "cati-laminar-rotating-disk";
   reynolds: number;
   nusselt: number;
   coefficientWm2K: number;
@@ -250,7 +252,11 @@ export function externalConvectionCoefficient(
   let applicability: ConvectionCorrelationResult["applicability"] = "direct";
   let sourceUrl: string;
 
-  if (shape === "cylinder") {
+  if (shape === "rotating-disk") {
+    nusselt = 0.36 * Math.sqrt(reynolds);
+    correlation = "cati-laminar-rotating-disk";
+    sourceUrl = "https://doi.org/10.3390/fluids9070167";
+  } else if (shape === "cylinder") {
     const first = 0.62 * Math.sqrt(reynolds) * Math.cbrt(prandtl)
       / Math.pow(1 + Math.pow(0.4 / prandtl, 2 / 3), 1 / 4);
     const highRe = Math.pow(1 + Math.pow(reynolds / 282_000, 5 / 8), 4 / 5);

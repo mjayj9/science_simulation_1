@@ -22,6 +22,7 @@
 - 실제 전년 계산은 비윤년 8,761개 weather 경계/8,760개 구간 또는 윤년 8,785개 경계/8,784개 구간을 직접 적분한다. closing endpoint는 중복 에너지로 계산하지 않는다.
 - 정지, 모든 형상에 같은 통제 RPM, 형상별 자연회전을 별도 group으로 계산한다. 자연회전은 월평균 풍속을 한 번 푸는 방식이 아니라 각 weather interval에서 동역학 ODE를 적분한다.
 - 전기 결과는 `local-mpp-area-integral` 이상적 연속막 상한과 `explicit-series-parallel-bypass` 공학적 연결로 분리한다.
+- 공학적 연결의 전년 계산값은 현재 mesh 수렴 기준을 통과하지 못했으므로 `not-evaluated` 탐색값이다. 공식 순위는 수렴한 이상적 local-MPP 결과에만 부여한다.
 - 준정상 결과에는 `준정상 광학 회전·열이력 미포함` provenance를 붙인다. annual transient opt-in의 authoritative 월·연간 결과는 full-clock E11이며 E00/E10/E01/E11 폐합, 열수지 잔차와 mesh 수렴을 함께 보고한다.
 - 모든 순위 행은 `A_land`, `A_PV`, `A_PV/A_land`, 총 AC, kWh/m²-land/year, kWh/m²-PV/year, 전기·열·회전 모델, 기상 출처, 시간 해상도와 실제 전년/대표일 구분을 가진다.
 
@@ -33,16 +34,10 @@ A–D는 원 논문의 핵심 조건이 충분하지 않아 계속 `not-evaluate
 
 ## 재생성 명령
 
-감사 파일은 다음 계산 명령으로 갱신한 뒤 통합 보고서를 마지막에 생성한다.
+감사 파일은 다음 fail-closed 파이프라인으로 모두 갱신하고 SHA-256 manifest를 만든 뒤 통합 보고서를 마지막에 생성한다.
 
 ```text
-npm run audit:geometry
-npm run audit:annual
-npm run audit:natural
-npm run audit:thermal
-npm run audit:thermal-compare
-npm run audit:research
-npm run report:validation
+npm run audit:all
 ```
 
 단위·통합 테스트, typecheck, lint, production build와 렌더 smoke의 실제 명령·개수·실행시간은 최종 검증 실행 로그에서 보고한다. 이 수동 문서에는 과거 실행 개수나 시간을 고정값으로 남기지 않는다.

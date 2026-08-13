@@ -3,10 +3,19 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   advanceLocalDateTime,
+  annualPlaneScenarioFingerprint,
+  annualRunScopeLabelKo,
+  annualRunCohortReady,
+  omitAnnualVariantRecords,
+  annualTransientResultReady,
+  engineeringAnnualResultReady,
   annualTransientComparisonSupport,
   automaticDataModeFromSeries,
   comparisonAnnualVariantId,
+  electricalConnectionDeltaKWh,
+  resolveComparisonFootprintMode,
   partitionComparisonAnnualVariantStages,
+  resolveAnnualComparisonRankEligibility,
   integrateWh,
   obstacleBounds,
 } from "../src/ui/SimulatorClient";
@@ -237,8 +246,187 @@ describe("SimulatorClient equal-land comparison wiring", () => {
     expect(source).toContain("PV 면적당 생산성");
     expect(source).toContain("representative_day_values_excluded=true");
     expect(source).toContain("officialComparisonRankEligible");
+    expect(source).toContain('"electrical_layout_id"');
+    expect(source).toContain("annualElectricalLayoutIdByVariant[variantId]");
+    expect(source).toContain("event.intervals.toLocaleString");
+    expect(source).toContain("closing endpoint \uD3EC\uD568");
+    expect(source).not.toContain("\uB300\uD45C \uC2E4\uC81C \uAE30\uC0C1\uC77C: \uBE44\uC815\uC0C1 \uC7AC\uB8CC\uC810 \uC5F4\uC774\uB825 \u00B7 \uC5F0\uAC04 Worker: \uC900\uC815\uC0C1 Faiman");
+    expect(source).not.toContain("\uD45C\uBA74 \uAD6C\uC801\uC810 \uC0AC\uC774 \uC804\uB3C4\uB294 \uD604\uC7AC \uB2E8\uC5F4");
   });
 
+  it("invalidates annual results when plane configuration changes", () => {
+    const optimum = annualPlaneScenarioFingerprint({ mode: "annual-optimum", appliedTiltDeg: 28.6 });
+    const custom = annualPlaneScenarioFingerprint({ mode: "custom", appliedTiltDeg: 28.6 });
+    const customChanged = annualPlaneScenarioFingerprint({ mode: "custom", appliedTiltDeg: 30 });
+    expect(custom).not.toBe(optimum);
+    expect(customChanged).not.toBe(custom);
+    expect(() => annualPlaneScenarioFingerprint({
+      mode: "custom",
+      appliedTiltDeg: Number.NaN,
+    })).toThrow(/finite/);
+  });
+
+  it("uses one official-rank contract for transient and engineering results", () => {
+    expect(resolveAnnualComparisonRankEligibility({
+      transientReady: true,
+      engineeringReady: true,
+      naturalRotationEligible: true,
+      officialHeight: true,
+      geometryEligible: true,
+      generalPreset: true,
+    })).toEqual({ idealTransient: true, engineering: true });
+    expect(resolveAnnualComparisonRankEligibility({
+      transientReady: true,
+      engineeringReady: true,
+      naturalRotationEligible: true,
+      officialHeight: false,
+      geometryEligible: true,
+      generalPreset: true,
+    })).toEqual({ idealTransient: false, engineering: false });
+    expect(resolveAnnualComparisonRankEligibility({
+      transientReady: false,
+      engineeringReady: true,
+      naturalRotationEligible: true,
+      officialHeight: true,
+      geometryEligible: true,
+      generalPreset: true,
+    })).toEqual({ idealTransient: false, engineering: true });
+
+    expect(resolveAnnualComparisonRankEligibility({
+      transientReady: true,
+      engineeringReady: true,
+      naturalRotationEligible: true,
+      officialHeight: true,
+      generalPreset: true,
+      geometryEligible: false,
+    })).toEqual({ idealTransient: false, engineering: false });
+  });
+
+  it("uses static land geometry for natural no-CQ zero RPM and swept geometry only when rotation can occur", () => {
+    expect(resolveComparisonFootprintMode({ mode: "static", selfStarting: "none" })).toBe("static");
+    expect(resolveComparisonFootprintMode({ mode: "auto", selfStarting: "none" })).toBe("static");
+    expect(resolveComparisonFootprintMode({ mode: "fixed", selfStarting: "none" })).toBe("swept");
+    expect(resolveComparisonFootprintMode({ mode: "auto", selfStarting: "user-cq" })).toBe("swept");
+    const comparisonSurfaceInputBlock = source.slice(
+      source.indexOf("const comparisonSurfaceInput"),
+      source.indexOf("const comparisonSurfaceByShape"),
+    );
+    expect(comparisonSurfaceInputBlock).toContain("comparisonRotation.selfStarting");
+  });
+
+  it("isolates electrical-connection delta on the shared quasi-steady path", () => {
+    expect(electricalConnectionDeltaKWh({
+      idealQuasiWh: 1200,
+      engineeringQuasiWh: 900,
+    })).toBeCloseTo(-0.3, 12);
+    expect(() => electricalConnectionDeltaKWh({
+      idealQuasiWh: Number.NaN,
+      engineeringQuasiWh: 900,
+    })).toThrow(/finite/);
+  });
+
+  it("distinguishes full-year intervals from the non-integrated closing endpoint", () => {
+    expect(annualRunScopeLabelKo({
+      steps: 8_761,
+      intervals: 8_760,
+      durationHours: 8_760,
+      authoritativePath: "annual-transient-e11",
+    })).toContain("8760\uAC1C \uC801\uBD84 \uAD6C\uAC04 \u00B7 closing endpoint \uD3EC\uD568 8761\uC810 \u00B7 \uACFC\uB3C4 \uC5F4 E11");
+    expect(annualRunScopeLabelKo({
+      steps: 8_785,
+      intervals: 8_784,
+      durationHours: 8_784,
+      authoritativePath: "worker-quasi-steady",
+    })).toContain("8784\uAC1C \uC801\uBD84 \uAD6C\uAC04 \u00B7 closing endpoint \uD3EC\uD568 8785\uC810 \u00B7 \uC900\uC815\uC0C1");
+    expect(() => annualRunScopeLabelKo({
+      steps: 8_760,
+      intervals: 8_760,
+      durationHours: 8_760,
+      authoritativePath: "worker-quasi-steady",
+    })).toThrow(/closing endpoint/);
+    expect(() => annualRunScopeLabelKo({
+      steps: 8_760,
+      intervals: 8_759,
+      durationHours: 8_760,
+      authoritativePath: "worker-quasi-steady",
+    })).toThrow(/one interval per integrated hour/);
+  });
+
+  it("requires one complete annual run cohort and removes stale targeted variants", () => {
+    const complete = {
+      runId: "run-a",
+      steps: 8_761,
+      intervals: 8_760,
+      durationHours: 8_760,
+      elapsedMs: 10,
+    };
+    expect(annualRunCohortReady({
+      variantIds: ["quasi", "engineering", "transient"],
+      metadataByVariant: {
+        quasi: complete,
+        engineering: { ...complete, elapsedMs: 20 },
+        transient: { ...complete, elapsedMs: 30 },
+      },
+      expectedSteps: 8_761,
+      expectedIntervals: 8_760,
+      expectedDurationHours: 8_760,
+    })).toBe(true);
+    expect(annualRunCohortReady({
+      variantIds: ["quasi", "transient"],
+      metadataByVariant: {
+        quasi: complete,
+        transient: { ...complete, runId: "old-run" },
+      },
+      expectedSteps: 8_761,
+      expectedIntervals: 8_760,
+      expectedDurationHours: 8_760,
+    })).toBe(false);
+    expect(annualRunCohortReady({
+      variantIds: ["quasi", "transient"],
+      metadataByVariant: { quasi: complete },
+      expectedSteps: 8_761,
+      expectedIntervals: 8_760,
+      expectedDurationHours: 8_760,
+    })).toBe(false);
+    expect(annualRunCohortReady({
+      variantIds: ["quasi"],
+      metadataByVariant: { quasi: { ...complete, steps: 8_760 } },
+      expectedSteps: 8_760,
+      expectedIntervals: 8_760,
+      expectedDurationHours: 8_760,
+    })).toBe(false);
+    expect(omitAnnualVariantRecords({ quasi: 1, transient: 2, unrelated: 3 }, ["quasi", "transient"]))
+      .toEqual({ unrelated: 3 });
+  });
+
+  it("requires production layout provenance and authoritative closed E11 before official ranking", () => {
+    const layoutId = "surface-spatial-u-v-row-major-v1|zones=0:plane-skin|activeAreaM2=0.05|nominalCellAreaM2=0.0025|cells=20|parallel=2|bypass=10";
+    expect(engineeringAnnualResultReady({ energyWh: 0, layoutId })).toBe(true);
+    expect(engineeringAnnualResultReady({ energyWh: 900, layoutId: "legacy-layout" })).toBe(false);
+    expect(engineeringAnnualResultReady({ energyWh: undefined, layoutId })).toBe(false);
+
+    const closed = { annual: { e11Wh: 1_200, closureResidualWh: 1e-12 } };
+    expect(annualTransientResultReady({
+      energyWh: 1_200,
+      authoritativePath: "annual-transient-e11",
+      decomposition: closed,
+    })).toBe(true);
+    expect(annualTransientResultReady({
+      energyWh: 1_200,
+      authoritativePath: "worker-quasi-steady",
+      decomposition: closed,
+    })).toBe(false);
+    expect(annualTransientResultReady({
+      energyWh: 1_201,
+      authoritativePath: "annual-transient-e11",
+      decomposition: closed,
+    })).toBe(false);
+    expect(annualTransientResultReady({
+      energyWh: 1_200,
+      authoritativePath: "annual-transient-e11",
+      decomposition: { annual: { e11Wh: 1_200, closureResidualWh: 0.1 } },
+    })).toBe(false);
+  });
   it("normalizes the same annual AC result by both actual land and active PV area", () => {
     expect(source).toContain(
       "normalizedAnnualEnergy(annualEnergy, actualLandAreaM2, activeAreaM2)",

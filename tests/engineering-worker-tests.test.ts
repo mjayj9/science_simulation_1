@@ -111,13 +111,13 @@ function regionSum(
 
 describe("continuous-surface engineering electrical worker", () => {
   it("bumps protocol/cache/model identity and fingerprints connection changes", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(4);
-    expect(SIMULATION_CACHE_VERSION).toBe(5);
-    expect(CONTINUOUS_SURFACE_MODEL_VERSION).toBe("continuous-pv-electrical-v2");
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(5);
+    expect(SIMULATION_CACHE_VERSION).toBe(6);
+    expect(CONTINUOUS_SURFACE_MODEL_VERSION).toBe("continuous-pv-electrical-v3");
     const start = Date.UTC(2026, 5, 21, 3);
     const input = pairedInput([point(start), point(start + HOUR_MS)]);
     const baseline = simulationInputFingerprint(input);
-    expect(baseline).toMatch(/^sim-v4-cache-v5-/);
+    expect(baseline).toMatch(/^sim-v5-cache-v6-/);
     const changed = structuredClone(input);
     const surface = changed.variants[1].continuousSurface!;
     if (surface.electricalModel !== "explicit-series-parallel-bypass") throw new Error("fixture");
@@ -202,14 +202,19 @@ describe("continuous-surface engineering electrical worker", () => {
     expect(complete.dcEnergyWhByVariant).toEqual({ ideal: 0, engineering: 0 });
   });
 
-  it("integrates every actual interval and is deterministic for identical annual input", async () => {
+  it("integrates every interval and is invariant to Worker quadrature-array permutation", async () => {
     const start = Date.UTC(2026, 0, 1);
     const weather = Array.from({ length: 25 }, (_, index) =>
       point(start + index * HOUR_MS, index % 24 >= 6 && index % 24 <= 18 ? 750 : 0),
     );
     const input = pairedInput(weather);
     const first = await run(input, "engineering-annual-a");
-    const second = await run(structuredClone(input), "engineering-annual-b");
+    const permuted = structuredClone(input);
+    const engineeringSurface = permuted.variants[1].continuousSurface!;
+    engineeringSurface.samples = [...engineeringSurface.samples]
+      .sort((left, right) => right.u - left.u || right.v - left.v);
+    const second = await run(permuted, "engineering-annual-b");
+    expect(second.complete.fingerprint).not.toBe(first.complete.fingerprint);
     expect(first.complete.steps).toBe(25);
     expect(first.complete.intervals).toBe(24);
     expect(first.complete.durationHours).toBe(24);
@@ -217,6 +222,12 @@ describe("continuous-surface engineering electrical worker", () => {
     expect(first.complete.dcEnergyWhByVariant.engineering)
       .toBeLessThanOrEqual(first.complete.dcEnergyWhByVariant.ideal + 1e-8);
     expect(second.complete.dcEnergyWhByVariant).toEqual(first.complete.dcEnergyWhByVariant);
+    expect(second.complete.electricalLayoutIdByVariant)
+      .toEqual(first.complete.electricalLayoutIdByVariant);
+    expect(first.complete.electricalLayoutIdByVariant.engineering)
+      .toContain("surface-spatial-u-v-row-major-v1");
+    expect(first.rows.every((row) => row.electricalLayoutIdByVariant.engineering ===
+      first.complete.electricalLayoutIdByVariant.engineering)).toBe(true);
     expect(second.complete.acEnergyWhByVariant).toEqual(first.complete.acEnergyWhByVariant);
     expect(second.rows.map((row) => row.mismatchLossFractionByVariant))
       .toEqual(first.rows.map((row) => row.mismatchLossFractionByVariant));

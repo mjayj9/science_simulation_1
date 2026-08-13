@@ -6,7 +6,7 @@ async function render(pathname = "/") {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
   const { default: worker } = await import(workerUrl.href);
-  return worker.fetch(
+  const response = await worker.fetch(
     new Request(new URL(pathname, "http://localhost"), {
       headers: { accept: "text/html" },
     }),
@@ -20,14 +20,16 @@ async function render(pathname = "/") {
       passThroughOnException() {},
     },
   );
+  const html = await response.text();
+  return { response, html };
 }
 
 test("server-renders the Korean Solarform product shell", async () => {
-  const response = await render();
+  const { response, html } = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
-  const html = await response.text();
+  assert.equal(response.bodyUsed, true);
   assert.match(html, /<html[^>]*\blang=["']ko["']/i);
   assert.match(html, /<title>3D 태양광 시뮬레이터 · 솔라폼 랩<\/title>/i);
   assert.match(html, /aria-label=["']주요 화면["']/);
@@ -50,9 +52,9 @@ test("server-renders the Korean Solarform product shell", async () => {
   assert.match(html, /위에서 보기/);
   assert.match(html, /표면 법선/);
   assert.match(html, /적분 샘플/);
-  assert.match(html, /연간 절대 발전량/);
-  assert.match(html, /토지면적당 연간 발전량/);
-  assert.match(html, /PV 활성면적당 연간 발전량/);
+  assert.match(html, /이상적 연속막 상한 · 총 AC/);
+  assert.match(html, /토지 생산성 · 이상적 상한/);
+  assert.match(html, /PV 면적당 생산성 · 이상적 상한/);
   assert.match(html, /kWh\/m²-land\/year/);
   assert.match(html, /kWh\/m²-PV\/year/);
   assert.doesNotMatch(html, /N_eq|20구역|동일 PV 활성면적|5×5 cm 물리 패널/);

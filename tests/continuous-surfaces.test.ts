@@ -49,6 +49,11 @@ function integratedPoa(
   azimuthSamples: number,
   elevationDeg: number,
   azimuthDeg: number,
+  options: {
+    rotationAngleRad?: number;
+    albedo?: number;
+    diffuseModel?: "hay-davies" | "isotropic";
+  } = {},
 ): { directW: number; totalW: number } {
   const model = createContinuousSurface(kind, azimuthSamples);
   const direction = unitSun(elevationDeg, azimuthDeg);
@@ -57,7 +62,10 @@ function integratedPoa(
   const ghiWm2 = dniWm2 * direction[1] + dhiWm2;
   let directW = 0;
   let totalW = 0;
-  for (const sample of surfaceSamples(model)) {
+  for (const baseSample of surfaceSamples(model)) {
+    const sample = options.rotationAngleRad === undefined
+      ? baseSample
+      : rotateSurfaceSampleAroundY(baseSample, options.rotationAngleRad);
     const poa = calculatePOA({
       ghiWm2,
       dniWm2,
@@ -65,9 +73,9 @@ function integratedPoa(
       solarZenithDeg: 90 - elevationDeg,
       sunDirection: { x: direction[0], y: direction[1], z: direction[2] },
       panelNormal: { x: sample.normal[0], y: sample.normal[1], z: sample.normal[2] },
-      albedo: 0.2,
+      albedo: options.albedo ?? 0.2,
       iam: { model: "ashrae", b0: 0.05 },
-      diffuseModel: "hay-davies",
+      diffuseModel: options.diffuseModel ?? "hay-davies",
       extraterrestrialNormalWm2: 1361,
     });
     directW += poa.directPoaWm2 * sample.areaM2;
@@ -230,6 +238,25 @@ describe("analytic projected area and rotation invariance", () => {
     for (const angleRad of [0.137, 0.77, 1.234, 2.91, 5.73]) {
       const rotated = numericalProjectedArea(model, direction, angleRad);
       expect(Math.abs(rotated - baseline) / Math.max(rotated, baseline)).toBeLessThan(0.005);
+    }
+  });
+
+  it.each(KINDS)("keeps integrated %s direct and total POA invariant under Y rotation", (kind) => {
+    const baseline = integratedPoa(kind, 64, 31, 47, {
+      rotationAngleRad: 0,
+      albedo: 0,
+      diffuseModel: "isotropic",
+    });
+    for (const rotationAngleRad of [0.137, 0.77, 1.234, Math.PI, 5.73]) {
+      const rotated = integratedPoa(kind, 64, 31, 47, {
+        rotationAngleRad,
+        albedo: 0,
+        diffuseModel: "isotropic",
+      });
+      expect(Math.abs(rotated.directW - baseline.directW) / baseline.directW)
+        .toBeLessThan(0.001);
+      expect(Math.abs(rotated.totalW - baseline.totalW) / baseline.totalW)
+        .toBeLessThan(0.001);
     }
   });
 });

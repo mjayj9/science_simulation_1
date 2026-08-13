@@ -16,14 +16,14 @@ import type { AnnualRotationDecompositionResult, ThermalModelMetadata } from "..
 import type { WeatherPoint } from "../lib/weather";
 
 /**
- * v4 adds the explicit series/parallel/bypass continuous-surface electrical
- * contract. The version is part of every fingerprint, so ideal-upper-bound
- * cache entries cannot be mistaken for engineering-connection results.
+ * v5 adds material-space surface addressing and deterministic engineering
+ * layout IDs. The version is part of every fingerprint, so pre-spatial wiring
+ * results cannot be mistaken for the current manufacturing contract.
  */
-export const SIMULATION_WORKER_PROTOCOL_VERSION = 4 as const;
-export const SIMULATION_CACHE_VERSION = 5 as const;
-export const CONTINUOUS_SURFACE_MODEL_VERSION = "continuous-pv-electrical-v2" as const;
-export const CONTINUOUS_SURFACE_MESH_VERSION = "comparison-surface-mesh-v1" as const;
+export const SIMULATION_WORKER_PROTOCOL_VERSION = 5 as const;
+export const SIMULATION_CACHE_VERSION = 6 as const;
+export const CONTINUOUS_SURFACE_MODEL_VERSION = "continuous-pv-electrical-v3" as const;
+export const CONTINUOUS_SURFACE_MESH_VERSION = "comparison-surface-mesh-v2" as const;
 
 /** Capacity for six ideal comparison shapes plus optional legacy diagnostics. */
 export const MAX_SIMULATION_VARIANTS = 2 * MAX_PROJECT_VARIANTS;
@@ -84,6 +84,11 @@ export interface SimulationContinuousSurfaceSample {
   positionM: Vec3;
   normal: Vec3;
   areaM2: number;
+  /** Stable material chart address; never recomputed from transformed world coordinates. */
+  zoneId: string;
+  zoneIndex: number;
+  u: number;
+  v: number;
   regionId?: SimulationSurfaceRegionId;
 }
 
@@ -149,6 +154,10 @@ export function createContinuousSurfaceWorkItem(
     positionM: { x: sample.position[0], y: sample.position[1], z: sample.position[2] },
     normal: { x: sample.normal[0], y: sample.normal[1], z: sample.normal[2] },
     areaM2: sample.areaM2,
+    zoneId: sample.zoneId,
+    zoneIndex: sample.zoneIndex,
+    u: sample.u,
+    v: sample.v,
     regionId: surface.kind === "cylinder"
       ? (zone.id.includes("top") || sample.normal[1] > 0.5 ? "top" : "lateral")
       : "surface",
@@ -409,6 +418,8 @@ export interface SimulationResultRow {
   moduleTemperatureCByVariant: Record<string, number>;
   mismatchLossFractionByVariant: Record<string, number>;
   bypassActiveCountByVariant: Record<string, number>;
+  /** Static for a variant/run; repeated on rows so streamed CSV is self-describing. */
+  electricalLayoutIdByVariant: Record<string, string>;
   inverterStatusByVariant: Record<string, InverterResult["status"] | "disabled">;
   ghiClosureByVariant: Record<string, SimulationGhiClosureDiagnostic>;
   rotationIntervalAveragedByVariant: Record<string, boolean>;
@@ -456,6 +467,8 @@ export interface SimulationCompleteEvent {
   energyWhByVariant: Record<string, number>;
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
+  /** Deterministic electrical/material layout contract used by each variant. */
+  electricalLayoutIdByVariant: Record<string, string>;
   motorEnergyWhByVariant?: Record<string, number>;
   /** Complete-event energy source. Opt-in transient variants use E11. */
   authoritativeEnergyPathByVariant: Record<

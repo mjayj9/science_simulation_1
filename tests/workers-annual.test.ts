@@ -116,11 +116,11 @@ function continuousCylinderInput(times: number[]): SimulationKernelInput {
           soilingLossFraction: 0,
         },
         samples: [
-          { positionM: { x: 0, y: 0.25, z: 0 }, normal: { x: 0, y: 1, z: 0 }, areaM2: 0.05, regionId: "top" },
-          { positionM: { x: 1, y: 0.125, z: 0 }, normal: { x: 1, y: 0, z: 0 }, areaM2: sideAreaM2, regionId: "lateral" },
-          { positionM: { x: -1, y: 0.125, z: 0 }, normal: { x: -1, y: 0, z: 0 }, areaM2: sideAreaM2, regionId: "lateral" },
-          { positionM: { x: 0, y: 0.125, z: 1 }, normal: { x: 0, y: 0, z: 1 }, areaM2: sideAreaM2, regionId: "lateral" },
-          { positionM: { x: 0, y: 0.125, z: -1 }, normal: { x: 0, y: 0, z: -1 }, areaM2: sideAreaM2, regionId: "lateral" },
+          { positionM: { x: 0, y: 0.25, z: 0 }, normal: { x: 0, y: 1, z: 0 }, areaM2: 0.05, zoneId: "cylinder-top", zoneIndex: 0, u: 0.25, v: 0.5, regionId: "top" },
+          { positionM: { x: 1, y: 0.125, z: 0 }, normal: { x: 1, y: 0, z: 0 }, areaM2: sideAreaM2, zoneId: "cylinder-side", zoneIndex: 1, u: 0.5, v: 0.125, regionId: "lateral" },
+          { positionM: { x: -1, y: 0.125, z: 0 }, normal: { x: -1, y: 0, z: 0 }, areaM2: sideAreaM2, zoneId: "cylinder-side", zoneIndex: 1, u: 0.5, v: 0.625, regionId: "lateral" },
+          { positionM: { x: 0, y: 0.125, z: 1 }, normal: { x: 0, y: 0, z: 1 }, areaM2: sideAreaM2, zoneId: "cylinder-side", zoneIndex: 1, u: 0.5, v: 0.375, regionId: "lateral" },
+          { positionM: { x: 0, y: 0.125, z: -1 }, normal: { x: 0, y: 0, z: -1 }, areaM2: sideAreaM2, zoneId: "cylinder-side", zoneIndex: 1, u: 0.5, v: 0.875, regionId: "lateral" },
         ],
       },
     }],
@@ -136,8 +136,8 @@ function continuousCylinderInput(times: number[]): SimulationKernelInput {
 
 describe("annual worker protocol", () => {
   it("creates a deterministic fingerprint and fingerprint-bound cancel request", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(4);
-    expect(SIMULATION_CACHE_VERSION).toBe(5);
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(5);
+    expect(SIMULATION_CACHE_VERSION).toBe(6);
     const start = Date.UTC(2026, 0, 1);
     const input = baseInput([start, start + 3_600_000]);
     const cloned = structuredClone(input);
@@ -173,7 +173,7 @@ describe("annual worker protocol", () => {
     expect(isSimulationEventStale({ ...currentEvent, fingerprint: "old" }, run)).toBe(true);
   });
 
-  it("fingerprints every continuous geometry/material/rotation input under cache v5", () => {
+  it("fingerprints every continuous geometry/material/rotation input under cache v6", () => {
     const start = Date.UTC(2026, 5, 21, 3);
     const input = continuousCylinderInput([start, start + 3_600_000]);
     const baseline = simulationInputFingerprint(input);
@@ -200,7 +200,7 @@ describe("annual worker protocol", () => {
       mutate(copy);
       expect(simulationInputFingerprint(copy)).not.toBe(baseline);
     });
-    expect(baseline).toMatch(/^sim-v4-cache-v5-/);
+    expect(baseline).toMatch(/^sim-v5-cache-v6-/);
   });
 
   it("serializes authoritative comparison quadrature as absolute-area worker samples", () => {

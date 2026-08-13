@@ -9,7 +9,7 @@ import {
 import { solveEnvironmentalAverageRpm } from "../src/lib/physics/rotation";
 import type { WeatherPoint } from "../src/lib/weather";
 
-function weatherPoint(timeUtcMs: number, windSpeedMs: number): WeatherPoint {
+function weatherPoint(timeUtcMs: number, windSpeedMs: number, windDirectionDeg = 270): WeatherPoint {
   return {
     timeUtcMs,
     ghiWm2: 0,
@@ -17,7 +17,7 @@ function weatherPoint(timeUtcMs: number, windSpeedMs: number): WeatherPoint {
     dhiWm2: 0,
     ambientC: 20,
     windSpeedMs,
-    windDirectionDeg: 270,
+    windDirectionDeg,
     gustMs: windSpeedMs,
     cloudFraction: 0,
     precipitationMm: 0,
@@ -95,11 +95,56 @@ describe("shape-specific natural-rotation geometry", () => {
     expect(result.hemisphere.projectedAreaM2).toBeCloseTo(Math.PI / 2, 14);
     expect(result.cylinder.projectedAreaM2).toBeCloseTo(6, 14);
     expect(result.cone.projectedAreaM2).toBeCloseTo(3, 14);
-    expect(result.cylinder.inertiaKgM2).toBeCloseTo(2, 14);
-    expect(result.cone.inertiaKgM2).toBeCloseTo(1.2, 14);
-    expect(result.cube.inertiaKgM2).toBeCloseTo(8 / 3, 14);
+    expect(result.sphere.inertiaKgM2).toBeCloseTo(8 / 3, 14);
+    expect(result.cylinder.inertiaKgM2).toBeCloseTo(26 / 7, 14);
+    expect(result.cone.inertiaKgM2).toBeCloseTo(2, 14);
+    expect(result.cube.inertiaKgM2).toBeCloseTo(4.8, 14);
     expect(result.plane.forceApplicationRadiusM).toBeCloseTo(Math.hypot(2, 0.1) / 2, 14);
     expect(result.cube.forceApplicationRadiusM).toBeCloseTo(Math.SQRT2, 14);
+  });
+
+  it("evaluates plane and cube silhouettes from wind azimuth minus body yaw", () => {
+    const plane = deriveAnalyticShapeRotationParameters({
+      shape: "plane", widthM: 2, depthM: Math.sqrt(3), heightM: 1,
+      planeSlantLengthM: 2, planeTiltDeg: 30, planeAzimuthDeg: 0, massKg: 4,
+    });
+    expect(plane.directionalAerodynamics.evaluate(0, 0).projectedAreaM2).toBeCloseTo(2, 14);
+    expect(plane.directionalAerodynamics.evaluate(Math.PI / 2, 0).projectedAreaM2)
+      .toBeCloseTo(0, 14);
+
+    const cube = deriveAnalyticShapeRotationParameters({
+      shape: "cube", widthM: 2, depthM: 2, heightM: 2, massKg: 4,
+    });
+    expect(cube.directionalAerodynamics.evaluate(0, 0)).toEqual({
+      projectedAreaM2: 4,
+      forceApplicationRadiusM: 1,
+    });
+    expect(cube.directionalAerodynamics.evaluate(Math.PI / 4, 0).projectedAreaM2)
+      .toBeCloseTo(4 * Math.SQRT2, 14);
+    expect(cube.directionalAerodynamics.evaluate(Math.PI / 4, 0).forceApplicationRadiusM)
+      .toBeCloseTo(Math.SQRT2, 14);
+  });
+
+  it("uses the per-weather-direction cube silhouette in aerodynamic impulse", () => {
+    const analytic = deriveAnalyticShapeRotationParameters({
+      shape: "cube", widthM: 2, depthM: 2, heightM: 2, massKg: 4,
+    });
+    const start = Date.UTC(2025, 0, 1);
+    const run = (directionDeg: number) => integrateNaturalRotationHistory({
+      weather: [weatherPoint(start, 5, directionDeg), weatherPoint(start + 1_000, 5, directionDeg)],
+      maximumSubstepSeconds: 1,
+      model: {
+        ...selfStartingModel(), shape: "cube", maximumRpm: 0,
+        projectedAreaM2: analytic.projectedAreaM2,
+        forceApplicationRadiusM: analytic.forceApplicationRadiusM,
+        inertiaKgM2: analytic.inertiaKgM2,
+        directionalAerodynamics: analytic.directionalAerodynamics,
+      },
+    });
+    const face = run(0).intervals[0];
+    const diagonal = run(45).intervals[0];
+    expect(diagonal.meanProjectedAreaM2 / face.meanProjectedAreaM2).toBeCloseTo(Math.SQRT2, 12);
+    expect(diagonal.aerodynamicImpulseNmS / face.aerodynamicImpulseNmS).toBeCloseTo(2, 12);
   });
 
   it.each([
@@ -154,6 +199,10 @@ describe("weather-interval natural-rotation dynamics", () => {
     expect(Math.abs(result.annual.totalDynamicBalanceResidualNmS)).toBeLessThan(1e-10);
     expect(result.audit.equation).toBe(
       "I*domega/dt=tau_aero(V,omega,shape)-tau_loss(omega)",
+    );
+    expect(Math.abs(result.audit.phaseScheduleClosureRad)).toBeLessThan(1e-9);
+    expect(result.audit.rotationScheduleDefinition).toBe(
+      "interval-time-mean-rpm; prefix-phase equals integrated omega",
     );
   });
 
@@ -247,9 +296,12 @@ describe("weather-interval natural-rotation dynamics", () => {
     });
     expect(incomplete.audit.officialComparisonEligible).toBe(false);
     expect(incomplete.audit.exclusionReasons).toEqual([
+      "auxiliary-CQ-reference-area-missing",
+      "auxiliary-CQ-reference-radius-missing",
       "auxiliary-height-not-in-H_max",
       "auxiliary-shadow-not-in-PV-yield",
     ]);
+    expect(incomplete.intervals[0].aerodynamicImpulseNmS).toBe(0);
   });
 });
 

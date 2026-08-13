@@ -16,9 +16,32 @@ import { clamp } from "./types";
 
 export type EngineeringCellIvModel = "piecewise-nameplate" | "single-diode";
 
-export interface EngineeringSurfaceElectricalSample {
-  id: string;
+/**
+ * Stable manufacturing order for one gap-free PV skin. The address is a
+ * material-space coordinate and therefore does not change when the worker
+ * rotates the world-space position/normal.
+ */
+export const ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION =
+  "surface-spatial-u-v-row-major-v1" as const;
+
+export interface EngineeringSurfaceSpatialAddress {
+  zoneId: string;
+  zoneIndex: number;
+  /** First material coordinate (meridional/vertical cumulative-area axis). */
+  u: number;
+  /** Second material coordinate (azimuthal/horizontal axis). */
+  v: number;
+  /** Unrotated material point, used only as a deterministic tie-breaker. */
+  positionM: { x: number; y: number; z: number };
+}
+
+export interface EngineeringSurfaceLayoutSample extends EngineeringSurfaceSpatialAddress {
+  id?: string;
   areaM2: number;
+}
+
+export interface EngineeringSurfaceElectricalSample extends EngineeringSurfaceLayoutSample {
+  id: string;
   poaWm2: number;
   cellTemperatureC: number;
 }
@@ -47,6 +70,8 @@ export interface EngineeringStringResult {
 
 export interface EngineeringSurfaceElectricalResult {
   connectionModel: "explicit-series-parallel-bypass";
+  /** Deterministic material-space cell/string/bypass layout contract. */
+  layoutId: string;
   cellIvModel: EngineeringCellIvModel;
   dcPowerW: number;
   dcVoltageV: number;
@@ -97,6 +122,131 @@ function integerInRange(value: number, lower: number, upper: number, label: stri
   return value;
 }
 
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function compareNumber(left: number, right: number): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function validateSpatialAddress(sample: EngineeringSurfaceSpatialAddress, index: number): void {
+  if (!sample.zoneId.trim() || sample.zoneId.length > 100) {
+    throw new RangeError(`Sample ${index} zoneId must be non-empty and at most 100 characters.`);
+  }
+  if (!Number.isInteger(sample.zoneIndex) || sample.zoneIndex < 0) {
+    throw new RangeError(`Sample ${index} zoneIndex must be a non-negative integer.`);
+  }
+  for (const coordinate of ["u", "v"] as const) {
+    const value = sample[coordinate];
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new RangeError(`Sample ${index} ${coordinate} must be finite and in [0, 1].`);
+    }
+  }
+  for (const coordinate of ["x", "y", "z"] as const) {
+    if (!Number.isFinite(sample.positionM[coordinate])) {
+      throw new RangeError(`Sample ${index} positionM.${coordinate} must be finite.`);
+    }
+  }
+}
+
+/** Total ordering independent of quadrature-array insertion order. */
+export function compareEngineeringSurfaceSpatialAddress(
+  left: EngineeringSurfaceSpatialAddress,
+  right: EngineeringSurfaceSpatialAddress,
+): number {
+  return compareNumber(left.zoneIndex, right.zoneIndex) ||
+    compareText(left.zoneId, right.zoneId) ||
+    compareNumber(left.u, right.u) ||
+    compareNumber(left.v, right.v) ||
+    compareNumber(left.positionM.x, right.positionM.x) ||
+    compareNumber(left.positionM.y, right.positionM.y) ||
+    compareNumber(left.positionM.z, right.positionM.z);
+}
+
+/** Human-readable key used for stable cell provenance and diagnostics. */
+export function engineeringSurfaceSpatialKey(sample: EngineeringSurfaceSpatialAddress): string {
+  return [
+    `zone=${sample.zoneIndex}:${encodeURIComponent(sample.zoneId)}`,
+    `u=${sample.u.toPrecision(17)}`,
+    `v=${sample.v.toPrecision(17)}`,
+    `p=${sample.positionM.x.toPrecision(17)},${sample.positionM.y.toPrecision(17)},${sample.positionM.z.toPrecision(17)}`,
+  ].join("|");
+}
+
+/**
+ * Validates and returns material-space row-major order. Already ordered input
+ * is reused, avoiding an annual O(n log n) sort at every weather step.
+ */
+export function orderEngineeringSurfaceLayoutSamples<T extends EngineeringSurfaceLayoutSample>(
+  samples: readonly T[],
+): readonly T[] {
+  if (samples.length === 0) throw new RangeError("At least one surface sample is required.");
+  let alreadyOrdered = true;
+  samples.forEach((sample, index) => {
+    validateSpatialAddress(sample, index);
+    positiveFinite(sample.areaM2, `Sample ${index} area`);
+    if (index > 0 && compareEngineeringSurfaceSpatialAddress(samples[index - 1], sample) > 0) {
+      alreadyOrdered = false;
+    }
+  });
+  return alreadyOrdered
+    ? samples
+    : [...samples].sort((left, right) =>
+        compareEngineeringSurfaceSpatialAddress(left, right) || compareText(
+          left.id ?? "",
+          right.id ?? "",
+        ));
+}
+
+function canonicalLayoutNumber(value: number): string {
+  return Number(value.toPrecision(12)).toString();
+}
+
+/**
+ * Identifies the manufacturing topology, independently of optical quadrature
+ * refinement. Shape-specific zone IDs distinguish the surface chart, while
+ * active area and cell topology make boundary-cell behavior explicit.
+ */
+export function engineeringSurfaceLayoutId(
+  samples: readonly EngineeringSurfaceLayoutSample[],
+  config: EngineeringSurfaceConnectionConfig = {},
+  referenceNominalCellAreaM2 = DEFAULT_ELECTRICAL.areaM2,
+): string {
+  const ordered = orderEngineeringSurfaceLayoutSamples(samples);
+  const activeAreaM2 = ordered.reduce((sum, sample) => sum + sample.areaM2, 0);
+  const nominalCellAreaM2 = positiveFinite(
+    config.nominalCellAreaM2 ?? referenceNominalCellAreaM2,
+    "Nominal cell area",
+  );
+  const cellCount = Math.max(1, Math.ceil(activeAreaM2 / nominalCellAreaM2 - 1e-10));
+  const parallelStringCount = integerInRange(
+    Math.min(Math.round(config.parallelStrings ?? 2), cellCount),
+    1,
+    cellCount,
+    "Parallel string count",
+  );
+  const cellsPerBypassSubstring = integerInRange(
+    Math.round(config.cellsPerBypassSubstring ?? 10),
+    1,
+    10_000,
+    "Cells per bypass substring",
+  );
+  const zones = [...new Map(ordered.map((sample) => [
+    `${sample.zoneIndex}:${sample.zoneId}`,
+    `${sample.zoneIndex}:${encodeURIComponent(sample.zoneId)}`,
+  ])).values()].join(",");
+  return [
+    ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION,
+    `zones=${zones}`,
+    `activeAreaM2=${canonicalLayoutNumber(activeAreaM2)}`,
+    `nominalCellAreaM2=${canonicalLayoutNumber(nominalCellAreaM2)}`,
+    `cells=${cellCount}`,
+    `parallel=${parallelStringCount}`,
+    `bypass=${cellsPerBypassSubstring}`,
+  ].join("|");
+}
+
 /**
  * Converts area quadrature into equal manufactured cells without changing the
  * area integral. A single final boundary cell is allowed to be smaller than
@@ -107,7 +257,7 @@ export function aggregateSurfaceSamplesIntoCells(
   nominalCellAreaM2: number,
 ): AggregatedCellCondition[] {
   positiveFinite(nominalCellAreaM2, "Nominal cell area");
-  if (samples.length === 0) throw new RangeError("At least one surface sample is required.");
+  const orderedSamples = orderEngineeringSurfaceLayoutSamples(samples);
   const cells: AggregatedCellCondition[] = [];
   let cellArea = 0;
   let poaArea = 0;
@@ -126,8 +276,8 @@ export function aggregateSurfaceSamplesIntoCells(
     temperatureArea = 0;
   };
 
-  for (const [index, sample] of samples.entries()) {
-    const areaM2 = positiveFinite(sample.areaM2, `Sample ${index} area`);
+  for (const [index, sample] of orderedSamples.entries()) {
+    const areaM2 = sample.areaM2;
     const poaWm2 = nonNegativeFinite(sample.poaWm2, `Sample ${index} POA`);
     if (!Number.isFinite(sample.cellTemperatureC)) {
       throw new RangeError(`Sample ${index} temperature must be finite.`);
@@ -332,6 +482,7 @@ export function solveEngineeringSurfaceElectrical(
   const finalCellAreaM2 = conditions.at(-1)?.areaM2 ?? 0;
   return {
     connectionModel: "explicit-series-parallel-bypass",
+    layoutId: engineeringSurfaceLayoutId(samples, config, nominalCellAreaM2),
     cellIvModel,
     dcPowerW: Math.max(0, array.mpp.powerW),
     dcVoltageV: Math.max(0, array.mpp.voltageV),
