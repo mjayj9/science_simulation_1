@@ -1,0 +1,1815 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-12T10:53:56.688Z",
+  "conditions": {
+    "year": 2025,
+    "landAreaM2": 0.05,
+    "maximumHeightM": 0.252313252202016,
+    "weatherSource": "offline/model-estimate",
+    "weatherSeed": "natural-rotation-audit-2025",
+    "timeResolutionMinutes": 60,
+    "weatherPoints": 8761,
+    "intervals": 8760,
+    "equation": "I*domega/dt=tau_aero(V,omega,shape)-tau_loss(omega)",
+    "integration": "backward Euler at every weather interval; time-weighted monthly/annual RPM",
+    "windElectricityIncluded": false
+  },
+  "officialNoCq": [
+    {
+      "shape": "plane",
+      "projectedAreaM2": 0.018377629847393058,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.0023399125060206078,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "plane maximum frontal envelope: width*height",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "thin rectangular body: m*(w^2+d^2)/12; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.331102262452337,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3340233909765342,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.32886500938914,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3337941049307191,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3082432708953484,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3450471277616198,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.318541364599882,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3453498551307383,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3584061743419082,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3132861196438077,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3341065158909906,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.2892155233481863,
+          "substeps": 744
+        }
+      ]
+    },
+    {
+      "shape": "cube",
+      "projectedAreaM2": 0.03183098861837908,
+      "forceApplicationRadiusM": 0.12615662610100803,
+      "inertiaKgM2": 0.010132118364233788,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "cube reference face: width*height",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid rectangular prism: m*(w^2+d^2)/12; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4369245723664412,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.440077929906175,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4345094582224807,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.439830415674835,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4122482964751841,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4519780511159524,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4233650861539249,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4523048452381513,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4663991386883213,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4176920504870196,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4401676632313531,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3917078475716333,
+          "substeps": 744
+        }
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "projectedAreaM2": 0.06366197723675814,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.023873241463784296,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "vertical cylinder frontal rectangle: 2*r*h",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid cylinder about symmetry axis: m*r^2/2; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994328,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338098,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541694,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048581,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4856313320369858,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688168,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846543,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218502,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449317,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.491357953583687,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686616,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879608,
+          "substeps": 744
+        }
+      ]
+    },
+    {
+      "shape": "sphere",
+      "projectedAreaM2": 0.049999999999999996,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.015278874536821953,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "sphere frontal disk: pi*r^2",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid sphere about diameter: 2*m*r^2/5; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994328,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338098,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541694,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048581,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4856313320369858,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688168,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846543,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218502,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449317,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.491357953583687,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686616,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879608,
+          "substeps": 744
+        }
+      ]
+    },
+    {
+      "shape": "hemisphere",
+      "projectedAreaM2": 0.024999999999999998,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.007639437268410976,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "hemisphere side silhouette: pi*r^2/2",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid hemisphere about symmetry axis: 2*m*r^2/5; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9953773570584417,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9975617310709123,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9937043743703855,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9973902745684876,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9782837623416123,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0058051082295054,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9859845150061549,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0060314829995618,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0157947933596378,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 0.982054725400482,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9976238905758539,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9640551116973134,
+          "substeps": 744
+        }
+      ]
+    },
+    {
+      "shape": "cone",
+      "projectedAreaM2": 0.03183098861837907,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.006405862890754593,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "absent",
+      "confidence": "low",
+      "officialComparisonEligible": true,
+      "exclusionReasons": [],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "vertical cone triangular silhouette: r*h",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid cone about symmetry axis: 3*m*r^2/10; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994328,
+          "substeps": 744
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338098,
+          "substeps": 672
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541694,
+          "substeps": 744
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048581,
+          "substeps": 720
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4856313320369858,
+          "substeps": 744
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688168,
+          "substeps": 720
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846543,
+          "substeps": 744
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218502,
+          "substeps": 744
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449317,
+          "substeps": 720
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.491357953583687,
+          "substeps": 744
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686616,
+          "substeps": 720
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879608,
+          "substeps": 744
+        }
+      ]
+    }
+  ],
+  "unverifiedUserCqSensitivity": [
+    {
+      "shape": "plane",
+      "projectedAreaM2": 0.018377629847393058,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.0023399125060206078,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "plane maximum frontal envelope: width*height",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "thin rectangular body: m*(w^2+d^2)/12; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3311022624523356,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3340233909765356,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.328865009389137,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.333794104930719,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3082432708953469,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3450471277616207,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3185413645998794,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3453498551307395,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3584061743419047,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3132861196438086,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3341065158909942,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.2892155233481883,
+          "substeps": 2976
+        }
+      ]
+    },
+    {
+      "shape": "cube",
+      "projectedAreaM2": 0.03183098861837908,
+      "forceApplicationRadiusM": 0.12615662610100803,
+      "inertiaKgM2": 0.010132118364233788,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "cube reference face: width*height",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid rectangular prism: m*(w^2+d^2)/12; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.436924572366444,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4400779299061752,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4345094582224802,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.439830415674833,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4122482964751841,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4519780511159515,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4233650861539218,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4523048452381524,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4663991386883228,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4176920504870203,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4401676632313565,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.3917078475716336,
+          "substeps": 2976
+        }
+      ]
+    },
+    {
+      "shape": "cylinder",
+      "projectedAreaM2": 0.06366197723675814,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.023873241463784296,
+      "annualTimeWeightedMeanRpm": 0.0694111531661715,
+      "finalRpm": 9.549297387990291e-12,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 4.440892098500626e-16,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "vertical cylinder frontal rectangle: 2*r*h",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid cylinder about symmetry axis: m*r^2/2; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.06887998015738546,
+          "timeWeightedMeanAbsoluteRpm": 0.06887998015738546,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994348,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0.08383137203151013,
+          "timeWeightedMeanAbsoluteRpm": 0.08383137203151013,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338076,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.06578126011611382,
+          "timeWeightedMeanAbsoluteRpm": 0.06578126011611382,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541672,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.07183434723409718,
+          "timeWeightedMeanAbsoluteRpm": 0.07183434723409718,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048606,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.06387151104738817,
+          "timeWeightedMeanAbsoluteRpm": 0.06387151104738817,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.485631332036987,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.07608271040459441,
+          "timeWeightedMeanAbsoluteRpm": 0.07608271040459441,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688188,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.06710281963147563,
+          "timeWeightedMeanAbsoluteRpm": 0.06710281963147563,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846526,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.07310024552587861,
+          "timeWeightedMeanAbsoluteRpm": 0.07310024552587861,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218501,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.07332014575543212,
+          "timeWeightedMeanAbsoluteRpm": 0.07332014575543212,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449322,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.06297261916787066,
+          "timeWeightedMeanAbsoluteRpm": 0.06297261916787066,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4913579535836874,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.07258658288011764,
+          "timeWeightedMeanAbsoluteRpm": 0.07258658288011764,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686578,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.05548765791962022,
+          "timeWeightedMeanAbsoluteRpm": 0.05548765791962022,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879584,
+          "substeps": 2976
+        }
+      ]
+    },
+    {
+      "shape": "sphere",
+      "projectedAreaM2": 0.049999999999999996,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.015278874536821953,
+      "annualTimeWeightedMeanRpm": 0.005670805598904655,
+      "finalRpm": 9.549297387990291e-12,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 4.440892098500626e-16,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "sphere frontal disk: pi*r^2",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid sphere about diameter: 2*m*r^2/5; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.00640106104797312,
+          "timeWeightedMeanAbsoluteRpm": 0.00640106104797312,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994348,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0.006244309010042387,
+          "timeWeightedMeanAbsoluteRpm": 0.006244309010042387,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338076,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.004452372018708504,
+          "timeWeightedMeanAbsoluteRpm": 0.004452372018708504,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541672,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.005234719573973524,
+          "timeWeightedMeanAbsoluteRpm": 0.005234719573973524,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048606,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.006502206542764819,
+          "timeWeightedMeanAbsoluteRpm": 0.006502206542764819,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.485631332036987,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.007215632040484814,
+          "timeWeightedMeanAbsoluteRpm": 0.007215632040484814,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688188,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.005513623194149257,
+          "timeWeightedMeanAbsoluteRpm": 0.005513623194149257,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846526,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.006096227789653219,
+          "timeWeightedMeanAbsoluteRpm": 0.006096227789653219,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218501,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.0058297634536138634,
+          "timeWeightedMeanAbsoluteRpm": 0.0058297634536138634,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449322,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.004635843280355402,
+          "timeWeightedMeanAbsoluteRpm": 0.004635843280355402,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4913579535836874,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0.005287495920181743,
+          "timeWeightedMeanAbsoluteRpm": 0.005287495920181743,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686578,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0.004720442309331544,
+          "timeWeightedMeanAbsoluteRpm": 0.004720442309331544,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879584,
+          "substeps": 2976
+        }
+      ]
+    },
+    {
+      "shape": "hemisphere",
+      "projectedAreaM2": 0.024999999999999998,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.007639437268410976,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "hemisphere side silhouette: pi*r^2/2",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid hemisphere about symmetry axis: 2*m*r^2/5; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 0.995377357058443,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9975617310709132,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9937043743703842,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9973902745684866,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9782837623416117,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0058051082295085,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9859845150061576,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0060314829995596,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.0157947933596365,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9820547254004823,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 0.997623890575853,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 0.9640551116973114,
+          "substeps": 2976
+        }
+      ]
+    },
+    {
+      "shape": "cone",
+      "projectedAreaM2": 0.03183098861837907,
+      "forceApplicationRadiusM": 0.126156626101008,
+      "inertiaKgM2": 0.006405862890754593,
+      "annualTimeWeightedMeanRpm": 0,
+      "finalRpm": 0,
+      "integratedHours": 8760,
+      "maximumDynamicBalanceResidualNmS": 0,
+      "torqueCoefficientInput": "user-supplied",
+      "confidence": "low",
+      "officialComparisonEligible": false,
+      "exclusionReasons": [
+        "auxiliary-rotor-fairness-data-missing"
+      ],
+      "parameterSources": {
+        "projectedArea": {
+          "source": "analytic-geometry",
+          "reference": "vertical cone triangular silhouette: r*h",
+          "confidence": "high"
+        },
+        "forceApplicationRadius": {
+          "source": "analytic-geometry",
+          "reference": "geometric radius from the vertical rotation axis",
+          "confidence": "high"
+        },
+        "inertia": {
+          "source": "analytic-geometry",
+          "reference": "solid cone about symmetry axis: 3*m*r^2/10; mass supplied explicitly",
+          "confidence": "high"
+        },
+        "frictionAndDrag": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        },
+        "torqueCoefficient": {
+          "source": "user",
+          "reference": "audit sensitivity assumption; not measured or literature-derived",
+          "confidence": "low"
+        }
+      },
+      "months": [
+        {
+          "localMonth": 1,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.00599156189785,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5115898328994348,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 2,
+          "durationHours": 672,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.012588265954816,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5149070447338076,
+          "substeps": 2688
+        },
+        {
+          "localMonth": 3,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0009392349508537,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5090492249541672,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 4,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0120704755953436,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5146466692048606,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 5,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.9543697311249075,
+          "timeWeightedMeanStructureWindSpeedMS": 1.485631332036987,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 6,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0374828669868292,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5274255182688188,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 7,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.977625632382584,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4973257706846526,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 8,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.038166507863113,
+          "timeWeightedMeanStructureWindSpeedMS": 1.527769293218501,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 9,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.067651233781847,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5425959522449322,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 10,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.965757857502115,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4913579535836874,
+          "substeps": 2976
+        },
+        {
+          "localMonth": 11,
+          "durationHours": 720,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 3.0127759846587043,
+          "timeWeightedMeanStructureWindSpeedMS": 1.5150014407686578,
+          "substeps": 2880
+        },
+        {
+          "localMonth": 12,
+          "durationHours": 744,
+          "timeWeightedMeanRpm": 0,
+          "timeWeightedMeanAbsoluteRpm": 0,
+          "timeWeightedMeanReferenceWindSpeedMS": 2.911399893132658,
+          "timeWeightedMeanStructureWindSpeedMS": 1.4640235633879584,
+          "substeps": 2976
+        }
+      ]
+    }
+  ]
+}

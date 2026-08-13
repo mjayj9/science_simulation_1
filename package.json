@@ -14,6 +14,13 @@
     "test:smoke": "node --test tests/rendered-html.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "audit:research": "node --experimental-strip-types scripts/audit-research-benchmarks.ts docs/research-source-equivalent-audit.json docs/research-source-equivalent-audit.md",
+    "audit:thermal": "node --experimental-strip-types scripts/run-vite-audit.ts /scripts/audit-annual-transient.ts",
+    "audit:natural": "node --experimental-strip-types scripts/run-vite-audit.ts /scripts/audit-natural-rotation.ts",
+    "audit:annual": "node --experimental-strip-types scripts/run-vite-audit.ts /scripts/audit-full-year-comparison.ts",
+    "audit:geometry": "node --experimental-strip-types scripts/run-vite-audit.ts /scripts/audit-fair-geometry.ts",
+    "audit:thermal-compare": "node --experimental-strip-types scripts/run-vite-audit.ts /scripts/audit-thermal-model-comparison.ts",
+    "report:validation": "node --experimental-strip-types scripts/generate-validation-report.ts docs/generated-validation-report-2026.md",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

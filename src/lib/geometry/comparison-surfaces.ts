@@ -23,7 +23,17 @@ export type PlaneTrackingMode = "fixed" | "single-axis" | "dual-axis";
 
 export const DEFAULT_COMPARISON_BASIS: ComparisonBasis = "land";
 export const DEFAULT_LAND_AREA_M2 = 0.05 as const;
-export const DEFAULT_MAX_HEIGHT_M = 0.3 as const;
+/**
+ * Fair-comparison height envelope: the diameter of a sphere whose horizontal
+ * projection is `landAreaM2`.  It deliberately scales with the land input;
+ * using one unrelated dimensional constant would let a tall cylinder gain PV
+ * area merely because the parcel was made smaller.
+ */
+export function commonMaximumHeightM(landAreaM2: number): number {
+  return 2 * Math.sqrt(positiveFinite(landAreaM2, "토지면적") / Math.PI);
+}
+
+export const DEFAULT_MAX_HEIGHT_M = 2 * Math.sqrt(DEFAULT_LAND_AREA_M2 / Math.PI);
 export const DEFAULT_MAXIMUM_ASPECT_RATIO = 4 as const;
 export const DEFAULT_MAXIMUM_ACTIVE_AREA_M2 = 0.25 as const;
 export const MAX_COMPARISON_PLANE_TILT_DEG = 75 as const;
@@ -92,6 +102,8 @@ export interface FootprintBreakdown {
 }
 
 export interface ComparisonConstraints {
+  /** Formula value 2*sqrt(A_land/pi), independent of any tighter user limit. */
+  commonMaximumHeightM: number;
   maxHeightM: number;
   maximumAspectRatio: number;
   maximumActiveAreaM2: number;
@@ -107,6 +119,9 @@ export interface ComparisonConstraints {
   heightExceeded: boolean;
   landAreaExceeded: boolean;
   feasible: boolean;
+  /** Eligible for the official equal-land/equal-height ranking. */
+  officialComparisonEligible: boolean;
+  officialComparisonExclusionReasons: readonly string[];
 }
 
 export interface ComparisonGeometry {
@@ -156,6 +171,7 @@ interface NormalizedInput {
   planeAspectRatioExplicit: boolean;
   cylinderHeightM: number;
   coneHeightM: number;
+  commonMaximumHeightM: number;
   groundClearanceM: number;
   azimuthSamples: number;
   meridionalSegments: number;
@@ -185,10 +201,20 @@ function nonnegativeFinite(value: number, label: string): number {
 }
 
 function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
-  const maxHeightM = positiveFinite(input.maxHeightM ?? DEFAULT_MAX_HEIGHT_M, "최대 높이");
   const requestedLandAreaM2 = positiveFinite(
     input.landAreaM2 ?? DEFAULT_LAND_AREA_M2,
     "토지면적",
+  );
+  const fairMaximumHeightM = commonMaximumHeightM(requestedLandAreaM2);
+  const maximumActiveAreaM2 = positiveFinite(
+    input.maximumActiveAreaM2 ?? 5 * requestedLandAreaM2,
+    "최대 활성면적",
+  );
+  // A caller may impose a tighter engineering envelope, but may never relax
+  // the common fair-comparison envelope derived from A_land.
+  const maxHeightM = Math.min(
+    positiveFinite(input.maxHeightM ?? fairMaximumHeightM, "최대 높이"),
+    fairMaximumHeightM,
   );
   const nativeRadiusM = Math.sqrt(requestedLandAreaM2 / Math.PI);
   const cylinderHeightM = positiveFinite(
@@ -220,15 +246,9 @@ function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
     activeAreaM2: positiveFinite(input.activeAreaM2 ?? DEFAULT_LAND_AREA_M2, "활성면적"),
     targetActiveAreaM2: Math.min(
       positiveFinite(input.activeAreaM2 ?? DEFAULT_LAND_AREA_M2, "활성면적"),
-      positiveFinite(
-        input.maximumActiveAreaM2 ?? DEFAULT_MAXIMUM_ACTIVE_AREA_M2,
-        "최대 활성면적",
-      ),
+      maximumActiveAreaM2,
     ),
-    maximumActiveAreaM2: positiveFinite(
-      input.maximumActiveAreaM2 ?? DEFAULT_MAXIMUM_ACTIVE_AREA_M2,
-      "최대 활성면적",
-    ),
+    maximumActiveAreaM2,
     maxHeightM,
     maximumAspectRatio: positiveFinite(
       input.maximumAspectRatio ?? DEFAULT_MAXIMUM_ASPECT_RATIO,
@@ -253,6 +273,7 @@ function normalizeInput(input: ComparisonSurfaceInput): NormalizedInput {
     planeAspectRatioExplicit: input.planeAspectRatio !== undefined,
     cylinderHeightM,
     coneHeightM,
+    commonMaximumHeightM: fairMaximumHeightM,
     groundClearanceM: nonnegativeFinite(input.groundClearanceM ?? 0.003, "지면 여유"),
     azimuthSamples: validateSurfaceAzimuthSamples(
       input.azimuthSamples ?? DEFAULT_SURFACE_AZIMUTH_SAMPLES,
@@ -308,9 +329,6 @@ function planeGeometry(input: NormalizedInput): RawGeometry {
     ? Math.sqrt(input.targetActiveAreaM2 / aspect)
     : Math.sqrt(projectedAreaM2 / (aspect * cosineTilt));
   const widthM = aspect * slantLengthM;
-  if (input.planeTrackingMode !== "fixed" && slantLengthM > input.maxHeightM + 1e-12) {
-    throw new RangeError("The tracking plane cannot fit its vertical posture inside maximum height.");
-  }
   return {
     widthM,
     depthM: slantLengthM * cosineTilt,
@@ -383,6 +401,11 @@ function circularGeometry(
       }
     } else {
       const requestedHeightM = shape === "cylinder" ? input.cylinderHeightM : input.coneHeightM;
+      if (requestedHeightM > input.maxHeightM + 1e-12) {
+        throw new RangeError(
+          `${shape} height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+        );
+      }
       const aspectHeightM = 2 * radiusM * input.maximumAspectRatio;
       let activeAreaHeightM: number;
       if (shape === "cylinder") {
@@ -412,8 +435,12 @@ function circularGeometry(
     radiusM = Math.sqrt(input.targetActiveAreaM2 / (2 * Math.PI));
     heightM = radiusM;
   } else if (shape === "cylinder") {
-    heightM = Math.min(input.cylinderHeightM, input.maxHeightM);
-    heightLimited = input.cylinderHeightM > input.maxHeightM;
+    if (input.cylinderHeightM > input.maxHeightM + 1e-12) {
+      throw new RangeError(
+        `cylinder height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+      );
+    }
+    heightM = input.cylinderHeightM;
     // A = pi r^2 + 2 pi r h => r = sqrt(h^2 + A/pi) - h.
     radiusM = Math.sqrt(heightM * heightM + input.targetActiveAreaM2 / Math.PI) - heightM;
     if (heightM / (2 * radiusM) > input.maximumAspectRatio) {
@@ -425,8 +452,12 @@ function circularGeometry(
       aspectLimited = true;
     }
   } else {
-    heightM = Math.min(input.coneHeightM, input.maxHeightM);
-    heightLimited = input.coneHeightM > input.maxHeightM;
+    if (input.coneHeightM > input.maxHeightM + 1e-12) {
+      throw new RangeError(
+        `cone height must satisfy 0 < H <= H_max (${input.maxHeightM.toFixed(6)} m).`,
+      );
+    }
+    heightM = input.coneHeightM;
     // A/pi = r sqrt(r^2+h^2); solve the quadratic in r^2.
     const areaRatio = input.targetActiveAreaM2 / Math.PI;
     radiusM = Math.sqrt(
@@ -584,23 +615,69 @@ function footprintBreakdown(
   };
 }
 
+function scaleRawGeometry(raw: RawGeometry, scale: number): RawGeometry {
+  if (!(scale > 0) || !Number.isFinite(scale)) {
+    throw new RangeError("Swept-footprint geometry scale must be positive and finite.");
+  }
+  return {
+    ...raw,
+    widthM: raw.widthM * scale,
+    depthM: raw.depthM * scale,
+    heightM: raw.heightM * scale,
+    ...(raw.radiusM === undefined ? {} : { radiusM: raw.radiusM * scale }),
+    ...(raw.slantHeightM === undefined ? {} : { slantHeightM: raw.slantHeightM * scale }),
+    ...(raw.planeSlantLengthM === undefined
+      ? {}
+      : { planeSlantLengthM: raw.planeSlantLengthM * scale }),
+    ...(raw.trackingEnvelopeHeightM === undefined
+      ? {}
+      : { trackingEnvelopeHeightM: raw.trackingEnvelopeHeightM * scale }),
+    ...(raw.trackingEnvelopeRadiusM === undefined
+      ? {}
+      : { trackingEnvelopeRadiusM: raw.trackingEnvelopeRadiusM * scale }),
+  };
+}
+
 function calculateComparisonGeometryFromNormalized(
   shape: ComparisonShapeKind,
   input: NormalizedInput,
 ): ComparisonGeometry {
-  const raw = shape === "plane"
+  let raw = shape === "plane"
     ? planeGeometry(input)
     : shape === "cube"
       ? cubeGeometry(input)
       : circularGeometry(shape, input);
+  // A rotating non-axisymmetric body occupies its full 360-degree swept disk,
+  // not its favourable instantaneous orthogonal projection.  Scale plane/cube
+  // dimensions so that this disk (rather than the static rectangle) is exactly
+  // A_land. Circular shapes already meet the same contract without scaling.
+  const usesSweptFootprint = input.footprintMode === "swept"
+    || (shape === "plane" && raw.planeTrackingMode !== undefined && raw.planeTrackingMode !== "fixed");
+  if (input.basis === "land" && usesSweptFootprint && (shape === "plane" || shape === "cube")) {
+    const rawSweptAreaM2 = footprintBreakdown(shape, raw, input).sweptAreaM2;
+    raw = scaleRawGeometry(raw, Math.sqrt(input.landAreaM2 / rawSweptAreaM2));
+  }
   const dimensions: ComparisonDimensions = { ...raw };
   const activeAreaM2 = activeArea(shape, dimensions);
   const structureVolumeM3 = structureVolume(shape, dimensions);
   const footprint = footprintBreakdown(shape, dimensions, input);
-  const landAreaM2 = footprint.staticProjectedAreaM2;
+  // In rotating comparisons A_land(shape) is the maximum swept occupation;
+  // in static comparisons it is the instantaneous orthogonal projection.
+  const landAreaM2 = footprint.selectedStructureAreaM2;
   const effectiveConstraintHeightM = dimensions.trackingEnvelopeHeightM ?? dimensions.heightM;
   const heightExceeded = effectiveConstraintHeightM > input.maxHeightM + 1e-12;
   const landAreaExceeded = footprint.parcelAreaM2 > input.landAreaM2 + 1e-12;
+  const officialComparisonExclusionReasons: string[] = [];
+  if (heightExceeded) officialComparisonExclusionReasons.push("height-exceeds-common-envelope");
+  if (landAreaExceeded) officialComparisonExclusionReasons.push("land-or-swept-footprint-exceeds-parcel");
+  if (raw.activeAreaLimited) officialComparisonExclusionReasons.push("active-area-cap-altered-geometry");
+  if (raw.aspectLimited) officialComparisonExclusionReasons.push("aspect-ratio-cap-altered-geometry");
+  if (
+    (shape === "cylinder" || shape === "cone")
+    && Math.abs(dimensions.heightM - input.commonMaximumHeightM) > 1e-10
+  ) {
+    officialComparisonExclusionReasons.push("user-custom-height");
+  }
   return {
     shape,
     basis: input.basis,
@@ -614,6 +691,7 @@ function calculateComparisonGeometryFromNormalized(
     dimensions,
     footprint,
     constraints: {
+      commonMaximumHeightM: input.commonMaximumHeightM,
       maxHeightM: input.maxHeightM,
       maximumAspectRatio: input.maximumAspectRatio,
       maximumActiveAreaM2: input.maximumActiveAreaM2,
@@ -630,6 +708,8 @@ function calculateComparisonGeometryFromNormalized(
       heightExceeded,
       landAreaExceeded,
       feasible: !heightExceeded && !landAreaExceeded,
+      officialComparisonEligible: officialComparisonExclusionReasons.length === 0,
+      officialComparisonExclusionReasons,
     },
     assumptions: [
       "A_land는 구조물의 월드 XZ 직교투영 또는 선택한 360도 Y축 swept footprint이다.",

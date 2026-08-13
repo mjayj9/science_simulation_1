@@ -149,3 +149,116 @@ export function normalizedAnnualEnergy(
     kWhPerPvM2: energyWh / 1000 / pvArea,
   };
 }
+
+export interface PlaneTiltOptimizationInput {
+  /** Annual AC energy evaluator for one fixed, south-facing plane tilt. */
+  evaluateAnnualEnergyWh: (tiltDeg: number) => number;
+  minimumTiltDeg?: number;
+  maximumTiltDeg?: number;
+  /** First-pass grid spacing. The optimum is then refined locally. */
+  coarseStepDeg?: number;
+  /** Stop once the local search interval is no wider than this value. */
+  toleranceDeg?: number;
+}
+
+export interface PlaneTiltOptimizationResult {
+  tiltDeg: number;
+  annualEnergyWh: number;
+  evaluations: number;
+  searchRangeDeg: readonly [number, number];
+  method: "bounded-grid-golden-section";
+}
+
+/**
+ * Numerically finds the best fixed plane tilt from the caller's authoritative
+ * annual-energy model. No latitude rule or empirical shape multiplier is
+ * hidden in this helper; weather, optics, temperature and inverter behaviour
+ * all enter through `evaluateAnnualEnergyWh`.
+ */
+export function optimizeAnnualFixedPlaneTilt(
+  input: PlaneTiltOptimizationInput,
+): PlaneTiltOptimizationResult {
+  const minimum = input.minimumTiltDeg ?? 0;
+  const maximum = input.maximumTiltDeg ?? 75;
+  const coarseStep = input.coarseStepDeg ?? 5;
+  const tolerance = input.toleranceDeg ?? 0.05;
+  if (![minimum, maximum, coarseStep, tolerance].every(Number.isFinite)) {
+    throw new RangeError("Plane-tilt search inputs must be finite.");
+  }
+  if (minimum < 0 || maximum > 90 || maximum <= minimum) {
+    throw new RangeError("Plane-tilt search must satisfy 0 <= minimum < maximum <= 90 degrees.");
+  }
+  if (coarseStep <= 0 || coarseStep > maximum - minimum || tolerance <= 0) {
+    throw new RangeError("Plane-tilt search steps must be positive and bounded by the search range.");
+  }
+
+  let evaluations = 0;
+  const cache = new Map<number, number>();
+  const evaluate = (tiltDeg: number): number => {
+    const bounded = Math.min(maximum, Math.max(minimum, tiltDeg));
+    const key = Math.round(bounded * 1e9) / 1e9;
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+    const energy = input.evaluateAnnualEnergyWh(key);
+    if (!Number.isFinite(energy) || energy < 0) {
+      throw new RangeError("Plane-tilt annual energy must be a finite nonnegative value.");
+    }
+    cache.set(key, energy);
+    evaluations += 1;
+    return energy;
+  };
+
+  const grid: number[] = [];
+  for (let tilt = minimum; tilt < maximum; tilt += coarseStep) grid.push(tilt);
+  grid.push(maximum);
+  let bestTilt = grid[0];
+  let bestEnergy = evaluate(bestTilt);
+  for (let index = 1; index < grid.length; index += 1) {
+    const energy = evaluate(grid[index]);
+    if (energy > bestEnergy) {
+      bestTilt = grid[index];
+      bestEnergy = energy;
+    }
+  }
+
+  const bestIndex = grid.indexOf(bestTilt);
+  let lower = grid[Math.max(0, bestIndex - 1)];
+  let upper = grid[Math.min(grid.length - 1, bestIndex + 1)];
+  // A boundary optimum is already bracketed by the domain boundary and its
+  // closest grid neighbour. Golden-section refinement remains valid there.
+  const ratio = (Math.sqrt(5) - 1) / 2;
+  let left = upper - ratio * (upper - lower);
+  let right = lower + ratio * (upper - lower);
+  let leftEnergy = evaluate(left);
+  let rightEnergy = evaluate(right);
+  while (upper - lower > tolerance) {
+    if (leftEnergy < rightEnergy) {
+      lower = left;
+      left = right;
+      leftEnergy = rightEnergy;
+      right = lower + ratio * (upper - lower);
+      rightEnergy = evaluate(right);
+    } else {
+      upper = right;
+      right = left;
+      rightEnergy = leftEnergy;
+      left = upper - ratio * (upper - lower);
+      leftEnergy = evaluate(left);
+    }
+  }
+  const candidates = [
+    [bestTilt, bestEnergy] as const,
+    [lower, evaluate(lower)] as const,
+    [left, leftEnergy] as const,
+    [right, rightEnergy] as const,
+    [upper, evaluate(upper)] as const,
+  ].sort((first, second) => second[1] - first[1] || first[0] - second[0]);
+
+  return {
+    tiltDeg: candidates[0][0],
+    annualEnergyWh: candidates[0][1],
+    evaluations,
+    searchRangeDeg: [minimum, maximum],
+    method: "bounded-grid-golden-section",
+  };
+}

@@ -2,6 +2,7 @@ import { MAX_VARIANTS as MAX_PROJECT_VARIANTS } from "../lib/geometry";
 import type { IdealSurfaceModel } from "../lib/geometry";
 import type {
   CircuitInput,
+  EngineeringSurfaceConnectionConfig,
   ElectricalFairnessMode,
   InstantSimulationInput,
   InverterConfig,
@@ -11,16 +12,17 @@ import type {
   ThermalConfig,
   Vec3,
 } from "../lib/physics";
+import type { AnnualRotationDecompositionResult, ThermalModelMetadata } from "../lib/physics/annual-transient";
 import type { WeatherPoint } from "../lib/weather";
 
 /**
- * v3 separates the ideal continuous-PV comparison contract from the legacy
- * discrete-panel editor contract. The version is part of every fingerprint,
- * so v2 panel/circuit results cannot be mistaken for continuous-skin results.
+ * v4 adds the explicit series/parallel/bypass continuous-surface electrical
+ * contract. The version is part of every fingerprint, so ideal-upper-bound
+ * cache entries cannot be mistaken for engineering-connection results.
  */
-export const SIMULATION_WORKER_PROTOCOL_VERSION = 3 as const;
-export const SIMULATION_CACHE_VERSION = 3 as const;
-export const CONTINUOUS_SURFACE_MODEL_VERSION = "ideal-continuous-pv-v1" as const;
+export const SIMULATION_WORKER_PROTOCOL_VERSION = 4 as const;
+export const SIMULATION_CACHE_VERSION = 5 as const;
+export const CONTINUOUS_SURFACE_MODEL_VERSION = "continuous-pv-electrical-v2" as const;
 export const CONTINUOUS_SURFACE_MESH_VERSION = "comparison-surface-mesh-v1" as const;
 
 /** Capacity for six ideal comparison shapes plus optional legacy diagnostics. */
@@ -57,6 +59,22 @@ export type SimulationContinuousShape =
 
 export type SimulationSurfaceRegionId = "surface" | "top" | "lateral" | string;
 
+export type SimulationContinuousSurfaceElectricalModel =
+  | "local-mpp-area-integral"
+  | "explicit-series-parallel-bypass";
+
+/**
+ * Required manufacturing/topology inputs for the engineering connection.
+ * Optional solver controls retain the defaults documented by the electrical
+ * solver, while cell density and the actual connection are never inferred.
+ */
+export type SimulationEngineeringSurfaceConnectionConfig =
+  EngineeringSurfaceConnectionConfig & {
+    nominalCellAreaM2: number;
+    parallelStrings: number;
+    cellsPerBypassSubstring: number;
+  };
+
 /**
  * Absolute-area quadrature point for the default comparison engine. Unlike
  * `SimulationSurfaceSample.areaWeight`, this is never normalized per panel or
@@ -73,7 +91,7 @@ export interface SimulationContinuousSurfaceSample {
  * One gap-free PV skin. Geometry regions are reporting groups only; they are
  * not panels, series strings, bypass sections, or independent normalizers.
  */
-export interface SimulationContinuousSurfaceWorkItem {
+interface SimulationContinuousSurfaceWorkItemBase {
   modelVersion: typeof CONTINUOUS_SURFACE_MODEL_VERSION;
   /** Producer-owned render/analytic mesh revision, included in the fingerprint. */
   meshVersion: string;
@@ -84,11 +102,40 @@ export interface SimulationContinuousSurfaceWorkItem {
   tiltDeg?: number;
   azimuthSamples: number;
   integrationSampleCount: number;
-  electricalModel: "local-mpp-area-integral";
   samples: readonly SimulationContinuousSurfaceSample[];
   /** Shared optical/material inputs; per-sample geometry remains authoritative. */
   surfaceOptions?: SimulationPanelDefaults;
 }
+
+export type SimulationContinuousSurfaceWorkItem =
+  SimulationContinuousSurfaceWorkItemBase & (
+    | {
+        /** Ideal independent-MPP integral: an explicit theoretical upper bound. */
+        electricalModel: "local-mpp-area-integral";
+        engineeringConnection?: never;
+      }
+    | {
+        /** Explicit cell strings, parallel branches and bypass substrings. */
+        electricalModel: "explicit-series-parallel-bypass";
+        engineeringConnection: SimulationEngineeringSurfaceConnectionConfig;
+      }
+  );
+
+type ContinuousSurfaceWorkItemOptions = {
+  landAreaM2: number;
+  meshVersion?: string;
+  tiltDeg?: number;
+  surfaceOptions?: SimulationPanelDefaults;
+} & (
+  | {
+      electricalModel?: "local-mpp-area-integral";
+      engineeringConnection?: never;
+    }
+  | {
+      electricalModel: "explicit-series-parallel-bypass";
+      engineeringConnection: SimulationEngineeringSurfaceConnectionConfig;
+    }
+);
 
 /**
  * Converts authoritative geometry quadrature into the worker's panel-free
@@ -96,12 +143,7 @@ export interface SimulationContinuousSurfaceWorkItem {
  */
 export function createContinuousSurfaceWorkItem(
   surface: IdealSurfaceModel,
-  input: {
-    landAreaM2: number;
-    meshVersion?: string;
-    tiltDeg?: number;
-    surfaceOptions?: SimulationPanelDefaults;
-  },
+  input: ContinuousSurfaceWorkItemOptions,
 ): SimulationContinuousSurfaceWorkItem {
   const samples = surface.zones.flatMap((zone) => zone.samples.map((sample) => ({
     positionM: { x: sample.position[0], y: sample.position[1], z: sample.position[2] },
@@ -111,7 +153,7 @@ export function createContinuousSurfaceWorkItem(
       ? (zone.id.includes("top") || sample.normal[1] > 0.5 ? "top" : "lateral")
       : "surface",
   })));
-  return {
+  const base = {
     modelVersion: CONTINUOUS_SURFACE_MODEL_VERSION,
     meshVersion: input.meshVersion ?? CONTINUOUS_SURFACE_MESH_VERSION,
     shape: surface.kind,
@@ -121,10 +163,19 @@ export function createContinuousSurfaceWorkItem(
     ...(input.tiltDeg === undefined ? {} : { tiltDeg: input.tiltDeg }),
     azimuthSamples: surface.azimuthSamples,
     integrationSampleCount: samples.length,
-    electricalModel: "local-mpp-area-integral",
     samples,
     ...(input.surfaceOptions === undefined ? {} : { surfaceOptions: input.surfaceOptions }),
   };
+  return input.electricalModel === "explicit-series-parallel-bypass"
+    ? {
+        ...base,
+        electricalModel: input.electricalModel,
+        engineeringConnection: input.engineeringConnection,
+      }
+    : {
+        ...base,
+        electricalModel: "local-mpp-area-integral",
+      };
 }
 
 /** Static world-space axis-aligned shadow caster. */
@@ -205,13 +256,57 @@ export interface SimulationVariantWorkItem {
   planeTracking?: SimulationPlaneTracking;
   rotation?: InstantSimulationInput["rotation"];
   /**
+   * Natural/environmental RPM resolved outside the worker for every weather
+   * boundary. Entry i is held constant over [weather[i], weather[i + 1]); the
+   * closing entry is retained for audit/fingerprinting but is not integrated.
+   *
+   * This schedule requires fixed rotation, starts at rotation.initialAngleRad
+   * at weather[0], and advances phase cumulatively across RPM changes. It is
+   * mutually exclusive with rotation.referenceTimestamp and motorDrive. Omit
+   * it to preserve the legacy static or single fixed-RPM contract exactly.
+   */
+  rotationRpmByWeatherStep?: readonly number[];
+  /**
+   * External motor duty. The kernel subtracts tau*|omega|/eta from post-
+   * inverter AC at every timestamp. Natural-wind rotation must omit this.
+   */
+  motorDrive?: {
+    requiredTorqueNm: number;
+    motorEfficiency: number;
+  };
+  /**
    * Midpoint quadrature density per revolution for fixed-rotation intervals.
    * Complete turns are reduced by periodicity and a fractional turn receives
    * samples in proportion to its angular span. Omit (or use 1) for exact
-   * timestamp evaluation. When referenceTimestamp is omitted, weather[0] is
-   * the deterministic rotation epoch.
+   * timestamp evaluation of a single fixed RPM. A weather-step RPM schedule is
+   * an interval contract, so 1 means one midpoint per nonzero interval and a
+   * larger value improves its angular quadrature. When referenceTimestamp is
+   * omitted, weather[0] is the deterministic rotation epoch.
    */
   rotationPhaseSamples?: number;
+  /**
+   * Opt-in actual-clock thermal history. Omit to retain the legacy Faiman
+   * path, which must be reported with thermalModelMetadata as quasi-steady.
+   * The annual run is evaluated once over all weather intervals and is not a
+   * representative-day scaling shortcut.
+   *
+   * Known operational limit: progress events cover the streamed quasi-steady
+   * row pass. A synchronous E00/E10/E01/E11 calculation is cancellable and
+   * yields only between transient variants, not within one variant's history.
+   */
+  annualTransientThermal?: {
+    surface: IdealSurfaceModel;
+    referenceEfficiency?: number;
+    gammaPerC: number;
+    referenceTemperatureC?: number;
+    absorptivity?: number;
+    initialTemperatureC?: number;
+    effectiveSkyTemperatureOffsetC?: number;
+    thermalNodeCount?: number;
+    maximumThermalSubstepSeconds?: number;
+    warmupPeriodHours?: number;
+    warmupConvergenceToleranceC?: number;
+  };
 }
 
 export interface SimulationPhysicsOptions {
@@ -224,6 +319,11 @@ export interface SimulationPhysicsOptions {
   inverter?: InverterConfig | false;
 }
 
+/**
+ * Per-weather rows are quasi-steady diagnostics. For an opt-in transient
+ * variant, authoritative period energy and thermal history are carried only
+ * by the complete event's annualTransientRotationByVariant entry.
+ */
 export interface SimulationKernelInput {
   variants: SimulationVariantWorkItem[];
   /**
@@ -304,6 +404,7 @@ export interface SimulationResultRow {
   timeUtcMs: number;
   dcPowerWByVariant: Record<string, number>;
   acPowerWByVariant: Record<string, number>;
+  motorPowerWByVariant?: Record<string, number>;
   poaWm2ByVariant: Record<string, number>;
   moduleTemperatureCByVariant: Record<string, number>;
   mismatchLossFractionByVariant: Record<string, number>;
@@ -342,6 +443,7 @@ export interface SimulationMonthlyEnergy {
   monthUtc: string;
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
+  motorEnergyWhByVariant?: Record<string, number>;
 }
 
 export interface SimulationCompleteEvent {
@@ -354,10 +456,27 @@ export interface SimulationCompleteEvent {
   energyWhByVariant: Record<string, number>;
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
-  /** Region energies close exactly to their parent continuous-surface variant. */
+  motorEnergyWhByVariant?: Record<string, number>;
+  /** Complete-event energy source. Opt-in transient variants use E11. */
+  authoritativeEnergyPathByVariant: Record<
+    string,
+    "worker-quasi-steady" | "annual-transient-e11"
+  >;
+  /**
+   * Quasi-steady region energies close to their parent variant. An opt-in
+   * authoritative transient variant returns `{}` because its streamed rows
+   * use the separately labelled quasi-steady diagnostic path.
+   */
   surfaceRegionEnergyWhByVariant: Record<
     string,
     Record<string, SimulationSurfaceRegionEnergy>
+  >;
+  /** Every variant states whether annual thermal history was actually used. */
+  thermalModelMetadataByVariant: Record<string, ThermalModelMetadata>;
+  /** Present only for opt-in actual-clock annual transient runs. */
+  annualTransientRotationByVariant?: Record<
+    string,
+    AnnualRotationDecompositionResult
   >;
   monthlyEnergy: SimulationMonthlyEnergy[];
   /** Fixed offset used for `monthlyEnergy`; zero preserves the legacy UTC contract. */

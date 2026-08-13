@@ -13,6 +13,12 @@ import {
   type ResearchPresetId,
 } from "../src/lib/research";
 import { calculatePOA, hemisphereViewFactors } from "../src/lib/physics";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const simulatorSource = fs.readFileSync(path.resolve(TEST_DIR, "../src/ui/SimulatorClient.tsx"), "utf8");
 
 const GENERAL_PRESET_IDS: readonly PresetName[] = [
   "cube",
@@ -30,15 +36,22 @@ function allObjects(value: unknown): object[] {
 }
 
 describe("research-only source presets", () => {
-  it("defines DOI-identified A/B/C presets without ordinary-preset overlap", () => {
+  it("defines DOI-identified A/B/C/D presets in the requested study order without ordinary-preset overlap", () => {
     expectTypeOf<ResearchGeneralPresetOverlap>().toEqualTypeOf<never>();
     expectTypeOf<ResearchPresetId>().not.toEqualTypeOf<PresetName>();
-    expect(RESEARCH_PRESET_IDS).toEqual(["research:A", "research:B", "research:C"]);
+    expect(RESEARCH_PRESET_IDS).toEqual(["research:A", "research:B", "research:C", "research:D"]);
     expect(RESEARCH_PRESET_IDS.some((id) => GENERAL_PRESET_IDS.includes(id as PresetName))).toBe(false);
     expect(Object.values(RESEARCH_PRESETS).map((preset) => preset.doi)).toEqual([
+      "10.1063/1.3308490",
       "10.1039/C2EE21170J",
       "10.1557/mrc.2020.44",
       "10.1002/ese3.1717",
+    ]);
+    expect(Object.values(RESEARCH_PRESETS).map((preset) => preset.title)).toEqual([
+      "Three-dimensional photovoltaics",
+      "Solar energy generation in three dimensions",
+      "Nature-inspired spherical silicon solar cell for three-dimensional light harvesting, improved dust and thermal management",
+      "Harnessing solar power with aesthetic innovation: An in-depth study on spherical and hemispherical photovoltaic configurations",
     ]);
   });
 
@@ -55,6 +68,8 @@ describe("research-only source presets", () => {
       expect(allObjects(preset).every(Object.isFrozen)).toBe(true);
       expect(preset.conditions.length).toBeGreaterThanOrEqual(8);
       const primarySourceUrls: readonly string[] = preset.primarySourceUrls;
+      expect(primarySourceUrls).toContain(`https://doi.org/${preset.doi}`);
+      expect(primarySourceUrls.every((url) => url.startsWith("https://"))).toBe(true);
       expect(preset.conditions.every((condition) => primarySourceUrls.includes(condition.sourceUrl))).toBe(true);
       expect(preset.executableInputs.every((input) => (
         input.value === null
@@ -64,6 +79,15 @@ describe("research-only source presets", () => {
       expect(preset.executableInputs.filter((input) => input.value === null).map((input) => input.key)).toEqual(
         preset.missingInputs,
       );
+      expect(preset.validationAudit.matchedConditions.length).toBeGreaterThan(0);
+      expect(preset.validationAudit.unmatchedConditions.length).toBeGreaterThan(0);
+      expect(preset.validationAudit.possibleDifferenceCauses.length).toBeGreaterThan(0);
+      expect(preset.validationAudit).toMatchObject({
+        sourceEvidenceGrade: "high",
+        judgement: "not-evaluated",
+        quantitativeErrorPercent: null,
+        confidenceGrade: "not-rated",
+      });
     }
   });
 
@@ -71,11 +95,16 @@ describe("research-only source presets", () => {
     const forbiddenKeys = new Set([
       "calibrationFactor",
       "calibrationCoefficient",
+      "shapeCorrectionFactor",
+      "researchCorrectionFactor",
       "shapeMultiplier",
+      "gainMultiplier",
       "powerMultiplier",
+      "outputScale",
       "forcedOutput",
       "targetGain",
       "targetPower",
+      "reportedOutputTarget",
     ]);
     for (const preset of Object.values(RESEARCH_PRESETS)) {
       for (const object of allObjects(preset)) {
@@ -85,6 +114,19 @@ describe("research-only source presets", () => {
     const invalid = structuredClone(RESEARCH_PRESETS["research:A"]) as unknown as Record<string, unknown>;
     invalid.shapeMultiplier = 2;
     expect(() => assertResearchPresetInvariant(invalid as unknown as ResearchPreset)).toThrow(/forbidden/);
+  });
+
+  it("keeps reported gains and source trends as non-executable observations", () => {
+    for (const preset of Object.values(RESEARCH_PRESETS)) {
+      expect(JSON.stringify(preset.executableInputs)).not.toMatch(
+        /calibration|correctionFactor|shapeMultiplier|gainMultiplier|powerMultiplier|outputScale|targetGain|targetPower/i,
+      );
+      expect(preset.validationAudit.simulationResult).toMatch(/Not run under a complete source-equivalent case/);
+    }
+    expect(JSON.stringify(RESEARCH_PRESETS["research:C"].conditions)).toContain("101%");
+    expect(JSON.stringify(RESEARCH_PRESETS["research:D"].conditions)).toContain("32%");
+    expect(JSON.stringify(RESEARCH_PRESETS["research:C"].executableInputs)).not.toContain("101%");
+    expect(JSON.stringify(RESEARCH_PRESETS["research:D"].executableInputs)).not.toContain("32%");
   });
 
   it("returns only the canonical frozen research definition", () => {
@@ -98,21 +140,53 @@ describe("research-only source presets", () => {
     const a = createResearchInputApplication("research:A");
     const b = createResearchInputApplication("research:B");
     const c = createResearchInputApplication("research:C");
+    const d = createResearchInputApplication("research:D");
 
-    expect(a.appliedInputs.some((input) => input.key === "comparison.landAreaM2" && input.value === 0.001225)).toBe(true);
-    expect(a.missingInputs).toContain("pv.activeAreaM2");
-    expect(b.appliedInputs.some((input) => input.key === "optics.groundAlbedo" && input.value === 0.85)).toBe(true);
-    expect(b.missingInputs).toEqual(["geometry.heightM", "support.footprintM2"]);
-    expect(c.appliedInputs.some((input) => input.key === "pv.activeAreaM2" && input.value === 0.198)).toBe(true);
-    expect(c.missingInputs).toContain("irradiance.timeSeries");
-    expect([a, b, c].every((application) => (
+    expect(a.appliedInputs.some((input) => input.key === "comparison.landAreaM2" && input.value === 100)).toBe(true);
+    expect(a.missingInputs).toContain("geometry.kind");
+    expect(b.appliedInputs.some((input) => input.key === "comparison.landAreaM2" && input.value === 0.001225)).toBe(true);
+    expect(b.missingInputs).toContain("pv.activeAreaM2");
+    expect(c.appliedInputs.some((input) => input.key === "optics.backgroundReflectance" && input.value === 0.85)).toBe(true);
+    expect(c.missingInputs).toEqual(["geometry.heightM", "support.footprintM2", "optics.groundAlbedo"]);
+    expect(d.appliedInputs.some((input) => input.key === "pv.activeAreaM2" && input.value === 0.198)).toBe(true);
+    expect(d.missingInputs).toContain("irradiance.timeSeries");
+    expect([a, b, c, d].every((application) => (
       application.appliedInputs.every((input) => input.value !== null)
       && allObjects(application).every(Object.isFrozen)
     ))).toBe(true);
   });
 
+  it("does not collapse incompatible reflection or footprint denominators", () => {
+    const c = RESEARCH_PRESETS["research:C"];
+    const cInputs = new Map(c.executableInputs.map((input) => [input.key, input]));
+    expect(cInputs.get("optics.backgroundReflectance")?.value).toBe(0.85);
+    expect(cInputs.get("optics.backgroundScattering")?.value).toBe("diffuse");
+    expect(cInputs.get("optics.groundAlbedo")?.value).toBeNull();
+
+    const d = RESEARCH_PRESETS["research:D"];
+    const dInputs = new Map(d.executableInputs.map((input) => [input.key, input]));
+    expect(dInputs.get("comparison.landAreaM2")?.value).toBeCloseTo(Math.PI * 0.15 ** 2, 14);
+    expect(dInputs.get("comparison.projectedAreaM2")?.value).toBe(0.07);
+    expect(dInputs.get("support.footprintM2")?.value).toBe(0.01);
+  });
+
+  it("does not silently apply El-Atab finite-background reflectance as ordinary ground albedo", () => {
+    const cBranch = simulatorSource.slice(
+      simulatorSource.indexOf('if (presetId === "research:C")'),
+      simulatorSource.indexOf("// research:D"),
+    );
+    expect(cBranch).toContain('reflectorMode: "white-diffuse"');
+    expect(cBranch).not.toMatch(/groundAlbedo\s*:\s*0\.85/);
+  });
+
+  it("uses the exact D swept circle area rather than its rounded source display value", () => {
+    const dBranch = simulatorSource.slice(simulatorSource.indexOf("// research:D"), simulatorSource.indexOf("const DEFAULT_ELECTRICAL"));
+    expect(dBranch).toMatch(/landAreaM2:\s*Math\.PI\s*\*\s*0\.15\s*\*\*\s*2/);
+    expect(dBranch).not.toMatch(/landAreaM2:\s*0\.0?7\s*[,}]/);
+  });
+
   it("drops the complete research application when returning to a general preset", () => {
-    const selected = selectResearchPreset("research:C");
+    const selected = selectResearchPreset("research:D");
     expect(selected.researchApplication.appliedInputs.length).toBeGreaterThan(0);
 
     const reverted = selectGeneralPreset("sphere");
@@ -121,7 +195,7 @@ describe("research-only source presets", () => {
       presetId: "sphere",
       researchApplication: null,
     });
-    expect(JSON.stringify(reverted)).not.toMatch(/research:C|ese3\.1717|activeAreaM2|groundAlbedo/);
+    expect(JSON.stringify(reverted)).not.toMatch(/research:D|ese3\.1717|activeAreaM2|groundAlbedo/);
     expect(selectGeneralPreset("hemisphere").researchApplication).toBeNull();
   });
 });

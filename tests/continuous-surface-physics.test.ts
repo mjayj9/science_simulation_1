@@ -47,6 +47,7 @@ function run(
     azimuthSamples?: number;
     ambientTemperatureC?: number;
     windSpeedMS?: number;
+    gammaPmpPerC?: number;
     surface?: IdealSurfaceModel;
     groundReflectorAreaM2?: number;
     electricalModel?: "ideal-continuous" | "distributed-circuit";
@@ -71,7 +72,10 @@ function run(
       roughnessLengthM: 0.03,
       displacementHeightM: 0,
     },
-    electricalConfig: DEFAULT_ELECTRICAL,
+    electricalConfig: {
+      ...DEFAULT_ELECTRICAL,
+      gammaPmpPerC: patch.gammaPmpPerC ?? DEFAULT_ELECTRICAL.gammaPmpPerC,
+    },
     thermal: DEFAULT_THERMAL,
     inverterConfig: { ...DEFAULT_INVERTER, ratedAcPowerW: 10, mpptMinVoltageV: 0.3, mpptMaxVoltageV: 20 },
     topology: "series",
@@ -230,6 +234,30 @@ describe("continuous-surface optical/electrical integration", () => {
     expect(Math.abs(rotated.sharedCircuit.acPowerW - base.sharedCircuit.acPowerW) / Math.max(base.sharedCircuit.acPowerW, 1e-12)).toBeLessThan(0.005);
     expect(rotated.projectedAreaM2).toBeCloseTo(base.projectedAreaM2, 14);
   });
+
+  it.each(KINDS)(
+    "keeps independent-MPPT AC rotation gain below 0.5% for %s when gammaPmpPerC=0",
+    (kind) => {
+      const base = run(kind, {
+        azimuthSamples: 64,
+        rotationAngleRad: 0,
+        azimuthDeg: 37,
+        gammaPmpPerC: 0,
+      });
+      const rotated = run(kind, {
+        azimuthSamples: 64,
+        rotationAngleRad: 1.234,
+        azimuthDeg: 37,
+        gammaPmpPerC: 0,
+      });
+      const relativeAcGain = Math.abs(
+        rotated.independentMppt.acPowerW - base.independentMppt.acPowerW,
+      ) / Math.max(base.independentMppt.acPowerW, 1e-12);
+
+      expect(base.independentMppt.acPowerW).toBeGreaterThan(0);
+      expect(relativeAcGain).toBeLessThan(0.005);
+    },
+  );
 
   it.each(["plane", "cube"] as const)("reports rotated-sample A_sun for asymmetric %s", (kind) => {
     const surface = createComparisonSurface(kind, {

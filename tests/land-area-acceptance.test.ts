@@ -179,7 +179,7 @@ function representativeYearAcWh(
 }
 
 describe("equal-land mandatory acceptance gaps", () => {
-  it("keeps actual static A_land equal while reporting swept footprint separately", () => {
+  it("uses the maximum swept occupation as A_land for rotating comparisons", () => {
     const requestedLandAreaM2 = 0.2;
     for (const shape of SHAPES) {
       const surface = createComparisonSurface(shape, {
@@ -192,12 +192,12 @@ describe("equal-land mandatory acceptance gaps", () => {
       expect(geometry.footprint.selectedMode, shape).toBe("swept");
       expect(geometry.landAreaM2, shape).toBeCloseTo(requestedLandAreaM2, 13);
       expect(geometry.footprint.staticProjectedAreaM2, shape)
+        .toBeLessThanOrEqual(requestedLandAreaM2 + 1e-12);
+      expect(geometry.footprint.sweptAreaM2, shape)
         .toBeCloseTo(requestedLandAreaM2, 13);
       expect(geometry.footprintIndex, shape).toBeCloseTo(100, 11);
       expect(Number.isFinite(geometry.footprint.sweptAreaM2), shape).toBe(true);
-      expect(geometry.footprint.sweptAreaM2, shape).toBeGreaterThanOrEqual(
-        geometry.landAreaM2 - 1e-12,
-      );
+      expect(geometry.footprint.sweptAreaM2, shape).toBeCloseTo(geometry.landAreaM2, 13);
     }
   });
 

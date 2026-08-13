@@ -1,0 +1,380 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-12T10:30:41.821Z",
+  "policy": {
+    "sourceInputsOnly": true,
+    "missingInputsEstimated": false,
+    "calibrationFactors": false,
+    "shapeMultipliers": false,
+    "reportedOutputsUsedAsSolverTargets": false
+  },
+  "summary": {
+    "studyCount": 6,
+    "evaluatedCount": 2,
+    "passCount": 2,
+    "partialCount": 0,
+    "failCount": 0,
+    "notEvaluatedCount": 4,
+    "opticalGeometrySourceEquivalentCount": 1,
+    "rotatingThermalSourceEquivalentCount": 1
+  },
+  "conditionMatrix": [
+    {
+      "studyId": "research:A",
+      "title": "Three-dimensional photovoltaics",
+      "geometry": "GA-optimized open-box/funnel assemblies of 64 double-sided triangular cells",
+      "areaBasis": "fixed 10 m x 10 m bounding footprint; heights 2, 4, 6, 8, 10 m; active area not tabulated as one reusable value",
+      "sourceAndSpectrum": "clear parallel p-polarized rays; refractive index 1.505; normal reflectance 4.1%; no spectral weather series",
+      "incidence": "solar trajectory over a summer day; 12 min time step; source does not identify one executable calendar date",
+      "weather": "San Francisco summer day; clouds and external obstructions neglected; source-equivalent irradiance series unavailable",
+      "albedoAndReflector": "no ground reflection; at most one specular reflection among structure triangles",
+      "thermalAndConvection": "not modeled in the reported optical optimization",
+      "electricalConnection": "6% conversion efficiency applied to independently illuminated double-sided triangles; full circuit topology not reported",
+      "measuredQuantity": "simulated one-day generated energy relative to a flat comparator",
+      "primarySourceUrls": [
+        "https://doi.org/10.1063/1.3308490",
+        "https://authors.library.caltech.edu/records/7bv9y-j0563",
+        "https://authors.library.caltech.edu/records/7bv9y-j0563/files/1.3308490.pdf"
+      ]
+    },
+    {
+      "studyId": "research:B",
+      "title": "Solar energy generation in three dimensions",
+      "geometry": "flat silicon cells and mirrors assembled as open cubes and funnels; 35 mm indoor cube case",
+      "areaBasis": "paper separately uses base area, bounding volume, cell area and flat-cell comparator area",
+      "sourceAndSpectrum": "1300 W xenon arc lamp with AM1.5 filter at 1000 W/m2 indoors; clear-sky solar trajectory outdoors",
+      "incidence": "lamp/structure geometry is not published as a complete machine-readable fixture; outdoor I-V sweeps every 12-15 min",
+      "weather": "MIT roof, Cambridge MA, June-December 2011; raw weather/I-V series not bundled",
+      "albedoAndReflector": "paper-specific cell/mirror ray tracing; exact indoor background and ground albedo unavailable",
+      "thermalAndConvection": "temperature/convection boundary conditions are not a complete executable source case",
+      "electricalConnection": "cells in parallel, one blocking diode in series with each cell",
+      "measuredQuantity": "energy per base area, instantaneous I-V curves and indoor/outdoor relative output",
+      "primarySourceUrls": [
+        "https://doi.org/10.1039/C2EE21170J",
+        "https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee21170j",
+        "https://www.rsc.org/suppdata/ee/c2/c2ee21170j/c2ee21170j.pdf"
+      ]
+    },
+    {
+      "studyId": "research:C",
+      "title": "Nature-inspired spherical silicon solar cell for three-dimensional light harvesting, improved dust and thermal management",
+      "geometry": "corrugated interdigitated-back-contact monocrystalline silicon cell folded into a sphere",
+      "areaBasis": "10.7 cm2 projection, 11.34 cm2 ground area; 42.8 cm2 spherical area in the equal-ground thermal comparison",
+      "sourceAndSpectrum": "AM1.5G solar simulator, 1000 W/m2 with spectral mismatch correction",
+      "incidence": "angle sweep with white background at 1 cm; separate background-height sweeps from 0 to 10 cm",
+      "weather": "indoor room-temperature solar-simulator tests",
+      "albedoAndReflector": "black 3% diffuse, sand 25% diffuse, white 85% diffuse, aluminium 88% specular, and a separate 45 degree cup",
+      "thermalAndConvection": "continuous one-sun exposure; temperatures sampled about every 1.5 min; sphere apex measured by IR sensor",
+      "electricalConnection": "corrugated IBC cell; complete spatial electrical network is not public as an executable circuit",
+      "measuredQuantity": "maximum power, angular response, surface temperature and power degradation from 21 C",
+      "primarySourceUrls": [
+        "https://doi.org/10.1557/mrc.2020.44",
+        "https://www.cambridge.org/core/journals/mrs-communications/article/natureinspired-spherical-silicon-solar-cell-for-three-dimensional-light-harvesting-improved-dust-and-thermal-management/0EE382BEDC3D233365B27E4C3777FDC4",
+        "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0EE382BEDC3D233365B27E4C3777FDC4/S2159685920000440a.pdf/natureinspired_spherical_silicon_solar_cell_for_threedimensional_light_harvesting_improved_dust_and_thermal_management.pdf"
+      ]
+    },
+    {
+      "studyId": "research:D",
+      "title": "Harnessing solar power with aesthetic innovation: An in-depth study on spherical and hemispherical photovoltaic configurations",
+      "geometry": "0.3 m sphere/hemisphere supports tiled with rectangular flexible PV modules at 70% coverage",
+      "areaBasis": "0.07 m2 circular projection, 0.01 m2 support footprint, 0.099/0.198 m2 module area kept as distinct denominators",
+      "sourceAndSpectrum": "outdoor global irradiance; 890 W/m2 is only a single-module I-V condition, not a daily series",
+      "incidence": "modules occupy discrete orientations; rear low-light modules are material to the comparison",
+      "weather": "outdoor daylight air temperature about 25-30 C; source raw irradiance/temperature series unavailable",
+      "albedoAndReflector": "ground reflection is not reported as a machine-readable albedo",
+      "thermalAndConvection": "configuration-specific module temperatures reported; convection coefficients and full histories unavailable",
+      "electricalConnection": "series/parallel arrangements vary by configuration; complete topology and bypass behavior unavailable",
+      "measuredQuantity": "outdoor power/energy, module temperature and spacing-dependent shadow losses",
+      "primarySourceUrls": [
+        "https://doi.org/10.1002/ese3.1717",
+        "https://scijournals.onlinelibrary.wiley.com/doi/full/10.1002/ese3.1717"
+      ]
+    },
+    {
+      "studyId": "source:E",
+      "title": "Evaluation of direct beam energy received by convex solar collectors and their optimal orientations",
+      "geometry": "convex sphere; analytic projected area pi R2",
+      "areaBasis": "unit spherical surface area and unit ground-occupied area are reported separately (4:1 ratio)",
+      "sourceAndSpectrum": "broadband direct-normal beam only; Gsc=1367 W/m2 and Hottel clear-sky transmittance",
+      "incidence": "day 81 sunrise-to-sunset hour-angle integration; sphere projection is independent of beam direction",
+      "weather": "Tehran latitude 35.69 N; 1200 m and midlatitude-summer Hottel inputs from the authors' public implementation",
+      "albedoAndReflector": "sky diffuse and ground-reflected irradiance explicitly excluded",
+      "thermalAndConvection": "outside the study scope",
+      "electricalConnection": "outside the study scope; benchmark is intercepted optical beam energy",
+      "measuredQuantity": "daily direct beam energy per m2 sphere surface and per m2 ground-occupied area",
+      "primarySourceUrls": [
+        "https://doi.org/10.1063/5.0161277",
+        "https://www.researchgate.net/publication/375023238_Evaluation_of_direct_beam_energy_received_by_convex_solar_collectors_and_their_optimal_orientations",
+        "https://github.com/aaghamohammadi/pysolorie"
+      ]
+    },
+    {
+      "studyId": "source:F",
+      "title": "Investigation of Convective Heat Transfer and Stability on a Rotating Disk: A Novel Experimental Method and Thermal Modeling",
+      "geometry": "0.2 m radius, 0.01 m thick polished aluminium disk rotating in still air",
+      "areaBasis": "disk face area 0.1256 m2; experiment 1 radial evaluation line 0.005-0.194 m",
+      "sourceAndSpectrum": "electrical uniform heat flux; no solar spectrum",
+      "incidence": "not an optical experiment",
+      "weather": "quiescent laboratory air; experiment 1 ambient 22.2 C",
+      "albedoAndReflector": "not applicable; emissivity 0.04 in energy balance and 0.07 for camera calibration",
+      "thermalAndConvection": "initial wall 52.1 C; 34.55 rad/s; local Nu=h r/k; Sutherland air properties; 100 s run",
+      "electricalConnection": "heater supplies uniform heat flux; rear losses reported below 1% through insulation",
+      "measuredQuantity": "transient IR temperature-derived local heat-transfer coefficient, Reynolds and Nusselt numbers",
+      "primarySourceUrls": [
+        "https://doi.org/10.3390/fluids9070167",
+        "https://www.mdpi.com/2311-5521/9/7/167"
+      ]
+    }
+  ],
+  "studies": [
+    {
+      "benchmarkId": "research:A:incomplete-source-case",
+      "studyId": "research:A",
+      "title": "Three-dimensional photovoltaics",
+      "scope": "original A-D source case",
+      "verdict": "not-evaluated",
+      "reportedTrend": "At fixed 10 m x 10 m footprint, optimized one-day energy increases approximately linearly across the 2-10 m height sweep and the daily curve is flatter than the flat comparator.",
+      "simulationResult": "Not run under a complete source-equivalent case; the ordinary Seoul six-shape comparison is not evidence for this study.",
+      "metrics": [],
+      "matchedConditions": [
+        "The research namespace preserves the 100 m2 footprint, 10 m selected height, optical constants, and 12 minute source time step."
+      ],
+      "unmatchedConditions": [
+        "No source 64-triangle coordinates or GA optimizer are implemented by the preset adapter.",
+        "The exact San Francisco date/latitude and a source-equivalent irradiance series are not reported as executable inputs.",
+        "The general continuous-skin geometries are not the paper's double-sided triangular open-box/funnel structures."
+      ],
+      "possibleDifferenceCauses": [
+        "different geometry and active material area",
+        "different weather, latitude, date, and diffuse-radiation treatment",
+        "different reflection order, polarization, and electrical topology"
+      ],
+      "sensitivity": [],
+      "primarySourceUrls": [
+        "https://doi.org/10.1063/1.3308490",
+        "https://authors.library.caltech.edu/records/7bv9y-j0563",
+        "https://authors.library.caltech.edu/records/7bv9y-j0563/files/1.3308490.pdf"
+      ]
+    },
+    {
+      "benchmarkId": "research:B:incomplete-source-case",
+      "studyId": "research:B",
+      "title": "Solar energy generation in three dimensions",
+      "scope": "original A-D source case",
+      "verdict": "not-evaluated",
+      "reportedTrend": "The reported structures increase energy per footprint and flatten daily/seasonal output, while generally using more PV material per generated energy than a flat panel.",
+      "simulationResult": "Not run under a complete source-equivalent case; the ordinary Seoul cube result uses a different continuous active area and comparator.",
+      "metrics": [],
+      "matchedConditions": [
+        "The indoor metadata preserves the 35 mm cube base/height, 1000 W/m2 lamp, 14% cover reflectivity, and isolated research namespace."
+      ],
+      "unmatchedConditions": [
+        "The exact five-cell placement, active cell area, support, lamp geometry, and blocking-diode I-V behavior are not represented by the continuous-skin comparison.",
+        "The reported 2-20x cases span different structures, heights, latitudes, seasons, mirror areas, and flat comparator poses.",
+        "No source outdoor raw weather and I-V time series is bundled."
+      ],
+      "possibleDifferenceCauses": [
+        "active-area and denominator mismatch",
+        "continuous local-MPP skin versus parallel discrete cells and blocking diodes",
+        "different reflector, latitude, season, weather, and flat-panel orientation"
+      ],
+      "sensitivity": [],
+      "primarySourceUrls": [
+        "https://doi.org/10.1039/C2EE21170J",
+        "https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee21170j",
+        "https://www.rsc.org/suppdata/ee/c2/c2ee21170j/c2ee21170j.pdf"
+      ]
+    },
+    {
+      "benchmarkId": "research:C:incomplete-source-case",
+      "studyId": "research:C",
+      "title": "Nature-inspired spherical silicon solar cell for three-dimensional light harvesting, improved dust and thermal management",
+      "scope": "original A-D source case",
+      "verdict": "not-evaluated",
+      "reportedTrend": "The sphere is angularly insensitive and captures more reflected light for the tested backgrounds; the strongest +101% observation occurs only with the 1 cm aluminium cup, while measured maximum temperature is below the flat comparator.",
+      "simulationResult": "Not run under a complete source-equivalent case; no general sphere result is labelled as reproducing a reflector or thermal observation.",
+      "metrics": [],
+      "matchedConditions": [
+        "The selected metadata preserves equal-ground/equal-projection denominators, 1000 W/m2 AM1.5G, white diffuse reflectance, and the 1 cm angular-test gap.",
+        "Black, white, sand, aluminium paper, aluminium cup, and no-reflector observations remain separate source conditions."
+      ],
+      "unmatchedConditions": [
+        "The corrugated IBC sphere, etched area, exact diameter, electrical network, lamp geometry, cup geometry, and spectral mismatch are not fully represented.",
+        "The app's diffuse ground model is not a substitute for a finite close background or a specular/concentrating cup.",
+        "The source thermal comparisons use different area denominators and measurement definitions."
+      ],
+      "possibleDifferenceCauses": [
+        "finite background/cup geometry and scattering mismatch",
+        "active-area, corrugation, and comparator-denominator mismatch",
+        "different convection boundary conditions and temperature measurement definitions"
+      ],
+      "sensitivity": [],
+      "primarySourceUrls": [
+        "https://doi.org/10.1557/mrc.2020.44",
+        "https://www.cambridge.org/core/journals/mrs-communications/article/natureinspired-spherical-silicon-solar-cell-for-three-dimensional-light-harvesting-improved-dust-and-thermal-management/0EE382BEDC3D233365B27E4C3777FDC4",
+        "https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0EE382BEDC3D233365B27E4C3777FDC4/S2159685920000440a.pdf/natureinspired_spherical_silicon_solar_cell_for_threedimensional_light_harvesting_improved_dust_and_thermal_management.pdf"
+      ]
+    },
+    {
+      "benchmarkId": "research:D:incomplete-source-case",
+      "studyId": "research:D",
+      "title": "Harnessing solar power with aesthetic innovation: An in-depth study on spherical and hemispherical photovoltaic configurations",
+      "scope": "original A-D source case",
+      "verdict": "not-evaluated",
+      "reportedTrend": "The source reports a hemisphere producing 32% more energy than its sphere comparison and links the difference to oppositely oriented low-light modules; multiple structures incur spacing-dependent shadow losses.",
+      "simulationResult": "Not run under a complete source-equivalent case; approximately 32% is not forced and the ordinary sphere/hemisphere ranking is not a reproduction.",
+      "metrics": [],
+      "matchedConditions": [
+        "The metadata preserves 0.3 m diameter, module counts, 70% coverage, active areas, projected area, and support footprint as separate fields."
+      ],
+      "unmatchedConditions": [
+        "The ordinary ideal sphere/hemisphere skins have 100% continuous coverage and local MPP rather than the source's rectangular modules, gaps, and wiring.",
+        "The article's 0.01 m2 support denominator and 0.07 m2 projected footprint cannot be merged into one land-area comparison.",
+        "Raw irradiance, module temperature, I-V, albedo, rear low-light response, and full wiring time series are unavailable as executable inputs."
+      ],
+      "possibleDifferenceCauses": [
+        "active coverage and PV-area mismatch",
+        "series/parallel mismatch from rear low-light modules",
+        "self-shading, inter-structure shadows, ground reflection, and temperature differences",
+        "support-footprint versus swept-projection denominator"
+      ],
+      "sensitivity": [],
+      "primarySourceUrls": [
+        "https://doi.org/10.1002/ese3.1717",
+        "https://scijournals.onlinelibrary.wiley.com/doi/full/10.1002/ese3.1717"
+      ]
+    },
+    {
+      "benchmarkId": "source-equivalent:optical-sphere-day81",
+      "studyId": "source:E",
+      "title": "Evaluation of direct beam energy received by convex solar collectors and their optimal orientations",
+      "scope": "source-equivalent direct-beam geometry and Hottel clear-sky integration; not a PV electrical validation",
+      "verdict": "pass",
+      "reportedTrend": "A sphere receives 8.36 MJ/m2 of its surface and 33.44 MJ/m2 of ground-occupied area on day 81 at Tehran.",
+      "simulationResult": "Independent Simpson integration with the simulator's exact sphere projection produced 8.353533 and 33.414133 MJ/m2.",
+      "metrics": [
+        {
+          "metric": "daily direct beam energy per sphere surface area",
+          "unit": "MJ/m2-surface/day",
+          "reportedValue": 8.36,
+          "simulatedValue": 8.353533265428839,
+          "absoluteError": 0.00646673457116087,
+          "relativeErrorPercent": 0.07735328434402955,
+          "tolerancePercent": 1,
+          "toleranceBasis": "pre-registered 1% numerical tolerance; source values are rounded to 0.01 MJ/m2",
+          "verdict": "pass"
+        },
+        {
+          "metric": "daily direct beam energy per ground-occupied area",
+          "unit": "MJ/m2-land/day",
+          "reportedValue": 33.44,
+          "simulatedValue": 33.414133061715354,
+          "absoluteError": 0.02586693828464348,
+          "relativeErrorPercent": 0.07735328434402955,
+          "tolerancePercent": 1,
+          "toleranceBasis": "pre-registered 1% numerical tolerance; source values are rounded to 0.01 MJ/m2",
+          "verdict": "pass"
+        }
+      ],
+      "matchedConditions": [
+        "sphere projection pi R2 and 4 pi R2 active surface",
+        "Tehran latitude 35.69 N and day-of-year 81",
+        "author-published 1200 m midlatitude-summer Hottel inputs",
+        "Gsc=1367 W/m2, 0.033 orbital correction and 7.15e-5 rad/s hour-angle rate",
+        "direct beam only; diffuse and ground reflection disabled"
+      ],
+      "unmatchedConditions": [
+        "the study computes intercepted optical energy, not spectral PV conversion, temperature or a circuit",
+        "the paper does not publish its original numerical integration mesh"
+      ],
+      "possibleDifferenceCauses": [
+        "rounding of the two-decimal reported values",
+        "integration quadrature resolution",
+        "using a different astronomical or clear-sky convention would no longer be source-equivalent"
+      ],
+      "sensitivity": [
+        {
+          "parameter": "Simpson interval count",
+          "lowerCase": "1,440 intervals",
+          "lowerValue": 8.352737896475006,
+          "baselineCase": "14,400 intervals",
+          "baselineValue": 8.353533265428839,
+          "upperCase": "reported rounded value",
+          "upperValue": 8.36,
+          "unit": "MJ/m2-surface/day"
+        }
+      ],
+      "primarySourceUrls": [
+        "https://doi.org/10.1063/5.0161277",
+        "https://www.researchgate.net/publication/375023238_Evaluation_of_direct_beam_energy_received_by_convex_solar_collectors_and_their_optimal_orientations",
+        "https://github.com/aaghamohammadi/pysolorie"
+      ]
+    },
+    {
+      "benchmarkId": "source-equivalent:rotating-disk-laminar-exp1",
+      "studyId": "source:F",
+      "title": "Investigation of Convective Heat Transfer and Stability on a Rotating Disk: A Novel Experimental Method and Thermal Modeling",
+      "scope": "source-equivalent experiment-1 rotating-flow heat-transfer dimensionless benchmark; not a PV module calibration",
+      "verdict": "pass",
+      "reportedTrend": "Experiment 1 remains laminar over the evaluated radius and follows Nu=0.36 sqrt(Re_omega); Table 5 reports Re_omega=83,908.",
+      "simulationResult": "Sutherland air properties at the reported film temperature give Re=82955.051 and Nu=103.686907.",
+      "metrics": [
+        {
+          "metric": "local rotational Reynolds number at r=0.194 m",
+          "unit": "dimensionless",
+          "reportedValue": 83908,
+          "simulatedValue": 82955.05126022665,
+          "absoluteError": 952.9487397733465,
+          "relativeErrorPercent": 1.1357066546376346,
+          "tolerancePercent": 1.72,
+          "toleranceBasis": "pre-registered from the paper's Table 2 Reynolds relative uncertainty (1.72%)",
+          "verdict": "pass"
+        },
+        {
+          "metric": "laminar local Nusselt number Nu=0.36 sqrt(Re_omega)",
+          "unit": "dimensionless",
+          "reportedValue": 104.28075949090511,
+          "simulatedValue": 103.68690680758769,
+          "absoluteError": 0.5938526833174222,
+          "relativeErrorPercent": 0.5694748352587663,
+          "tolerancePercent": 2.16,
+          "toleranceBasis": "pre-registered conservative end of the paper's Table 2 Nusselt uncertainty (2.10-2.16%)",
+          "verdict": "pass"
+        }
+      ],
+      "matchedConditions": [
+        "experiment 1 omega=34.55 rad/s and outer evaluated radius 0.194 m",
+        "reported wall 52.1 C and ambient 22.2 C film-temperature method",
+        "reported Sutherland reference viscosity, temperature and constant",
+        "paper's laminar coefficient K=0.36",
+        "paper uncertainty is used as the pre-registered tolerance, not as a fitted multiplier"
+      ],
+      "unmatchedConditions": [
+        "raw IR pixel temperatures and fitted local h(r) data are not published as machine-readable data",
+        "uniform heater heat flux magnitude is not tabulated for experiment 1",
+        "this heated aluminium disk is not a PV laminate and has no optical or electrical conversion"
+      ],
+      "possibleDifferenceCauses": [
+        "Table 5 Reynolds is rounded and may use spatially varying film properties",
+        "OCR-rendered air-property precision is limited to the digits printed in Table 4",
+        "ambient-property evaluation instead of the reported film-temperature method changes the result"
+      ],
+      "sensitivity": [
+        {
+          "parameter": "air-property evaluation temperature",
+          "lowerCase": "film temperature (paper method)",
+          "lowerValue": 82955.05126022665,
+          "baselineCase": "reported Table 5",
+          "baselineValue": 83908,
+          "upperCase": "ambient temperature only",
+          "upperValue": 86158.0880898845,
+          "unit": "Re_omega"
+        }
+      ],
+      "primarySourceUrls": [
+        "https://doi.org/10.3390/fluids9070167",
+        "https://www.mdpi.com/2311-5521/9/7/167"
+      ]
+    }
+  ]
+}

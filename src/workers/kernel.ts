@@ -2,6 +2,8 @@ import {
   MAX_PANELS_PER_VARIANT,
   PANEL_AREA_M2,
 } from "../lib/geometry";
+import { simulateAnnualRotationDecomposition } from "../lib/physics/annual-transient";
+import { thermalModelMetadata } from "../lib/physics/annual-transient";
 import {
   DEFAULT_ELECTRICAL,
   DEFAULT_INVERTER,
@@ -12,6 +14,7 @@ import {
   dot,
   fixedRotation,
   multiplyQuaternion,
+  motorDrivePowerW,
   normalize,
   normalizeQuaternion,
   quaternionBetween,
@@ -20,10 +23,12 @@ import {
   rotateVector,
   scaleElectricalConfigForArea,
   singleDiodeCurve,
+  solveEngineeringSurfaceElectrical,
   simulateInstant,
   solarPosition,
   sunVector,
   type CircuitDevice,
+  type ElectricalConfig,
   type InstantSimulationInput,
   type InverterConfig,
   type InverterResult,
@@ -55,6 +60,7 @@ import {
 
 const MAX_SURFACE_SAMPLES_PER_ZONE = 256;
 const MAX_CONTINUOUS_SURFACE_SAMPLES = 32_768;
+const MAX_ENGINEERING_SURFACE_CELLS = 4_096;
 const MAX_OBSTACLE_BOUNDS_PER_VARIANT = 256;
 const WORLD_UP: Readonly<Vec3> = Object.freeze({ x: 0, y: 1, z: 0 });
 
@@ -84,6 +90,8 @@ export interface SimulationStepContext {
 export interface SimulationPhysicsStepResult {
   dcPowerW: number;
   acPowerW: number;
+  /** Electrical motor demand already deducted from acPowerW. */
+  motorPowerW?: number;
   poaWm2: number;
   moduleTemperatureC: number;
   mismatchLossFraction: number;
@@ -162,6 +170,79 @@ function assertPositiveFinite(value: number, label: string): void {
   }
 }
 
+function validateEngineeringSurfaceConnection(
+  surface: NonNullable<SimulationVariantWorkItem["continuousSurface"]>,
+  variantId: string,
+): void {
+  const label = `${variantId}.continuousSurface`;
+  if (
+    surface.electricalModel !== "local-mpp-area-integral" &&
+    surface.electricalModel !== "explicit-series-parallel-bypass"
+  ) {
+    throw new RangeError(`${label}.electricalModel is not supported.`);
+  }
+  if (surface.electricalModel === "local-mpp-area-integral") {
+    if (surface.engineeringConnection !== undefined) {
+      throw new RangeError(`${label}.engineeringConnection is only valid for the explicit electrical model.`);
+    }
+    return;
+  }
+  const connection = surface.engineeringConnection;
+  if (!connection || typeof connection !== "object" || Array.isArray(connection)) {
+    throw new RangeError(`${label}.engineeringConnection is required.`);
+  }
+  assertPositiveFinite(connection.nominalCellAreaM2, `${label}.engineeringConnection.nominalCellAreaM2`);
+  if (!Number.isInteger(connection.parallelStrings) || connection.parallelStrings < 1) {
+    throw new RangeError(`${label}.engineeringConnection.parallelStrings must be a positive integer.`);
+  }
+  if (!Number.isInteger(connection.cellsPerBypassSubstring) || connection.cellsPerBypassSubstring < 1) {
+    throw new RangeError(`${label}.engineeringConnection.cellsPerBypassSubstring must be a positive integer.`);
+  }
+  const cellCount = Math.max(
+    1,
+    Math.ceil(surface.activeAreaM2 / connection.nominalCellAreaM2 - 1e-10),
+  );
+  if (cellCount > MAX_ENGINEERING_SURFACE_CELLS) {
+    throw new RangeError(
+      `${label}.engineeringConnection creates ${cellCount} cells; maximum is ${MAX_ENGINEERING_SURFACE_CELLS}.`,
+    );
+  }
+  if (connection.parallelStrings > cellCount) {
+    throw new RangeError(`${label}.engineeringConnection.parallelStrings cannot exceed cell count.`);
+  }
+  if (connection.cellsPerBypassSubstring > 10_000) {
+    throw new RangeError(`${label}.engineeringConnection.cellsPerBypassSubstring cannot exceed 10000.`);
+  }
+  const nonNegativeFields = [
+    ["bypassForwardVoltageV", connection.bypassForwardVoltageV],
+    ["stringWiringResistanceOhm", connection.stringWiringResistanceOhm],
+    ["arrayWiringResistanceOhm", connection.arrayWiringResistanceOhm],
+  ] as const;
+  nonNegativeFields.forEach(([field, value]) => {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+      throw new RangeError(`${label}.engineeringConnection.${field} must be finite and non-negative.`);
+    }
+  });
+  if (
+    connection.cellIvModel !== undefined &&
+    connection.cellIvModel !== "piecewise-nameplate" &&
+    connection.cellIvModel !== "single-diode"
+  ) {
+    throw new RangeError(`${label}.engineeringConnection.cellIvModel is not supported.`);
+  }
+  const integerFields = [
+    ["cellCurveSamples", connection.cellCurveSamples, 16, 512],
+    ["circuitSamples", connection.circuitSamples, 32, 1_024],
+  ] as const;
+  integerFields.forEach(([field, value, lower, upper]) => {
+    if (value !== undefined && (!Number.isInteger(value) || value < lower || value > upper)) {
+      throw new RangeError(
+        `${label}.engineeringConnection.${field} must be an integer in [${lower}, ${upper}].`,
+      );
+    }
+  });
+}
+
 function validateContinuousSurfaceVariant(
   variant: SimulationVariantWorkItem,
 ): void {
@@ -185,11 +266,9 @@ function validateContinuousSurfaceVariant(
   if (!surface.meshVersion.trim() || surface.meshVersion.length > 200) {
     throw new RangeError(`${variant.variantId}.continuousSurface.meshVersion is invalid.`);
   }
-  if (surface.electricalModel !== "local-mpp-area-integral") {
-    throw new RangeError(`${variant.variantId}.continuousSurface.electricalModel is not supported.`);
-  }
   assertPositiveFinite(surface.landAreaM2, `${variant.variantId}.continuousSurface.landAreaM2`);
   assertPositiveFinite(surface.activeAreaM2, `${variant.variantId}.continuousSurface.activeAreaM2`);
+  validateEngineeringSurfaceConnection(surface, variant.variantId);
   if (!Number.isFinite(surface.heightM) || surface.heightM < 0) {
     throw new RangeError(`${variant.variantId}.continuousSurface.heightM is invalid.`);
   }
@@ -365,6 +444,47 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
         timestampMilliseconds(variant.rotation.referenceTimestamp);
       }
     }
+    if (variant.rotationRpmByWeatherStep !== undefined) {
+      if (!Array.isArray(variant.rotationRpmByWeatherStep)) {
+        throw new RangeError(`${variant.variantId}.rotationRpmByWeatherStep must be an array.`);
+      }
+      validateDynamicSeries(
+        variant.rotationRpmByWeatherStep,
+        input.weather.length,
+        `${variant.variantId}.rotationRpmByWeatherStep`,
+      );
+      if (variant.rotation?.mode !== "fixed") {
+        throw new RangeError(
+          `${variant.variantId}.rotationRpmByWeatherStep requires fixed rotation.`,
+        );
+      }
+      if (variant.rotation.referenceTimestamp !== undefined) {
+        throw new RangeError(
+          `${variant.variantId}.rotationRpmByWeatherStep starts at weather[0] and cannot use referenceTimestamp.`,
+        );
+      }
+      if (variant.motorDrive !== undefined) {
+        throw new RangeError(
+          `${variant.variantId}.rotationRpmByWeatherStep is natural rotation and cannot use motorDrive.`,
+        );
+      }
+    }
+    if (variant.motorDrive !== undefined) {
+      if (variant.rotation?.mode !== "fixed") {
+        throw new RangeError(`${variant.variantId}.motorDrive requires fixed RPM rotation.`);
+      }
+      if (
+        !Number.isFinite(variant.motorDrive.requiredTorqueNm)
+        || variant.motorDrive.requiredTorqueNm < 0
+        || !Number.isFinite(variant.motorDrive.motorEfficiency)
+        || variant.motorDrive.motorEfficiency <= 0
+        || variant.motorDrive.motorEfficiency > 1
+      ) {
+        throw new RangeError(
+          `${variant.variantId}.motorDrive requires nonnegative torque and 0 < efficiency <= 1.`,
+        );
+      }
+    }
     if (
       variant.electricalFairnessMode !== undefined &&
       variant.electricalFairnessMode !== "shared-circuit" &&
@@ -373,6 +493,85 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
       throw new RangeError(
         `${variant.variantId}.electricalFairnessMode is not supported.`,
       );
+    }
+    if (variant.annualTransientThermal !== undefined) {
+      const transient = variant.annualTransientThermal;
+      const workerSurface = variant.continuousSurface;
+      if (input.mode !== "annual") {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal requires annual mode.`);
+      }
+      if (workerSurface === undefined) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal requires a continuous surface.`);
+      }
+      if (workerSurface.electricalModel !== "local-mpp-area-integral") {
+        throw new RangeError(
+          `${variant.variantId}.annualTransientThermal does not yet support explicit engineering electrical connections.`,
+        );
+      }
+      if (variant.obstacleBounds !== undefined) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal does not support obstacleBounds.`);
+      }
+      if (variant.planeTracking !== undefined) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal does not support planeTracking.`);
+      }
+      if (transient.surface.kind !== workerSurface.shape) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal surface shape must match the worker surface.`);
+      }
+      const transientSamples = transient.surface.zones.flatMap((zone) => zone.samples);
+      const geometryTolerance = (scale: number) => Math.max(1e-10, Math.abs(scale) * 1e-8);
+      if (Math.abs(transient.surface.dimensions.activeAreaM2 - workerSurface.activeAreaM2)
+        > geometryTolerance(workerSurface.activeAreaM2)) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal active area must match the worker surface.`);
+      }
+      if (Math.abs(transient.surface.dimensions.heightM - workerSurface.heightM)
+        > geometryTolerance(workerSurface.heightM)) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal height must match the worker surface.`);
+      }
+      if (transientSamples.length !== workerSurface.samples.length
+        || transientSamples.length !== workerSurface.integrationSampleCount) {
+        throw new RangeError(`${variant.variantId}.annualTransientThermal sample count must match the worker surface.`);
+      }
+      transientSamples.forEach((sample, sampleIndex) => {
+        const workerSample = workerSurface.samples[sampleIndex];
+        const compare = (left: number, right: number, field: string) => {
+          if (Math.abs(left - right) > geometryTolerance(Math.max(Math.abs(left), Math.abs(right)))) {
+            throw new RangeError(
+              `${variant.variantId}.annualTransientThermal sample ${sampleIndex} ${field} must match the worker surface.`,
+            );
+          }
+        };
+        compare(sample.areaM2, workerSample.areaM2, "area");
+        compare(sample.position[0], workerSample.positionM.x, "position.x");
+        compare(sample.position[1], workerSample.positionM.y, "position.y");
+        compare(sample.position[2], workerSample.positionM.z, "position.z");
+        compare(sample.normal[0], workerSample.normal.x, "normal.x");
+        compare(sample.normal[1], workerSample.normal.y, "normal.y");
+        compare(sample.normal[2], workerSample.normal.z, "normal.z");
+      });
+      if (transient.thermalNodeCount !== undefined && (
+        !Number.isInteger(transient.thermalNodeCount) || transient.thermalNodeCount < 1
+      )) {
+        throw new RangeError(`${variant.variantId}.thermalNodeCount must be a positive integer.`);
+      }
+      [
+        transient.referenceEfficiency ?? variant.referenceEfficiency,
+        transient.gammaPerC,
+        transient.referenceTemperatureC ?? 25,
+        transient.absorptivity ?? 0.9,
+        transient.initialTemperatureC ?? input.weather[0].ambientC,
+        transient.effectiveSkyTemperatureOffsetC ?? -6,
+        transient.maximumThermalSubstepSeconds ?? 300,
+        transient.warmupPeriodHours ?? 24,
+        transient.warmupConvergenceToleranceC ?? 0.02,
+      ].forEach((value) => {
+        if (!Number.isFinite(value)) {
+          throw new RangeError(`${variant.variantId}.annualTransientThermal values must be finite.`);
+        }
+      });
+      if (transient.absorptivity !== undefined
+        && (transient.absorptivity < 0 || transient.absorptivity > 1)) {
+        throw new RangeError(`${variant.variantId}.absorptivity must be between zero and one.`);
+      }
     }
     if (
       variant.electricalFairnessMode === "independent-mppt" &&
@@ -868,11 +1067,63 @@ function timestampMilliseconds(value: Date | string | number): number {
   return result;
 }
 
+interface ScheduledRotationPhaseCache {
+  weather: readonly WeatherPoint[];
+  rpmByWeatherStep: readonly number[];
+  prefixAngleRad: Float64Array;
+}
+
+const scheduledRotationPhaseCache = new WeakMap<
+  SimulationVariantWorkItem,
+  ScheduledRotationPhaseCache
+>();
+
+function scheduledRotationPrefixAngles(
+  input: SimulationKernelInput,
+  variant: SimulationVariantWorkItem,
+): Float64Array {
+  const rpmByWeatherStep = variant.rotationRpmByWeatherStep;
+  if (!rpmByWeatherStep) return new Float64Array(input.weather.length);
+  const cached = scheduledRotationPhaseCache.get(variant);
+  if (cached?.weather === input.weather && cached.rpmByWeatherStep === rpmByWeatherStep) {
+    return cached.prefixAngleRad;
+  }
+  const prefixAngleRad = new Float64Array(input.weather.length);
+  for (let index = 1; index < input.weather.length; index += 1) {
+    const durationSeconds = (
+      input.weather[index].timeUtcMs - input.weather[index - 1].timeUtcMs
+    ) / 1_000;
+    const intervalAngleRad = rpmByWeatherStep[index - 1] * 2 * Math.PI * durationSeconds / 60;
+    if (!Number.isFinite(intervalAngleRad)) {
+      throw new RangeError(`${variant.variantId}.rotationRpmByWeatherStep produces a non-finite phase.`);
+    }
+    // Only phase modulo one turn is observable; reducing at every boundary
+    // avoids precision loss across an annual high-RPM schedule.
+    prefixAngleRad[index] = fixedRotation(
+      prefixAngleRad[index - 1] + intervalAngleRad,
+      0,
+      0,
+    ).angleRad;
+  }
+  scheduledRotationPhaseCache.set(variant, { weather: input.weather, rpmByWeatherStep, prefixAngleRad });
+  return prefixAngleRad;
+}
+
+function rotationRpmAtStep(context: SimulationStepContext): number {
+  const scheduled = context.variant.rotationRpmByWeatherStep?.[context.stepIndex];
+  if (scheduled !== undefined) return scheduled;
+  return context.variant.rotation?.mode === "fixed" ? context.variant.rotation.rpm : 0;
+}
+
 function rotationAngleAt(context: SimulationStepContext): number {
   const { input, variant, weather } = context;
   const rotation = variant.rotation;
   if (!rotation) return 0;
   if (rotation.mode === "static") return rotation.angleRad ?? 0;
+  if (variant.rotationRpmByWeatherStep) {
+    const prefixAngleRad = scheduledRotationPrefixAngles(input, variant)[context.stepIndex];
+    return fixedRotation((rotation.initialAngleRad ?? 0) + prefixAngleRad, 0, 0).angleRad;
+  }
   const referenceMs = rotation.referenceTimestamp === undefined
     ? input.weather[0].timeUtcMs
     : timestampMilliseconds(rotation.referenceTimestamp);
@@ -909,13 +1160,15 @@ interface RotationIntervalPlan {
 function rotationIntervalPlan(context: SimulationStepContext): RotationIntervalPlan {
   const startAngleRad = rotationAngleAt(context);
   const rotation = context.variant.rotation;
+  const scheduled = context.variant.rotationRpmByWeatherStep !== undefined;
+  const intervalRpm = rotationRpmAtStep(context);
   const samplesPerTurn = context.variant.rotationPhaseSamples ?? 1;
   const intervalSeconds = forwardIntervalSeconds(context.input, context.stepIndex);
   if (
     rotation?.mode !== "fixed" ||
-    samplesPerTurn <= 1 ||
+    (!scheduled && samplesPerTurn <= 1) ||
     intervalSeconds <= 0 ||
-    Math.abs(rotation.rpm) < 1e-15
+    Math.abs(intervalRpm) < 1e-15
   ) {
     return {
       startAngleRad,
@@ -925,11 +1178,17 @@ function rotationIntervalPlan(context: SimulationStepContext): RotationIntervalP
       residualTurns: 0,
       completeTurnSamples: 0,
       residualSamples: 0,
-      intervalAveraged: false,
+      // A scheduled zero-RPM interval is exactly represented by its constant
+      // start pose. Mark it as a forward-interval value so a following month's
+      // different RPM is not trapezoidally blended into this interval.
+      intervalAveraged: scheduled
+        && rotation?.mode === "fixed"
+        && intervalSeconds > 0
+        && Math.abs(intervalRpm) < 1e-15,
     };
   }
 
-  const signedTurns = rotation.rpm * intervalSeconds / 60;
+  const signedTurns = intervalRpm * intervalSeconds / 60;
   const rawTurns = Math.abs(signedTurns);
   const nearestInteger = Math.round(rawTurns);
   const totalTurns = Math.abs(rawTurns - nearestInteger) < 1e-12
@@ -956,7 +1215,7 @@ function rotationIntervalPlan(context: SimulationStepContext): RotationIntervalP
 /** Actual unique physics evaluations after exact periodic-turn reduction. */
 export function rotationPhaseCount(context: SimulationStepContext): number {
   const plan = rotationIntervalPlan(context);
-  if (!plan.intervalAveraged) return 1;
+  if (!plan.intervalAveraged || plan.totalTurns === 0) return 1;
   return plan.completeTurnSamples + plan.residualSamples;
 }
 
@@ -967,8 +1226,12 @@ export function rotationPhaseCount(context: SimulationStepContext): number {
  */
 export function rotationIntervalSamples(context: SimulationStepContext): RotationIntervalSample[] {
   const plan = rotationIntervalPlan(context);
-  if (!plan.intervalAveraged) {
-    return [{ angleRad: plan.startAngleRad, weight: 1, intervalAveraged: false }];
+  if (!plan.intervalAveraged || plan.totalTurns === 0) {
+    return [{
+      angleRad: plan.startAngleRad,
+      weight: 1,
+      intervalAveraged: plan.intervalAveraged,
+    }];
   }
   const samples: RotationIntervalSample[] = [];
   if (plan.completeTurnSamples > 0) {
@@ -1052,7 +1315,28 @@ function idealContinuousBusVoltage(
   const currentCompatible = inverter.maxInputCurrentA > 0
     ? dcPowerW / inverter.maxInputCurrentA
     : upper;
+
   return Math.min(upper, Math.max(lower, vmpV, currentCompatible));
+}
+function engineeringReferenceCellConfig(
+  config: ElectricalConfig,
+  nominalCellAreaM2: number,
+  efficiency: number,
+): ElectricalConfig {
+  const nameplatePowerScale = nominalCellAreaM2 * efficiency *
+    config.referenceIrradianceWm2 / Math.max(config.pmaxW, 1e-12);
+  return {
+    ...config,
+    areaM2: nominalCellAreaM2,
+    efficiency,
+    pmaxW: nominalCellAreaM2 * efficiency * config.referenceIrradianceWm2,
+    iscA: config.iscA * nameplatePowerScale,
+    impA: config.impA * nameplatePowerScale,
+    alphaIscAperC: config.alphaIscAperC * nameplatePowerScale,
+    seriesResistanceOhm: config.seriesResistanceOhm / nameplatePowerScale,
+    shuntResistanceOhm: config.shuntResistanceOhm / nameplatePowerScale,
+    cellsInSeries: 1,
+  };
 }
 
 function transformedContinuousSample(
@@ -1118,8 +1402,17 @@ function computeContinuousSurfaceStepAtAngle(
   let poaAreaW = 0;
   let temperatureAreaC = 0;
   let closure: ReturnType<typeof simulateInstant>["irradiance"]["ghiClosure"] | undefined;
+  const aggregateElectricalAvailability = 1 - Math.min(
+    1, Math.max(0, electrical.aggregateLossFraction ?? 0),
+  );
 
-  for (const baseSample of surface.samples) {
+  const engineeringSamples: Array<{
+    id: string;
+    areaM2: number;
+    poaWm2: number;
+    cellTemperatureC: number;
+  }> = [];
+  for (const [sampleIndex, baseSample] of surface.samples.entries()) {
     if (isCancelled?.()) throw new SimulationCancelledError();
     const sample = transformedContinuousSample(baseSample, angleRad, tracking, sunDirection);
     const baseVisibility = surfaceOptions.visibility ?? 1;
@@ -1154,6 +1447,12 @@ function computeContinuousSurfaceStepAtAngle(
     dcPowerW += result.dcPowerW;
     poaAreaW += result.poa.totalWm2 * sample.areaM2;
     temperatureAreaC += result.moduleTemperatureC * sample.areaM2;
+    engineeringSamples.push({
+      id: `${variant.variantId}:surface-sample-${sampleIndex + 1}`,
+      areaM2: sample.areaM2,
+      poaWm2: result.solar.isDaylight ? result.effectivePoaWm2 * aggregateElectricalAvailability : 0,
+      cellTemperatureC: result.moduleTemperatureC,
+    });
     const regionId = continuousRegionId(surface.shape, sample);
     const region = regions[regionId] ??= {
       areaM2: 0,
@@ -1170,23 +1469,54 @@ function computeContinuousSurfaceStepAtAngle(
     region.dcPowerW += result.dcPowerW;
   }
 
+  const idealLocalMppDcPowerW = dcPowerW;
+  // The explicit circuit is identically de-energised when every local MPP is
+  // zero (night, or an otherwise unavailable surface). Skipping the IV
+  // network solve in that exact case avoids thousands of meaningless annual
+  // circuit sweeps without approximating any non-zero operating point.
+  const engineering = surface.electricalModel === "explicit-series-parallel-bypass"
+    && idealLocalMppDcPowerW > 0
+    ? solveEngineeringSurfaceElectrical(
+        engineeringSamples,
+        engineeringReferenceCellConfig(
+          electricalConfig,
+          surface.engineeringConnection.nominalCellAreaM2,
+          variant.referenceEfficiency,
+        ),
+        surface.engineeringConnection,
+      )
+    : undefined;
+  if (
+    engineering &&
+    engineering.dcPowerW > idealLocalMppDcPowerW + Math.max(1e-9, idealLocalMppDcPowerW * 1e-8)
+  ) {
+    throw new Error("Engineering surface electrical output exceeds the local-MPP upper bound.");
+  }
+  dcPowerW = engineering?.dcPowerW ?? idealLocalMppDcPowerW;
+
   const inverterSelection = variant.inverter !== undefined
     ? variant.inverter
     : input.physics?.inverter;
   const inverterConfig = inverterSelection === false
     ? undefined
     : inverterSelection ?? DEFAULT_INVERTER;
-  const dcVoltageV = inverterConfig
-    ? idealContinuousBusVoltage(dcPowerW, electricalConfig.vmpV, inverterConfig)
-    : Math.max(0, electricalConfig.vmpV);
-  const dcCurrentA = dcVoltageV > 0 ? dcPowerW / dcVoltageV : 0;
+  const dcVoltageV = engineering
+    ? engineering.dcVoltageV
+    : inverterConfig
+      ? idealContinuousBusVoltage(dcPowerW, electricalConfig.vmpV, inverterConfig)
+      : dcPowerW > 0 ? Math.max(0, electricalConfig.vmpV) : 0;
+  const dcCurrentA = engineering
+    ? engineering.dcCurrentA
+    : dcVoltageV > 0 ? dcPowerW / dcVoltageV : 0;
   const inverter = inverterConfig
     ? calculateInverter({ dcPowerW, dcVoltageV, dcCurrentA, config: inverterConfig })
     : undefined;
   const reportedDcPowerW = inverter?.acceptedDcPowerW ?? dcPowerW;
   const reportedAcPowerW = inverter?.acPowerW ?? dcPowerW;
-  const dcScale = dcPowerW > 0 ? reportedDcPowerW / dcPowerW : 0;
-  const acScale = dcPowerW > 0 ? reportedAcPowerW / dcPowerW : 0;
+  // Regions are attribution groups, so scale ideal regional contributions by
+  // the exact parent engineering/inverter ratio instead of solving per region.
+  const dcScale = idealLocalMppDcPowerW > 0 ? reportedDcPowerW / idealLocalMppDcPowerW : 0;
+  const acScale = idealLocalMppDcPowerW > 0 ? reportedAcPowerW / idealLocalMppDcPowerW : 0;
   Object.values(regions).forEach((region) => {
     const localDcPowerW = region.dcPowerW;
     region.dcPowerW = localDcPowerW * dcScale;
@@ -1201,10 +1531,11 @@ function computeContinuousSurfaceStepAtAngle(
   return {
     dcPowerW: reportedDcPowerW,
     acPowerW: reportedAcPowerW,
+    motorPowerW: 0,
     poaWm2: poaAreaW / surface.activeAreaM2,
     moduleTemperatureC: temperatureAreaC / surface.activeAreaM2,
-    mismatchLossFraction: 0,
-    bypassActiveCount: 0,
+    mismatchLossFraction: engineering?.mismatchAndWiringLossFraction ?? 0,
+    bypassActiveCount: engineering?.bypassActiveCount ?? 0,
     inverterStatus: inverter?.status ?? "disabled",
     ghiClosure: {
       residualWm2: fallbackClosure.residualWm2,
@@ -1453,6 +1784,7 @@ function computePhysicsStepAtAngle(
   return {
     dcPowerW: reportedDcPowerW,
     acPowerW: inverter?.acPowerW ?? reportedDcPowerW,
+    motorPowerW: 0,
     poaWm2: weighted((result) => result.poaWm2),
     moduleTemperatureC: weighted((result) => result.moduleTemperatureC),
     mismatchLossFraction,
@@ -1506,6 +1838,7 @@ function averagePhaseResults(
   return {
     dcPowerW: average((result) => result.dcPowerW),
     acPowerW: average((result) => result.acPowerW),
+    motorPowerW: average((result) => result.motorPowerW ?? 0),
     poaWm2: average((result) => result.poaWm2),
     moduleTemperatureC: average((result) => result.moduleTemperatureC),
     mismatchLossFraction: average((result) => result.mismatchLossFraction),
@@ -1534,27 +1867,53 @@ export const computePhysicsStep: SimulationStepFunction = (context) => {
   const samples = rotationIntervalSamples(context);
   if (samples.length === 1) {
     const result = computePhysicsStepAtAngle(context, samples[0].angleRad);
-    return {
+    return applyMotorDrive(context.variant, {
       ...result,
       rotationIntervalAveraged: samples[0].intervalAveraged,
-    };
+    });
   }
   const results: SimulationPhysicsStepResult[] = [];
   for (const sample of samples) {
     if (context.isCancelled?.()) throw new SimulationCancelledError();
     results.push(computePhysicsStepAtAngle(context, sample.angleRad));
   }
-  return averagePhaseResults(results, samples);
+  return applyMotorDrive(context.variant, averagePhaseResults(results, samples));
 };
+
+function applyMotorDrive(
+  variant: SimulationVariantWorkItem,
+  result: SimulationPhysicsStepResult,
+): SimulationPhysicsStepResult {
+  if (!variant.motorDrive) return result;
+  const rpm = variant.rotation?.mode === "fixed" ? variant.rotation.rpm : 0;
+  const motorPowerW = motorDrivePowerW({
+    requiredTorqueNm: variant.motorDrive.requiredTorqueNm,
+    rpm,
+    motorEfficiency: variant.motorDrive.motorEfficiency,
+  });
+  const grossAcPowerW = result.acPowerW;
+  const netAcPowerW = Math.max(0, grossAcPowerW - motorPowerW);
+  const acScale = grossAcPowerW > 0 ? netAcPowerW / grossAcPowerW : 0;
+  return {
+    ...result,
+    acPowerW: netAcPowerW,
+    motorPowerW,
+    surfaceRegions: Object.fromEntries(Object.entries(result.surfaceRegions ?? {}).map(
+      ([regionId, region]) => [regionId, { ...region, acPowerW: region.acPowerW * acScale }],
+    )),
+  };
+}
 
 function normalizedStepResult(
   result: number | SimulationPhysicsStepResult,
   weather: WeatherPoint,
+  variant?: SimulationVariantWorkItem,
 ): SimulationPhysicsStepResult {
   const normalized = typeof result === "number"
     ? {
         dcPowerW: result,
         acPowerW: result,
+        motorPowerW: 0,
         poaWm2: 0,
         moduleTemperatureC: weather.ambientC,
         mismatchLossFraction: 0,
@@ -1580,33 +1939,39 @@ function normalizedStepResult(
           policy: "not-evaluated" as const,
         },
         rotationIntervalAveraged: result.rotationIntervalAveraged ?? false,
+        motorPowerW: result.motorPowerW ?? 0,
         surfaceRegions: result.surfaceRegions ?? {},
       };
+  const withMotor = variant?.motorDrive && (normalized.motorPowerW ?? 0) === 0
+    ? applyMotorDrive(variant, normalized)
+    : normalized;
   const numericValues = [
-    normalized.dcPowerW,
-    normalized.acPowerW,
-    normalized.poaWm2,
-    normalized.moduleTemperatureC,
-    normalized.mismatchLossFraction,
-    normalized.bypassActiveCount,
-    normalized.ghiClosure.residualWm2,
-    normalized.ghiClosure.relativeResidual,
-    normalized.ghiClosure.toleranceWm2,
+    withMotor.dcPowerW,
+    withMotor.acPowerW,
+    withMotor.motorPowerW ?? 0,
+    withMotor.poaWm2,
+    withMotor.moduleTemperatureC,
+    withMotor.mismatchLossFraction,
+    withMotor.bypassActiveCount,
+    withMotor.ghiClosure.residualWm2,
+    withMotor.ghiClosure.relativeResidual,
+    withMotor.ghiClosure.toleranceWm2,
   ];
   if (
     numericValues.some((value) => !Number.isFinite(value)) ||
-    normalized.dcPowerW < 0 ||
-    normalized.acPowerW < 0 ||
-    normalized.poaWm2 < 0 ||
-    normalized.mismatchLossFraction < 0 ||
-    normalized.mismatchLossFraction > 1 ||
-    normalized.bypassActiveCount < 0 ||
-    normalized.ghiClosure.relativeResidual < 0 ||
-    normalized.ghiClosure.toleranceWm2 < 0
+    withMotor.dcPowerW < 0 ||
+    withMotor.acPowerW < 0 ||
+    (withMotor.motorPowerW ?? 0) < 0 ||
+    withMotor.poaWm2 < 0 ||
+    withMotor.mismatchLossFraction < 0 ||
+    withMotor.mismatchLossFraction > 1 ||
+    withMotor.bypassActiveCount < 0 ||
+    withMotor.ghiClosure.relativeResidual < 0 ||
+    withMotor.ghiClosure.toleranceWm2 < 0
   ) {
     throw new Error("워커 물리 단계가 유효하지 않은 값을 반환했습니다.");
   }
-  const surfaceRegions = normalized.surfaceRegions ?? {};
+  const surfaceRegions = withMotor.surfaceRegions ?? {};
   const regionValues = Object.values(surfaceRegions);
   regionValues.forEach((region) => {
     if (
@@ -1619,21 +1984,22 @@ function normalizedStepResult(
   if (regionValues.length > 0) {
     const regionDcW = regionValues.reduce((sum, region) => sum + region.dcPowerW, 0);
     const regionAcW = regionValues.reduce((sum, region) => sum + region.acPowerW, 0);
-    const toleranceDc = Math.max(1e-10, normalized.dcPowerW * 1e-8);
-    const toleranceAc = Math.max(1e-10, normalized.acPowerW * 1e-8);
+    const toleranceDc = Math.max(1e-10, withMotor.dcPowerW * 1e-8);
+    const toleranceAc = Math.max(1e-10, withMotor.acPowerW * 1e-8);
     if (
-      Math.abs(regionDcW - normalized.dcPowerW) > toleranceDc ||
-      Math.abs(regionAcW - normalized.acPowerW) > toleranceAc
+      Math.abs(regionDcW - withMotor.dcPowerW) > toleranceDc ||
+      Math.abs(regionAcW - withMotor.acPowerW) > toleranceAc
     ) {
       throw new Error("워커 연속표면 영역 출력 합이 전체 출력과 다릅니다.");
     }
   }
-  return normalized;
+  return withMotor;
 }
 
 interface MonthlyAccumulator {
   dcEnergyWhByVariant: Record<string, number>;
   acEnergyWhByVariant: Record<string, number>;
+  motorEnergyWhByVariant?: Record<string, number>;
 }
 
 function monthKey(timeUtcMs: number, reportingOffsetMinutes: number): string {
@@ -1659,6 +2025,7 @@ function addEnergySegment(
   current: Record<string, SimulationPhysicsStepResult>,
   totalDc: Record<string, number>,
   totalAc: Record<string, number>,
+  totalMotor: Record<string, number>,
   regionTotals: SimulationCompleteEvent["surfaceRegionEnergyWhByVariant"],
   reportingOffsetMinutes: number,
 ): void {
@@ -1676,6 +2043,9 @@ function addEnergySegment(
       bucket = {
         dcEnergyWhByVariant: Object.fromEntries(variantIds.map((id) => [id, 0])),
         acEnergyWhByVariant: Object.fromEntries(variantIds.map((id) => [id, 0])),
+        ...(variantIds.some((id) => (previous[id].motorPowerW ?? 0) > 0 || (current[id].motorPowerW ?? 0) > 0)
+          ? { motorEnergyWhByVariant: Object.fromEntries(variantIds.map((id) => [id, 0])) }
+          : {}),
       };
       monthly.set(key, bucket);
     }
@@ -1698,10 +2068,21 @@ function addEnergySegment(
         : interpolate(previousStep.acPowerW, currentStep.acPowerW, endFraction);
       const dcEnergy = 0.5 * (dcStart + dcEnd) * hours;
       const acEnergy = 0.5 * (acStart + acEnd) * hours;
+      const motorStart = previousStep.rotationIntervalAveraged
+        ? previousStep.motorPowerW ?? 0
+        : interpolate(previousStep.motorPowerW ?? 0, currentStep.motorPowerW ?? 0, startFraction);
+      const motorEnd = previousStep.rotationIntervalAveraged
+        ? previousStep.motorPowerW ?? 0
+        : interpolate(previousStep.motorPowerW ?? 0, currentStep.motorPowerW ?? 0, endFraction);
+      const motorEnergy = 0.5 * (motorStart + motorEnd) * hours;
       bucket.dcEnergyWhByVariant[variantId] += dcEnergy;
       bucket.acEnergyWhByVariant[variantId] += acEnergy;
+      if (bucket.motorEnergyWhByVariant) {
+        bucket.motorEnergyWhByVariant[variantId] += motorEnergy;
+      }
       totalDc[variantId] += dcEnergy;
       totalAc[variantId] += acEnergy;
+      totalMotor[variantId] += motorEnergy;
       const regionIds = new Set([
         ...Object.keys(previousStep.surfaceRegions ?? {}),
         ...Object.keys(currentStep.surfaceRegions ?? {}),
@@ -1748,12 +2129,80 @@ export async function runSimulationKernel(
   const variantIds = input.variants.map((variant) => variant.variantId);
   const dcEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const acEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
+  const hasMotorDrive = input.variants.some((variant) => variant.motorDrive !== undefined);
+  const motorEnergyWhByVariant = Object.fromEntries(variantIds.map((id) => [id, 0]));
   const surfaceRegionEnergyWhByVariant = Object.fromEntries(
     variantIds.map((id) => [id, {}]),
   ) as SimulationCompleteEvent["surfaceRegionEnergyWhByVariant"];
   const monthly = new Map<string, MonthlyAccumulator>();
   const reportingOffsetMinutes = input.reportingOffsetMinutes ?? 0;
   const startedAt = Date.now();
+  const annualTransientRotationByVariant: NonNullable<
+    SimulationCompleteEvent["annualTransientRotationByVariant"]
+  > = {};
+  const transientVariants = input.variants.filter(
+    (variant) => variant.annualTransientThermal !== undefined,
+  );
+  for (const variant of transientVariants) {
+      if (hooks.isCancelled?.()) throw new SimulationCancelledError();
+      const transient = variant.annualTransientThermal!;
+      const rotation = variant.rotation;
+      const rpm = rotation?.mode === "fixed" ? rotation.rpm : 0;
+      const surfaceOptions = variant.continuousSurface?.surfaceOptions;
+      annualTransientRotationByVariant[variant.variantId] = simulateAnnualRotationDecomposition({
+        surface: transient.surface,
+        weather: input.weather,
+        location: input.physics?.location ?? { latitudeDeg: 37.5665, longitudeDeg: 126.978 },
+        rpm,
+        ...(variant.rotationRpmByWeatherStep === undefined
+          ? {}
+          : { rpmByWeatherStep: variant.rotationRpmByWeatherStep }),
+        initialPhaseRad: rotation?.mode === "fixed"
+          ? rotation.initialAngleRad ?? 0
+          : rotation?.angleRad ?? 0,
+        referenceEfficiency: transient.referenceEfficiency ?? variant.referenceEfficiency,
+        gammaPerC: transient.gammaPerC,
+        referenceTemperatureC: transient.referenceTemperatureC,
+        absorptivity: transient.absorptivity,
+        soilingLossFraction: surfaceOptions?.soilingLossFraction,
+        albedo: surfaceOptions?.albedo ?? input.physics?.panelDefaults?.albedo,
+        iam: surfaceOptions?.iam ?? input.physics?.panelDefaults?.iam,
+        diffuseModel: surfaceOptions?.diffuseModel ?? input.physics?.panelDefaults?.diffuseModel,
+        initialTemperatureC: transient.initialTemperatureC,
+        effectiveSkyTemperatureOffsetC: transient.effectiveSkyTemperatureOffsetC,
+        inverter: variant.inverter ?? input.physics?.inverter,
+        motorDrive: variant.motorDrive,
+        motorRpm: rpm,
+        motorRpmByWeatherStep: variant.rotationRpmByWeatherStep,
+        thermalMesh: transient.thermalNodeCount === undefined
+          ? undefined
+          : { targetNodeCount: transient.thermalNodeCount },
+        thermalConfig: {
+          ...input.physics?.thermal,
+          ...(transient.maximumThermalSubstepSeconds === undefined
+            ? {}
+            : { maximumSubstepSeconds: transient.maximumThermalSubstepSeconds }),
+        },
+        warmup: {
+          periodHours: transient.warmupPeriodHours ?? 24,
+          convergenceToleranceC: transient.warmupConvergenceToleranceC ?? 0.02,
+        },
+        reportingOffsetMinutes,
+        opticalPhaseSamples: variant.rotationPhaseSamples,
+        convectionPhaseSamples: variant.rotationPhaseSamples,
+      });
+      // One synchronous E00/E10/E01/E11 calculation cannot yet report
+      // internal progress, but cancellation is observed and the event loop is
+      // yielded between transient variants.
+      if (hooks.isCancelled?.()) throw new SimulationCancelledError();
+      await (hooks.yieldControl ?? defaultYield)();
+  }
+  const thermalModelMetadataByVariant = Object.fromEntries(input.variants.map((variant) => [
+    variant.variantId,
+    thermalModelMetadata(variant.annualTransientThermal
+      ? "annual-transient-material-state"
+      : "quasi-steady-faiman"),
+  ]));
   const workByStep = input.weather.map((weather, stepIndex) =>
     input.variants.reduce((sum, variant) => {
       const phaseCount = computeStep === computePhysicsStep
@@ -1816,7 +2265,7 @@ export async function runSimulationKernel(
           stepIndex,
           isCancelled: hooks.isCancelled,
         });
-        stepResults[variant.variantId] = normalizedStepResult(rawResult, weather);
+        stepResults[variant.variantId] = normalizedStepResult(rawResult, weather, variant);
         if (!stepResults[variant.variantId].ghiClosure.isClosed) {
           ghiClosureWarningCount += 1;
         }
@@ -1832,6 +2281,7 @@ export async function runSimulationKernel(
           stepResults,
           dcEnergyWhByVariant,
           acEnergyWhByVariant,
+          motorEnergyWhByVariant,
           surfaceRegionEnergyWhByVariant,
           reportingOffsetMinutes,
         );
@@ -1846,6 +2296,11 @@ export async function runSimulationKernel(
         acPowerWByVariant: Object.fromEntries(
           variantIds.map((id) => [id, stepResults[id].acPowerW]),
         ),
+        ...(hasMotorDrive ? {
+          motorPowerWByVariant: Object.fromEntries(
+            variantIds.map((id) => [id, stepResults[id].motorPowerW ?? 0]),
+          ),
+        } : {}),
         poaWm2ByVariant: Object.fromEntries(
           variantIds.map((id) => [id, stepResults[id].poaWm2]),
         ),
@@ -1885,9 +2340,56 @@ export async function runSimulationKernel(
   }
 
   if (hooks.isCancelled?.()) throw new SimulationCancelledError();
-  const monthlyEnergy: SimulationMonthlyEnergy[] = [...monthly.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([monthUtc, value]) => ({ monthUtc, ...value }));
+  const authoritativeEnergyPathByVariant = Object.fromEntries(input.variants.map((variant) => [
+    variant.variantId,
+    variant.annualTransientThermal ? "annual-transient-e11" : "worker-quasi-steady",
+  ])) as SimulationCompleteEvent["authoritativeEnergyPathByVariant"];
+  Object.entries(annualTransientRotationByVariant).forEach(([variantId, decomposition]) => {
+    dcEnergyWhByVariant[variantId] = decomposition.e11.dcEnergyWh;
+    acEnergyWhByVariant[variantId] = decomposition.e11.acEnergyWh;
+    motorEnergyWhByVariant[variantId] = decomposition.e11.motorEnergyWh;
+    // The row stream and region ledger are quasi-steady diagnostics. They
+    // cannot be reconciled to the authoritative transient E11 aggregate, so
+    // an empty object explicitly means region attribution is unavailable.
+    surfaceRegionEnergyWhByVariant[variantId] = {};
+  });
+  const monthlyKeys = new Set([
+    ...monthly.keys(),
+    ...Object.values(annualTransientRotationByVariant)
+      .flatMap((decomposition) => decomposition.e11.monthly.map((entry) => entry.month)),
+  ]);
+  const monthlyEnergy: SimulationMonthlyEnergy[] = [...monthlyKeys]
+    .sort((left, right) => left.localeCompare(right))
+    .map((monthUtc) => {
+      const quasiSteady = monthly.get(monthUtc) ?? {
+        dcEnergyWhByVariant: Object.fromEntries(variantIds.map((id) => [id, 0])),
+        acEnergyWhByVariant: Object.fromEntries(variantIds.map((id) => [id, 0])),
+      };
+      const dcEnergyWhByVariantForMonth = { ...quasiSteady.dcEnergyWhByVariant };
+      const acEnergyWhByVariantForMonth = { ...quasiSteady.acEnergyWhByVariant };
+      Object.entries(annualTransientRotationByVariant).forEach(([variantId, decomposition]) => {
+        const transient = decomposition.e11.monthly.find((entry) => entry.month === monthUtc);
+        dcEnergyWhByVariantForMonth[variantId] = transient?.dcEnergyWh ?? 0;
+        acEnergyWhByVariantForMonth[variantId] = transient?.acEnergyWh ?? 0;
+      });
+      return {
+        monthUtc,
+        dcEnergyWhByVariant: dcEnergyWhByVariantForMonth,
+        acEnergyWhByVariant: acEnergyWhByVariantForMonth,
+        ...(hasMotorDrive
+          ? {
+              motorEnergyWhByVariant: Object.fromEntries(variantIds.map((variantId) => {
+                const decomposition = annualTransientRotationByVariant[variantId];
+                const transient = decomposition?.e11.monthly.find((entry) => entry.month === monthUtc);
+                return [variantId, transient?.motorEnergyWh
+                  ?? quasiSteady.motorEnergyWhByVariant?.[variantId] ?? 0];
+              })),
+            }
+          : quasiSteady.motorEnergyWhByVariant === undefined
+          ? {}
+          : { motorEnergyWhByVariant: quasiSteady.motorEnergyWhByVariant }),
+      };
+    });
   const firstTime = input.weather[0].timeUtcMs;
   const lastTime = input.weather.at(-1)?.timeUtcMs ?? firstTime;
   return {
@@ -1899,7 +2401,13 @@ export async function runSimulationKernel(
     energyWhByVariant: { ...dcEnergyWhByVariant },
     dcEnergyWhByVariant,
     acEnergyWhByVariant,
+    ...(hasMotorDrive ? { motorEnergyWhByVariant } : {}),
+    authoritativeEnergyPathByVariant,
     surfaceRegionEnergyWhByVariant,
+    thermalModelMetadataByVariant,
+    ...(Object.keys(annualTransientRotationByVariant).length === 0
+      ? {}
+      : { annualTransientRotationByVariant }),
     monthlyEnergy,
     reportingOffsetMinutes,
     steps: input.weather.length,

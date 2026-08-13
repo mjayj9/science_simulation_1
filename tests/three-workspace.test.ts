@@ -152,7 +152,8 @@ describe("ThreeWorkspace land and footprint geometry", () => {
     });
     const parcel = comparisonParcelRenderGeometry(kind, model.comparison);
     expect(parcel.shape).toBe("rectangle");
-    expect(parcel.areaM2).toBeCloseTo(model.comparison.landAreaM2, 12);
+    expect(parcel.areaM2).toBeCloseTo(model.comparison.footprint.staticProjectedAreaM2, 12);
+    expect(model.comparison.landAreaM2).toBeCloseTo(model.comparison.footprint.sweptAreaM2, 12);
     expect(model.comparison.footprint.sweptAreaM2).toBeGreaterThanOrEqual(parcel.areaM2);
   });
 

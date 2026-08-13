@@ -5,6 +5,7 @@ import type { ResearchPresetId as SourceResearchPresetId } from "../lib/research
 export type ComparisonBasis = "land" | "active";
 export type ReflectorMode = "none" | "white-diffuse" | "aluminum" | "research-cup";
 export type PlaneTrackingMode = "fixed" | "single-axis" | "dual-axis";
+export type PlaneComparisonMode = "annual-optimum" | "horizontal" | "custom";
 export type ComparisonResearchPresetId = "general" | SourceResearchPresetId;
 export type ComparisonLayoutMode = "independent" | "array";
 
@@ -30,6 +31,13 @@ export interface LandComparisonSettings {
 interface Props {
   value: LandComparisonSettings;
   onChange: (next: LandComparisonSettings) => boolean;
+  officialHeightLocked?: boolean;
+  onOfficialHeightLockedChange?: (locked: boolean) => void;
+  planeMode?: PlaneComparisonMode;
+  planeTiltDeg?: number;
+  optimumPlaneTiltDeg?: number;
+  onPlaneModeChange?: (mode: PlaneComparisonMode) => void;
+  onPlaneTiltChange?: (tiltDeg: number) => void;
 }
 
 function NumericField({
@@ -82,7 +90,17 @@ function Switch({ checked, label, onChange }: { checked: boolean; label: string;
   return <button type="button" className={`land-switch ${checked ? "active" : ""}`} aria-pressed={checked} onClick={() => onChange(!checked)}><span>{checked ? <Check size={12} /> : null}</span>{label}</button>;
 }
 
-export function LandComparisonControls({ value, onChange }: Props) {
+export function LandComparisonControls({
+  value,
+  onChange,
+  officialHeightLocked = false,
+  onOfficialHeightLockedChange,
+  planeMode = "annual-optimum",
+  planeTiltDeg = 0,
+  optimumPlaneTiltDeg = 0,
+  onPlaneModeChange,
+  onPlaneTiltChange,
+}: Props) {
   const patch = (next: Partial<LandComparisonSettings>) => onChange({
     ...value,
     ...next,
@@ -100,25 +118,32 @@ export function LandComparisonControls({ value, onChange }: Props) {
 
       <div className="land-control-grid">
         <NumericField key={`land:${value.landAreaM2}`} label="공통 A_land" unit="m²" value={value.landAreaM2} min={0.0001} max={10_000} step={0.001} onChange={(landAreaM2) => patch({ landAreaM2 })} />
-        <NumericField key={`height:${value.maximumHeightM}`} label="공통 최대높이 H_max" unit="m" value={value.maximumHeightM} min={0.05} max={100} step={0.01} onChange={(maximumHeightM) => patch({ maximumHeightM })} />
-        <NumericField key={`structure:${value.structureHeightM}`} label="원기둥·원뿔 높이 H" unit="m" value={value.structureHeightM} min={0.01} max={100} step={0.01} onChange={(structureHeightM) => patch({ structureHeightM })} />
+        <NumericField key={`height:${value.maximumHeightM}`} label="공통 최대높이 H_max" unit="m" value={value.maximumHeightM} min={0.01} max={100} step={0.001} disabled={officialHeightLocked} onChange={(maximumHeightM) => patch({ maximumHeightM })} />
+        <NumericField key={`structure:${value.structureHeightM}`} label="원기둥·원뿔 높이 H" unit="m" value={value.structureHeightM} min={0.01} max={value.maximumHeightM} step={0.001} disabled={officialHeightLocked} onChange={(structureHeightM) => patch({ structureHeightM })} />
         <NumericField key={`support:${value.supportHeightM}`} label="구 지지대·지면 여유" unit="m" value={value.supportHeightM} min={0} max={100} step={0.01} onChange={(supportHeightM) => patch({ supportHeightM })} />
         <NumericField key={`albedo:${value.groundAlbedo}`} label="지면 albedo" unit="—" value={value.groundAlbedo} min={0} max={1} step={0.01} onChange={(groundAlbedo) => patch({ groundAlbedo })} />
       </div>
 
       <div className="land-select-grid">
         <label><span>반사 조건</span><select value={value.reflectorMode} onChange={(event) => patch({ reflectorMode: event.target.value as ReflectorMode })}><option value="none">반사판 없음 · 지면만</option><option value="white-diffuse">흰색 확산판</option><option value="aluminum">알루미늄판</option><option value="research-cup">연구용 반사컵</option></select></label>
-        <label><span>연구 재현 프리셋</span><select value={value.researchPresetId} onChange={(event) => patch({ researchPresetId: event.target.value as ComparisonResearchPresetId })}><option value="general">일반 비교 · 숨은 설정 없음</option><option value="research:A">A · Bernardi 3D PV</option><option value="research:B">B · El-Atab 구형 PV</option><option value="research:C">C · 구/반구 비교</option></select></label>
+        <label><span>연구 재현 프리셋</span><select value={value.researchPresetId} onChange={(event) => patch({ researchPresetId: event.target.value as ComparisonResearchPresetId })}><option value="general">일반 비교 · 숨은 설정 없음</option><option value="research:A">A · Myers 3D PV</option><option value="research:B">B · Bernardi 3D PV</option><option value="research:C">C · El-Atab 구형 PV</option><option value="research:D">D · 구/반구 비교</option></select></label>
       </div>
 
+      {onPlaneModeChange && onPlaneTiltChange ? <div className="plane-reference-control" aria-label="일반 평면 기준 자세">
+        <label><span>일반 평면 기준 자세</span><select value={planeMode} onChange={(event) => onPlaneModeChange(event.target.value as PlaneComparisonMode)}><option value="annual-optimum">서울 연간 최적 고정 경사</option><option value="horizontal">수평 평면</option><option value="custom">사용자 경사</option></select></label>
+        <NumericField key={`plane:${planeTiltDeg}`} label="적용 경사" unit="°" value={planeTiltDeg} min={0} max={90} step={0.1} disabled={planeMode !== "custom"} onChange={(tilt) => { onPlaneTiltChange(tilt); return true; }} />
+        <div><strong>{planeTiltDeg.toFixed(1)}° 적용</strong><small>{planeMode === "annual-optimum" ? `서울 ${optimumPlaneTiltDeg.toFixed(1)}° · 결정론적 연간 수치탐색` : planeMode === "horizontal" ? "수평 0° 명시 비교" : "사용자 경사 · 공식 최적 평면 기준 아님"}</small></div>
+      </div> : null}
+
       <div className="land-switches">
+        {onOfficialHeightLockedChange ? <Switch checked={officialHeightLocked} label="공식 H_max = 2√(A_land/π) 잠금" onChange={onOfficialHeightLockedChange} /> : null}
         <Switch checked={value.showParcel} label="A_land 반투명 바닥" onChange={(showParcel) => patch({ showParcel })} />
         <Switch checked={value.showSweptFootprint} label="360° swept footprint" onChange={(showSweptFootprint) => patch({ showSweptFootprint })} />
       </div>
 
       <div className="land-contract-note">
         <Ruler size={16} />
-        <span><strong>비교 형상은 각각 하나의 빈틈없는 단일 연속 PV 스킨입니다.</strong><small>A_land는 시간과 태양 위치에 무관하게 고정하고, 실제 PV 활성면적 A_PV와 순간 태양 투영면적 A_sun(t)는 형상별 결과로 분리합니다.</small></span>
+        <span><strong>비교 형상은 각각 하나의 빈틈없는 단일 연속 PV 스킨입니다.</strong><small>A_land는 시간과 태양 위치에 무관하게 고정하고, 실제 PV 활성면적 A_PV와 순간 태양 투영면적 A_sun(t)는 형상별 결과로 분리합니다. {officialHeightLocked ? "공식 순위는 H_max와 원기둥·원뿔 높이를 공통 공식에 잠급니다." : "사용자 지정 높이 결과는 탐색용이며 공식 순위에서 제외됩니다."}</small></span>
       </div>
 
       <div className="research-isolation-note"><BookOpenCheck size={15} /><span>연구 프리셋은 별도 명시 입력만 바꾸며 형상 multiplier를 사용하지 않습니다.</span><ScanLine size={14} /></div>

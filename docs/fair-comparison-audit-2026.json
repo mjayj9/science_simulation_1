@@ -1,0 +1,214 @@
+{
+  "generatedAt": "2026-08-12T08:13:23.486Z",
+  "requestFingerprints": {
+    "plane": [
+      "sim-v3-cache-v4-f1f2df516d9d1c8d",
+      "sim-v3-cache-v4-ce9e72115fcf03c5",
+      "sim-v3-cache-v4-4f0a10cff1324013",
+      "sim-v3-cache-v4-9443eb73e6a63e4f",
+      "sim-v3-cache-v4-faa1e2348297f308",
+      "sim-v3-cache-v4-8715e72e6df3a0f2",
+      "sim-v3-cache-v4-92cff2ca4d4809f6",
+      "sim-v3-cache-v4-185d0a34a4ac3b88",
+      "sim-v3-cache-v4-1d2d9ed5f4322099",
+      "sim-v3-cache-v4-2e057bcc91306338",
+      "sim-v3-cache-v4-3b084d0675e32712",
+      "sim-v3-cache-v4-0d8455d3974ba68f"
+    ],
+    "cube": [
+      "sim-v3-cache-v4-903605512124eecd",
+      "sim-v3-cache-v4-bfcb081157dd5305",
+      "sim-v3-cache-v4-adb572cf1d945cd3",
+      "sim-v3-cache-v4-80349d730e4d7c0f",
+      "sim-v3-cache-v4-f1ed74343c44a8c8",
+      "sim-v3-cache-v4-c85ea92e248ec4b2",
+      "sim-v3-cache-v4-795a08ca70ae1a36",
+      "sim-v3-cache-v4-16d1c034567b4cc8",
+      "sim-v3-cache-v4-0191a0d59d749059",
+      "sim-v3-cache-v4-1a95bdcc295f6df8",
+      "sim-v3-cache-v4-efb1e3061135b052",
+      "sim-v3-cache-v4-aa4d8bd36b694ccf"
+    ],
+    "cylinder": [
+      "sim-v3-cache-v4-fc0ff3491557ac95",
+      "sim-v3-cache-v4-ca22031907fdf9dd",
+      "sim-v3-cache-v4-1816bf773397aa8b",
+      "sim-v3-cache-v4-647c963bf94c6d67",
+      "sim-v3-cache-v4-15a99b2c6df747d0",
+      "sim-v3-cache-v4-79c4e2d6a3dabc8a",
+      "sim-v3-cache-v4-7e6327522c28576e",
+      "sim-v3-cache-v4-8d8673dc0e364460",
+      "sim-v3-cache-v4-7838d9fdcd5d3e71",
+      "sim-v3-cache-v4-d90f9954355246d0",
+      "sim-v3-cache-v4-e50ef5ceeb2286ca",
+      "sim-v3-cache-v4-e7237a5b54a7d9c7"
+    ],
+    "sphere": [
+      "sim-v3-cache-v4-169ed946ad1aa60a",
+      "sim-v3-cache-v4-635f64e221298a5e",
+      "sim-v3-cache-v4-0425f71673b811c2",
+      "sim-v3-cache-v4-adde298ae95c4bee",
+      "sim-v3-cache-v4-2335633d6caa2029",
+      "sim-v3-cache-v4-fc874377db3d13e3",
+      "sim-v3-cache-v4-02412a49b790cc4d",
+      "sim-v3-cache-v4-46ef0db373fcfe7f",
+      "sim-v3-cache-v4-7b2fb57899316d74",
+      "sim-v3-cache-v4-40ea838d9c0b33d1",
+      "sim-v3-cache-v4-292d5789e8faf13d",
+      "sim-v3-cache-v4-f3d6b6b06e14d094"
+    ],
+    "hemisphere": [
+      "sim-v3-cache-v4-3fe6b7ecb76c5728",
+      "sim-v3-cache-v4-a2ac5570942b6f34",
+      "sim-v3-cache-v4-7417aeb81d6d04dc",
+      "sim-v3-cache-v4-34ec8670f98dc43c",
+      "sim-v3-cache-v4-15370d4bd75bec8f",
+      "sim-v3-cache-v4-7d4a9fd1d2c3ef55",
+      "sim-v3-cache-v4-6694a327b187d6d3",
+      "sim-v3-cache-v4-661e557d5d256b61",
+      "sim-v3-cache-v4-8bb36aaa657c371e",
+      "sim-v3-cache-v4-15a7ee1bbf393b77",
+      "sim-v3-cache-v4-787c008f20368d2b",
+      "sim-v3-cache-v4-72d38b4e32d7ef1a"
+    ],
+    "cone": [
+      "sim-v3-cache-v4-9536c552ec64cdde",
+      "sim-v3-cache-v4-960cb036a78956ea",
+      "sim-v3-cache-v4-93ce5e9a7203e4fe",
+      "sim-v3-cache-v4-8bea52667a16fe52",
+      "sim-v3-cache-v4-e8b4f471fd43e115",
+      "sim-v3-cache-v4-4d1f72fb101c639f",
+      "sim-v3-cache-v4-29a751e5ae204fb1",
+      "sim-v3-cache-v4-d5c40577cf205ebb",
+      "sim-v3-cache-v4-830cd84c14b7a600",
+      "sim-v3-cache-v4-99460569e504dc55",
+      "sim-v3-cache-v4-905469f512727a91",
+      "sim-v3-cache-v4-a8e5932c65ad2bb8"
+    ]
+  },
+  "conditions": {
+    "year": 2026,
+    "landAreaM2": 0.05,
+    "maximumHeightM": 0.252313252202016,
+    "planeTiltDeg": 48.45177378742081,
+    "planeTiltMethod": "bounded-grid-golden-section",
+    "planeTiltObjective": "annual inverter AC after POA, Faiman temperature and temperature-adjusted DC",
+    "rotation": "static",
+    "rpm": 0,
+    "reflector": "none",
+    "albedo": 0.2,
+    "obstacles": "none",
+    "weatherProvider": "offline",
+    "weatherKind": "model-estimate; 12 representative days for report audit",
+    "representativeDatesLocal": [
+      "2026-01-15",
+      "2026-02-15",
+      "2026-03-15",
+      "2026-04-15",
+      "2026-05-15",
+      "2026-06-15",
+      "2026-07-15",
+      "2026-08-15",
+      "2026-09-15",
+      "2026-10-15",
+      "2026-11-15",
+      "2026-12-15"
+    ],
+    "optimizationWeatherSeed": "240521",
+    "auditWeatherSeeds": "240521-audit-{1..12}",
+    "thermalModel": "Faiman steady-state in representative-day time-series kernel"
+  },
+  "rows": [
+    {
+      "shape": "plane",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.252313252202016,
+      "activeAreaM2": 0.07538633073600218,
+      "pvLandRatio": 1.5077266147200437,
+      "annualAcKWh": 28.830764476852803,
+      "kWhPerLandM2": 576.6152895370561,
+      "kWhPerPvM2": 382.44021423215554,
+      "averageSurfaceTemperatureC": 26.392822451475,
+      "maximumSurfaceTemperatureC": 59.43450476040513
+    },
+    {
+      "shape": "cube",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.22360679774997896,
+      "activeAreaM2": 0.25,
+      "pvLandRatio": 5,
+      "annualAcKWh": 39.21001052801281,
+      "kWhPerLandM2": 784.2002105602562,
+      "kWhPerPvM2": 156.84004211205124,
+      "averageSurfaceTemperatureC": 22.351505851725243,
+      "maximumSurfaceTemperatureC": 38.784787963834155
+    },
+    {
+      "shape": "cylinder",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.252313252202016,
+      "activeAreaM2": 0.24999999999999997,
+      "pvLandRatio": 5,
+      "annualAcKWh": 39.2616356384915,
+      "kWhPerLandM2": 785.2327127698301,
+      "kWhPerPvM2": 157.04654255396602,
+      "averageSurfaceTemperatureC": 22.325742393085388,
+      "maximumSurfaceTemperatureC": 38.06219001270534
+    },
+    {
+      "shape": "sphere",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.252313252202016,
+      "activeAreaM2": 0.19999999999999998,
+      "pvLandRatio": 4,
+      "annualAcKWh": 36.570222822111816,
+      "kWhPerLandM2": 731.4044564422364,
+      "kWhPerPvM2": 182.8511141105591,
+      "averageSurfaceTemperatureC": 21.76285234631628,
+      "maximumSurfaceTemperatureC": 37.2619272941564
+    },
+    {
+      "shape": "hemisphere",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.126156626101008,
+      "activeAreaM2": 0.09999999999999999,
+      "pvLandRatio": 2,
+      "annualAcKWh": 26.550127472394696,
+      "kWhPerLandM2": 531.002549447894,
+      "kWhPerPvM2": 265.501274723947,
+      "averageSurfaceTemperatureC": 23.402474186091347,
+      "maximumSurfaceTemperatureC": 44.17470062737274
+    },
+    {
+      "shape": "cone",
+      "landAreaM2": 0.049999999999999996,
+      "footprintIndex": 100,
+      "heightM": 0.252313252202016,
+      "activeAreaM2": 0.11180339887498948,
+      "pvLandRatio": 2.23606797749979,
+      "annualAcKWh": 28.502778365618862,
+      "kWhPerLandM2": 570.0555673123773,
+      "kWhPerPvM2": 254.93659989253652,
+      "averageSurfaceTemperatureC": 22.98737106236874,
+      "maximumSurfaceTemperatureC": 41.06229336978704
+    }
+  ],
+  "cylinderRegions": {
+    "top": {
+      "dcEnergyWh": 18794.667406676224,
+      "acEnergyWh": 12025.22541876677
+    },
+    "lateral": {
+      "dcEnergyWh": 39867.246246417235,
+      "acEnergyWh": 27236.410219724723
+    }
+  },
+  "tests": {
+    "absoluteAndLandRankIdentical": true
+  }
+}

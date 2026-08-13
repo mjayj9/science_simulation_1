@@ -41,6 +41,7 @@ import {
   type SimulationKernelInput,
   type SimulationPhysicsStepResult,
   type SimulationProgressEvent,
+  type SimulationResultRow,
   type SimulationWorkerEvent,
 } from "../src/workers";
 
@@ -135,8 +136,8 @@ function continuousCylinderInput(times: number[]): SimulationKernelInput {
 
 describe("annual worker protocol", () => {
   it("creates a deterministic fingerprint and fingerprint-bound cancel request", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(3);
-    expect(SIMULATION_CACHE_VERSION).toBe(3);
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(4);
+    expect(SIMULATION_CACHE_VERSION).toBe(5);
     const start = Date.UTC(2026, 0, 1);
     const input = baseInput([start, start + 3_600_000]);
     const cloned = structuredClone(input);
@@ -172,7 +173,7 @@ describe("annual worker protocol", () => {
     expect(isSimulationEventStale({ ...currentEvent, fingerprint: "old" }, run)).toBe(true);
   });
 
-  it("fingerprints every continuous geometry/material/rotation input under cache v3", () => {
+  it("fingerprints every continuous geometry/material/rotation input under cache v5", () => {
     const start = Date.UTC(2026, 5, 21, 3);
     const input = continuousCylinderInput([start, start + 3_600_000]);
     const baseline = simulationInputFingerprint(input);
@@ -188,6 +189,10 @@ describe("annual worker protocol", () => {
       (copy) => { copy.variants[0].continuousSurface!.samples[0].areaM2 += 0.001; },
       (copy) => { copy.variants[0].continuousSurface!.surfaceOptions!.albedo = 0.3; },
       (copy) => { copy.variants[0].rotation = { mode: "static", angleRad: 0.2 }; },
+      (copy) => {
+        copy.variants[0].rotation = { mode: "fixed", rpm: 3 };
+        copy.variants[0].motorDrive = { requiredTorqueNm: 0.01, motorEfficiency: 0.8 };
+      },
       (copy) => { copy.variants[0].electrical = { mode: "simple", aggregateLossFraction: 0.01 }; },
     ];
     mutations.forEach((mutate) => {
@@ -195,7 +200,7 @@ describe("annual worker protocol", () => {
       mutate(copy);
       expect(simulationInputFingerprint(copy)).not.toBe(baseline);
     });
-    expect(baseline).toMatch(/^sim-v3-cache-v3-/);
+    expect(baseline).toMatch(/^sim-v4-cache-v5-/);
   });
 
   it("serializes authoritative comparison quadrature as absolute-area worker samples", () => {
@@ -1599,6 +1604,38 @@ describe("annual physics kernel", () => {
     expect(firstInterval.rotationIntervalAveraged).toBe(true);
     expect(intervalFlags).toEqual([true, false]);
     expect(complete.dcEnergyWhByVariant.plane).toBeCloseTo(firstInterval.dcPowerW, 10);
+  });
+
+  it("subtracts external motor demand from AC and reports its power/energy audit", async () => {
+    const start = Date.UTC(2026, 5, 21, 3);
+    const baselineInput = baseInput([start, start + 3_600_000]);
+    baselineInput.variants[0].rotation = { mode: "fixed", rpm: 30, initialAngleRad: 0 };
+    const baseline = await runSimulationKernel(
+      createSimulationRunRequest("motor-baseline", baselineInput),
+      { yieldControl: async () => undefined },
+    );
+    const input = structuredClone(baselineInput);
+    const variant = input.variants[0];
+    variant.motorDrive = { requiredTorqueNm: 0.02, motorEfficiency: 0.8 };
+    const motorPowerW = 0.02 * Math.PI / 0.8;
+    const rows: SimulationResultRow[] = [];
+    const complete = await runSimulationKernel(
+      createSimulationRunRequest("motor-ac-deduction", input),
+      {
+        onChunk: (event) => { rows.push(...event.rows); },
+        yieldControl: async () => undefined,
+      },
+    );
+    expect(rows[0].motorPowerWByVariant?.plane).toBeCloseTo(motorPowerW, 12);
+    expect(rows[0].acPowerWByVariant.plane).toBeCloseTo(
+      Math.max(0, baseline.acEnergyWhByVariant.plane - motorPowerW),
+      12,
+    );
+    expect(complete.acEnergyWhByVariant.plane).toBeCloseTo(
+      Math.max(0, baseline.acEnergyWhByVariant.plane - motorPowerW),
+      12,
+    );
+    expect(complete.motorEnergyWhByVariant?.plane).toBeCloseTo(motorPowerW, 12);
   });
 
   it("integrates DC and AC across UTC month boundaries and reports real progress", async () => {
