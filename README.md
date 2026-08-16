@@ -26,7 +26,7 @@
 
 ## 요구 환경
 
-- Node.js `>=22.13.0`
+- Node.js `>=22.13.0 <25.0.0` (배포 시 고정 버전은 [`.node-version`](.node-version))
 - WebGL 2와 Web Worker를 지원하는 최신 데스크톱 브라우저
 - npm
 
@@ -81,7 +81,7 @@ npm run lint        # 정적 코드 검사
 npm test            # 단위 테스트 → 배포 빌드 → 서버 렌더 제품 스모크 테스트
 ```
 
-루트 `vitest.config.ts`는 Cloudflare 배포용 `vite.config.ts`와 테스트 그래프를 분리합니다. 제품 스모크 테스트는 빌드된 worker가 한국어 UI와 제품 제목을 서버 렌더하는지, 일회용 스타터 스켈레톤이 남지 않았는지 확인합니다.
+루트 `vitest.config.ts`는 배포용 `vite.config.ts`와 테스트 그래프를 분리합니다. 제품 스모크 테스트는 빌드된 서버 엔트리가 한국어 UI와 제품 제목을 서버 렌더하는지, 일회용 스타터 스켈레톤이 남지 않았는지, 그리고 엔트리의 모양과 배포 산출물이 선택한 `DEPLOY_TARGET`과 일치하는지 확인합니다.
 
 핵심 자동 검증에는 여섯 형상의 면적지수·높이·활성면적, swept footprint, 구의 직달 투영 항등식, 회전 광학 불변성, 토크평형 RPM, 무장치 축대칭 RPM 0, 모터 AC 차감, 과도 열 에너지 보존·시간간격 수렴, 계절 선택, 연구 프리셋 격리, worker cache/stale 차단이 포함됩니다. 기존 패널·회로·기상·저장 회귀도 함께 실행됩니다.
 
@@ -89,6 +89,7 @@ npm test            # 단위 테스트 → 배포 빌드 → 서버 렌더 제�
 
 ```text
 app/                    vinext 페이지, 메타데이터, 전역 스타일
+build/                  배포 대상 선택과 Sites 패키징 Vite 플러그인
 src/ui/                 한국어 제품 UI, Three.js 작업공간, 회로 캔버스
 src/lib/physics/        태양·복사·준정상/과도 열·PV·회로·인버터·회전 코어
 src/lib/geometry/       연속 비교 표면, 형상 프리셋, OBB, ray visibility
@@ -107,4 +108,53 @@ tests/                  Vitest 공학 계약과 빌드 후 HTML 스모크 테스
 
 ## 배포
 
-프로젝트는 기존 `vinext()`, Sites, Cloudflare Vite 플러그인 구성을 유지하고 Cloudflare Worker 호환 ESM을 생성합니다. 배포 전 `npm test`가 모두 통과해야 합니다. 외부 기상 호출은 브라우저에서 이루어지므로 실제 배포 origin의 CORS와 네트워크 정책을 별도로 스모크 테스트하세요.
+이 앱은 React Server Components로 서버 렌더링되므로 **정적 사이트로 호스팅할 수 없습니다**. 빌드 산출물에 `index.html`이 없고, 페이지 셸을 만들어 주는 Node 서버가 항상 떠 있어야 합니다. 물리 계산 자체는 브라우저의 Web Worker에서 돌기 때문에 서버는 계산 부하를 지지 않습니다.
+
+빌드 대상은 `DEPLOY_TARGET` 환경변수가 결정하며 기본값은 `node`입니다. 두 대상은 서로 호환되지 않는 서버 엔트리를 만들기 때문에 값을 하나만 고르며, 알 수 없는 값은 빌드 시작 전에 예외를 던집니다.
+
+| `DEPLOY_TARGET` | `dist/server/index.js` | 실행 방법 |
+|---|---|---|
+| `node` (기본) | `(request) => Response` 핸들러 | `node dist/standalone/server.js` 또는 `npm start` |
+| `cloudflare` | `{ fetch(request, env, ctx) }` Worker 모듈 | `npx @vinext/cloudflare deploy` |
+
+### Render
+
+저장소 루트의 [`render.yaml`](render.yaml)이 블루프린트입니다. Render 대시보드에서 이 저장소를 연결하면 그대로 읽습니다.
+
+```text
+buildCommand: npm ci --include=dev && npm run build
+startCommand: node dist/standalone/server.js
+```
+
+- `--include=dev`는 생략할 수 없습니다. Vite·vinext·TypeScript가 모두 `devDependencies`에 있고, Render는 `NODE_ENV=production`으로 설치를 돌릴 수 있어 그대로 두면 빌드가 실패합니다.
+- 실행에 쓰는 `dist/standalone/`은 필요한 런타임 패키지를 자체 `node_modules`에 복사해 갖고 있습니다. 따라서 빌드 후 dev 패키지가 정리되더라도 서비스는 뜹니다.
+- `dist/standalone/server.js`는 `PORT`를 읽고 `0.0.0.0`에 바인딩합니다. Render의 요구사항과 그대로 맞습니다. 바인드 주소를 바꾸려면 `HOST`를 씁니다(Next.js standalone의 `HOSTNAME`이 아닙니다).
+- Node 버전은 [`.node-version`](.node-version)이 고정합니다.
+- `plan: free`로 되어 있습니다. 무료 인스턴스는 메모리가 작아 Three.js를 포함한 클라이언트 번들 빌드에서 실패할 수 있습니다. 빌드가 메모리 부족으로 죽으면 `starter` 이상으로 올리세요.
+
+### 그 밖의 Node 호스트
+
+`render.yaml`에 묶인 것은 없습니다. 같은 두 명령이면 어디서든 동작합니다.
+
+```bash
+npm ci --include=dev
+npm run build
+node dist/standalone/server.js   # PORT, HOST 환경변수를 읽습니다
+```
+
+### Cloudflare Workers
+
+이전 배포 경로도 그대로 남아 있습니다.
+
+```bash
+npm run build:cloudflare
+npx @vinext/cloudflare deploy
+```
+
+이 대상에서는 `worker/index.ts`가 엔트리가 되고 `dist/server/wrangler.json`이 생성되며, `dist/standalone/`은 만들지 않습니다.
+
+### 배포 전 확인
+
+`npm test`가 모두 통과해야 합니다. 스모크 테스트는 빌드된 엔트리의 모양이 선택한 대상과 일치하는지, `node` 대상이면 `render.yaml`이 실행하는 standalone 번들이 실제로 생성됐는지까지 확인합니다.
+
+외부 기상 호출은 브라우저에서 이루어지므로 실제 배포 origin의 CORS와 네트워크 정책은 별도로 스모크 테스트하세요. 실패하면 앱은 오프라인 모델 추정값으로 전환하고 그 이유를 provenance에 남깁니다. 사용자 쪽은 WebGL 2와 Web Worker를 지원하는 데스크톱 브라우저여야 하며 권장 최소 화면 폭은 1280px입니다.

@@ -1,25 +1,59 @@
 import assert from "node:assert/strict";
 import { access, readFile, readdir } from "node:fs/promises";
 import test from "node:test";
+import { resolveDeployTarget } from "../build/deploy-target.ts";
 
+const target = resolveDeployTarget();
+
+/**
+ * Invoke the built server entry the way its target runtime would.
+ *
+ * The two targets emit incompatible entries: the Node build's default export is
+ * a bare `(request) => Response` handler, while the Cloudflare build's is a
+ * Worker module wrapping it as `{ fetch(request, env, ctx) }` and reading an
+ * `ASSETS` fetcher off `env`. Which one is on disk is decided by DEPLOY_TARGET
+ * at build time.
+ *
+ * The shape is asserted against the configured target rather than sniffed and
+ * accommodated. Accepting whichever entry happens to be there would let a build
+ * made for the wrong runtime pass this smoke test and fail on the host instead.
+ */
 async function render(pathname = "/") {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
-  const { default: worker } = await import(workerUrl.href);
-  const response = await worker.fetch(
-    new Request(new URL(pathname, "http://localhost"), {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
+  const entryUrl = new URL("../dist/server/index.js", import.meta.url);
+  entryUrl.searchParams.set("test", `${process.pid}-${Date.now()}-${Math.random()}`);
+  const { default: entry } = await import(entryUrl.href);
+  const request = new Request(new URL(pathname, "http://localhost"), {
+    headers: { accept: "text/html" },
+  });
+
+  let response;
+  if (target === "cloudflare") {
+    assert.equal(
+      typeof entry?.fetch,
+      "function",
+      "cloudflare build must default-export a Worker module exposing fetch()",
+    );
+    response = await entry.fetch(
+      request,
+      {
+        ASSETS: {
+          fetch: async () => new Response("Not found", { status: 404 }),
+        },
       },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
+      {
+        waitUntil() {},
+        passThroughOnException() {},
+      },
+    );
+  } else {
+    assert.equal(
+      typeof entry,
+      "function",
+      "node build must default-export a (request) => Response handler",
+    );
+    response = await entry(request);
+  }
+
   const html = await response.text();
   return { response, html };
 }
@@ -92,4 +126,38 @@ test("source tree contains product metadata and no disposable starter", async ()
   await access(new URL("../src/workers/simulation.worker.ts", import.meta.url));
   await access(new URL("../docs/modeling-research.md", import.meta.url));
   await access(new URL("../docs/architecture.md", import.meta.url));
+});
+
+/**
+ * The Render blueprint boots `node dist/standalone/server.js`. Nothing else in
+ * the suite touches that file, so without this check the deployment could break
+ * — `output: "standalone"` dropped from next.config, the bundle's private
+ * node_modules no longer emitted — while every other gate stayed green, and the
+ * failure would first appear as a crash loop on the host.
+ */
+test("node target emits the standalone bundle render.yaml starts", async (t) => {
+  if (target !== "node") {
+    t.skip(`DEPLOY_TARGET=${target} does not emit standalone output`);
+    return;
+  }
+
+  const standalone = new URL("../dist/standalone/", import.meta.url);
+  await access(new URL("server.js", standalone));
+  await access(new URL("dist/client/", standalone));
+  await access(new URL("dist/server/index.js", standalone));
+  // Carrying its own vinext copy is the reason the running service does not
+  // depend on devDependencies surviving the build.
+  await access(new URL("node_modules/vinext/package.json", standalone));
+
+  const [server, blueprint] = await Promise.all([
+    readFile(new URL("server.js", standalone), "utf8"),
+    readFile(new URL("../render.yaml", import.meta.url), "utf8"),
+  ]);
+
+  // Render assigns the port and requires a non-loopback bind.
+  assert.match(server, /process\.env\.PORT/);
+  assert.match(server, /0\.0\.0\.0/);
+  assert.match(blueprint, /startCommand:\s*node dist\/standalone\/server\.js/);
+  // Vite and vinext are devDependencies; an install that omits them cannot build.
+  assert.match(blueprint, /buildCommand:.*--include=dev/);
 });

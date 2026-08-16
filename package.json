@@ -3,12 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.13.0 <25.0.0"
   },
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:cloudflare": "node scripts/build-target.mjs cloudflare",
     "start": "vinext start",
+    "start:standalone": "node dist/standalone/server.js",
     "test": "npm run test:unit && npm run build && npm run test:smoke",
     "test:unit": "vitest run --config vitest.config.ts",
     "test:smoke": "node --test tests/rendered-html.test.mjs",
