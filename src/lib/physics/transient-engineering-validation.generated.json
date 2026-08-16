@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-08-16T05:06:42.985Z",
+  "generatedAtUtc": "2026-08-16T12:45:26.234Z",
   "status": "running-or-failed",
   "artifactSchemaVersion": 1,
   "artifactPath": "docs/transient-engineering-full-year-audit-2026.json",
   "artifactSha256": "",
   "meshAuditPath": "docs/engineering-mesh-convergence-audit-2026.json",
-  "meshAuditSha256": "ee52a7d519a37266062f66dc030b0d939c0039aa2969806dc5263f52781f5f2e",
+  "meshAuditSha256": "",
   "thermalAuditPath": "docs/annual-transient-audit-2026.json",
-  "thermalAuditSha256": "a8efe836d6bf5c1f3d9e86237b945c4c614af6bdbaa1ab7e9136e4abbe308540",
-  "implementationSha256": "5d9b343b3b828e03c18a2b97ed37bc0ba2d8b0d7361c8adca3a4073b841bb3c6",
-  "configurationSha256": "c39b8648f6260c3b0bd4c9280ed239a19e716057748b19236bd4eacbc8ce4cbf",
+  "thermalAuditSha256": "",
+  "implementationSha256": "",
+  "configurationSha256": "",
   "year": 2025,
   "coverage": {
     "points": 8761,
@@ -31,15 +31,15 @@
         "circuitSamples": 256
       },
       "layoutIdByShape": {
-        "plane": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:plane-skin:0.057735026919:24:5:0:1|activeAreaM2=0.057735026919|nominalCellAreaM2=0.0025|cells=24|parallel=2|bypass=10",
-        "cube": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cube-face-1:0.05:20:4:0:1,1:cube-face-2:0.05:20:4:0:1,2:cube-face-3:0.05:20:4:0:1,3:cube-face-4:0.05:20:4:0:1,4:cube-face-5:0.05:20:4:0:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
-        "sphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:sphere-skin:0.2:80:9:0:1|activeAreaM2=0.2|nominalCellAreaM2=0.0025|cells=80|parallel=2|bypass=10",
-        "hemisphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:hemisphere-skin:0.1:40:6:0:1|activeAreaM2=0.1|nominalCellAreaM2=0.0025|cells=40|parallel=2|bypass=10",
-        "cylinder": "surface-spatial-clipped-cell-grid-v2|coordinate=global-area-u|zones=0:cylinder-top:0.05:20:4:0:0.2,1:cylinder-side:0.2:80:9:0.2:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
-        "cone": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cone-skin:0.111803398875:45:7:0:1|activeAreaM2=0.111803398875|nominalCellAreaM2=0.0025|cells=45|parallel=2|bypass=10"
+        "plane": "",
+        "cube": "",
+        "cylinder": "",
+        "sphere": "",
+        "hemisphere": "",
+        "cone": ""
       },
-      "pass": true,
-      "officialEligible": true
+      "pass": false,
+      "officialEligible": false
     },
     {
       "contractId": "swept-rotation-envelope",
@@ -49,19 +49,19 @@
       "validatedResolution": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "layoutIdByShape": {
-        "plane": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:plane-skin:0.0367552596948:15:4:0:1|activeAreaM2=0.0367552596948|nominalCellAreaM2=0.0025|cells=15|parallel=2|bypass=10",
-        "cube": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cube-face-1:0.0318309886184:13:4:0:1,1:cube-face-2:0.0318309886184:13:4:0:1,2:cube-face-3:0.0318309886184:13:4:0:1,3:cube-face-4:0.0318309886184:13:4:0:1,4:cube-face-5:0.0318309886184:13:4:0:1|activeAreaM2=0.159154943092|nominalCellAreaM2=0.0025|cells=65|parallel=2|bypass=10",
-        "sphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:sphere-skin:0.2:80:9:0:1|activeAreaM2=0.2|nominalCellAreaM2=0.0025|cells=80|parallel=2|bypass=10",
-        "hemisphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:hemisphere-skin:0.1:40:6:0:1|activeAreaM2=0.1|nominalCellAreaM2=0.0025|cells=40|parallel=2|bypass=10",
-        "cylinder": "surface-spatial-clipped-cell-grid-v2|coordinate=global-area-u|zones=0:cylinder-top:0.05:20:4:0:0.2,1:cylinder-side:0.2:80:9:0.2:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
-        "cone": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cone-skin:0.111803398875:45:7:0:1|activeAreaM2=0.111803398875|nominalCellAreaM2=0.0025|cells=45|parallel=2|bypass=10"
+        "plane": "",
+        "cube": "",
+        "cylinder": "",
+        "sphere": "",
+        "hemisphere": "",
+        "cone": ""
       },
-      "pass": true,
-      "officialEligible": true
+      "pass": false,
+      "officialEligible": false
     }
   ],
   "validatedMinimumResolution": {
@@ -107,37 +107,37 @@
       "plane": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "cube": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "cylinder": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "sphere": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "hemisphere": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       },
       "cone": {
         "azimuthSamples": 32,
         "meridionalSegments": 16,
-        "phaseSamples": 8,
+        "phaseSamples": 16,
         "circuitSamples": 256
       }
     }
@@ -260,6 +260,6 @@
     "controlled": [],
     "natural": []
   },
-  "layoutVersion": "surface-spatial-clipped-cell-grid-v2",
+  "layoutVersion": "surface-spatial-uniform-cell-grid-v3",
   "officialRankingEligible": false
 }

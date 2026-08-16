@@ -49,11 +49,40 @@ const meshValidationGatePath = "src/lib/physics/engineering-mesh-validation.gene
 const idealAuditPath = "docs/full-year-comparison-audit-2026.json";
 const thermalAuditPath = "docs/annual-transient-audit-2026.json";
 const baselineFixturePath = "tests/fixtures/d9ff14a-ideal-annual-baseline.json";
-const checkpointPath = "docs/.transient-engineering-full-year-audit-checkpoint.json";
 const validationGatePath = "src/lib/physics/transient-engineering-validation.generated.json";
 const preflightOnly = process.argv.includes("--preflight-only");
 const requestedShapesArgument = process.argv.find((argument) => argument.startsWith("--shapes="))
   ?.slice("--shapes=".length);
+/**
+ * Restricts which rotation modes a partial run computes. Static and natural
+ * share one calculation — natural is exact 0 RPM reuse of the static case — and
+ * a stationary case needs no phase quadrature, so it costs an eighth of a
+ * controlled case at the certified resolution. Narrowing to `static` therefore
+ * answers the stationary and natural rankings far sooner than a full run, while
+ * still leaving the official gate fail-closed like any other partial run.
+ */
+const requestedRotationArgument = process.argv.find((argument) => argument.startsWith("--rotation="))
+  ?.slice("--rotation=".length) ?? "all";
+if (!["all", "static", "controlled"].includes(requestedRotationArgument)) {
+  throw new Error("--rotation must be one of all, static, controlled.");
+}
+const runControlledCases = requestedRotationArgument !== "static";
+const runStaticCases = requestedRotationArgument !== "controlled";
+/** Any narrowing makes the run partial, so the official gate stays closed. */
+const partialRun = requestedShapesArgument !== undefined || requestedRotationArgument !== "all";
+/**
+ * Partial runs get their own checkpoint so several shape subsets can execute
+ * concurrently. A single shared path would let the last writer erase the other
+ * processes' completed tasks, because each holds the whole checkpoint in memory.
+ * Only a complete run uses the canonical path.
+ */
+const partialCheckpointKey = [
+  requestedShapesArgument === undefined ? "" : `shapes-${requestedShapesArgument.replaceAll(/[^a-z,]/gi, "")}`,
+  requestedRotationArgument === "all" ? "" : `rotation-${requestedRotationArgument}`,
+].filter((part) => part !== "").join(".");
+const checkpointPath = partialCheckpointKey === ""
+  ? "docs/.transient-engineering-full-year-audit-checkpoint.json"
+  : `docs/.transient-engineering-full-year-audit-checkpoint.${partialCheckpointKey}.json`;
 
 const SCHEMA_VERSION = 1;
 const COMPUTATION_SCHEMA_VERSION = 1;
@@ -453,10 +482,36 @@ function sha256File(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+/**
+ * Publishes a file by rename so a reader never observes a partial write.
+ *
+ * Concurrent partial runs all invalidate the shared gate at startup, and on
+ * Windows two simultaneous renames onto one target fail with EPERM. Those writes
+ * are byte-identical, so losing the race is harmless provided the winner wrote
+ * what we wanted: retry briefly, then accept an on-disk file that already
+ * matches. This keeps the fail-closed guarantee without serialising the runs. A
+ * real permission or disk fault still throws, because the fallback only returns
+ * when the intended bytes are actually present.
+ */
 function atomicWriteFile(path: string, contents: string): void {
   const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
   writeFileSync(temporaryPath, contents, "utf8");
-  renameSync(temporaryPath, path);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(temporaryPath, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const contended = code === "EPERM" || code === "EACCES" || code === "EBUSY";
+      if (contended && existsSync(path) && readFileSync(path, "utf8") === contents) {
+        try { unlinkSync(temporaryPath); } catch { /* best effort */ }
+        return;
+      }
+      if (!contended || attempt >= 20) throw error;
+      const until = Date.now() + 25;
+      while (Date.now() < until) { /* short synchronous backoff */ }
+    }
+  }
 }
 
 function invalidValidationGate(): Record<string, unknown> {
@@ -1122,7 +1177,7 @@ function validationGate(
     officialRankingEligible: status === "pass",
   };
 }
-if (!preflightOnly && requestedShapesArgument === undefined) {
+if (!preflightOnly && !partialRun) {
   atomicWriteFile(validationGatePath, `${JSON.stringify(
     validationGate("running-or-failed", "", new Date().toISOString()), null, 2,
   )}\n`);
@@ -1797,7 +1852,7 @@ const thermalMeshPass = requestedShapes.length === SHAPES.length
 const factorialPass = requestedShapes.length === SHAPES.length
   && Object.values(factorialByShape).every((entry) => entry.closurePass);
 
-if (requestedShapesArgument !== undefined) {
+if (partialRun) {
   const partialPrecheckPass = Object.values(couplingByShape).every((entry) => entry.pass)
     && Object.values(thermalMeshByShape).every((entry) => entry.pass)
     && Object.values(factorialByShape).every((entry) => entry.closurePass);
@@ -1810,19 +1865,29 @@ if (requestedShapesArgument !== undefined) {
   const quasiControlled = {} as Record<ComparisonShapeKind, QuasiCaseSummary>;
   let cylinderWorkerParity: WorkerFullYearParitySummary | undefined;
   for (const shape of requestedShapes) {
-    annualStatic[shape] = runAnnualStaticCase(shape);
-    annualControlled[shape] = runAnnualControlledCase(shape);
-    if (!annualStatic[shape].validationPass || !annualControlled[shape].validationPass) {
-      throw new Error(`${shape} partial actual-8760 transient engineering case failed.`);
+    if (runStaticCases) {
+      annualStatic[shape] = runAnnualStaticCase(shape);
+      if (!annualStatic[shape].validationPass) {
+        throw new Error(`${shape} partial actual-8760 static transient engineering case failed.`);
+      }
+      quasiStatic[shape] = await cachedAsync(`quasi:static:${shape}`, () =>
+        runQuasiWorkerCase(shape, "static"));
+      if (!quasiStatic[shape].validationPass) {
+        throw new Error(`${shape} partial same-contract static quasi engineering case failed.`);
+      }
     }
-    quasiStatic[shape] = await cachedAsync(`quasi:static:${shape}`, () =>
-      runQuasiWorkerCase(shape, "static"));
-    quasiControlled[shape] = await cachedAsync(`quasi:controlled:${shape}`, () =>
-      runQuasiWorkerCase(shape, "controlled"));
-    if (!quasiStatic[shape].validationPass || !quasiControlled[shape].validationPass) {
-      throw new Error(`${shape} partial same-contract quasi engineering case failed.`);
+    if (runControlledCases) {
+      annualControlled[shape] = runAnnualControlledCase(shape);
+      if (!annualControlled[shape].validationPass) {
+        throw new Error(`${shape} partial actual-8760 controlled transient engineering case failed.`);
+      }
+      quasiControlled[shape] = await cachedAsync(`quasi:controlled:${shape}`, () =>
+        runQuasiWorkerCase(shape, "controlled"));
+      if (!quasiControlled[shape].validationPass) {
+        throw new Error(`${shape} partial same-contract controlled quasi engineering case failed.`);
+      }
     }
-    if (shape === "cylinder") {
+    if (shape === "cylinder" && runStaticCases) {
       cylinderWorkerParity = await cachedAsync("worker-parity:cylinder:static:8760", () =>
         runWorkerFullYearParity(annualStatic.cylinder));
       if (!cylinderWorkerParity.pass) throw new Error("Cylinder partial Worker parity failed.");
