@@ -2,6 +2,13 @@ import type {
   EngineeringArtifactRankingMode,
   generatedEngineeringOfficialRankingArtifact,
 } from "./engineering-official-ranking";
+import {
+  PROVISIONAL_STATIC_RANKING,
+  PROVISIONAL_STATIC_RANKING_PROVENANCE,
+  PROVISIONAL_RANKING_STATUS_KO,
+  provisionalPvAreaRanking,
+  provisionalRankLabelKo,
+} from "./provisional-static-ranking";
 
 const ARTIFACT_MODE_LABELS: Record<EngineeringArtifactRankingMode, string> = {
   static: "\uC815\uC9C0 0 RPM",
@@ -118,6 +125,69 @@ export function EngineeringComparisonResults({
           <p className="comparison-condition-note">{"\uAC80\uC99D \uC0B0\uCD9C\uBB3C gate\uAC00 pass\uAC00 \uC544\uB2C8\uBBC0\uB85C \uACF5\uC2DD \uC21C\uC704\uB97C \uD45C\uC2DC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4."}</p>
         )}
         <footer className="chart-provenance"><strong>artifact provenance</strong><span>{artifact.artifactPath} / SHA-256 {artifact.artifactSha256 || "not published"} / {artifact.provenance}</span></footer>
+      </section>
+
+      <section className="surface-card preliminary-diagnosis" aria-label="잠정 정지 순위 측정값">
+        <div className="panel-heading">
+          <div>
+            <h3>잠정 정지·자연 순위 — 결합 경로 측정값</h3>
+            <p>
+              실제 8,760시간을 지속 과도 열상태와 직렬·병렬·바이패스 회로로 적분한 값입니다.
+              계산 자체는 공식 경로와 동일하지만 <strong>통제회전 모드가 빠진 부분 실행</strong>이므로
+              감사 게이트는 닫혀 있고, 아래 번호는 공식 순위가 아닙니다.
+            </p>
+          </div>
+          <strong>{PROVISIONAL_RANKING_STATUS_KO}</strong>
+        </div>
+        <div className="diagnosis-table-wrap">
+          <table className="diagnosis-table">
+            <thead>
+              <tr>
+                <th>토지 생산성 순위</th><th>형상</th><th>A_PV</th><th>연간 순 AC</th>
+                <th>kWh/m²-land</th><th>kWh/m²-PV</th><th>연결 손실</th><th>평균 T</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PROVISIONAL_STATIC_RANKING.map((row) => (
+                <tr key={`provisional-land:${row.shape}`}>
+                  <td>{provisionalRankLabelKo(row.rank)}</td>
+                  <th>{row.shape}</th>
+                  <td>{row.activePvAreaM2.toFixed(6)} m²</td>
+                  <td>{row.netAcKWhYear.toFixed(4)} kWh/year</td>
+                  <td>{row.kWhPerLandM2Year.toFixed(3)}</td>
+                  <td>{row.kWhPerPvM2Year.toFixed(3)}</td>
+                  <td>{(row.connectionLossFraction * 100).toFixed(2)}%</td>
+                  <td>{row.averageTemperatureC.toFixed(1)} °C</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="comparison-condition-note">
+          PV 면적당 생산성은 순위가 거의 뒤집힙니다:{" "}
+          {provisionalPvAreaRanking()
+            .map((row, index) => `${index + 1}. ${row.shape} ${row.kWhPerPvM2Year.toFixed(1)}`)
+            .join(" · ")}
+          . 평면은 직렬 셀이 모두 같은 각도로 빛을 받아 연결 손실이 0.33%에 그치는 반면,
+          곡면은 가장 어두운 셀이 전류를 제한해 32~43%를 잃습니다.
+        </p>
+        <footer className="chart-provenance">
+          <strong>측정 provenance</strong>
+          <span>
+            {PROVISIONAL_STATIC_RANKING_PROVENANCE.measuredAtUtc}
+            {" / "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.runScope}
+            {" / "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.rotationModes}
+            {" / 기상: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.weatherSource}
+            {" / 시간: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.timeResolution}
+            {" / 기하: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.geometryContract}
+            {" / 전기: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.electricalModel}
+            {" / 열: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.thermalModel}
+            {" / 해상도: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.numericalResolution}
+            {" / 수렴: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.convergence}
+            {" / 게이트: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.gateStatus}
+            {" / 공식화 조건: "}{PROVISIONAL_STATIC_RANKING_PROVENANCE.missingForOfficial}
+          </span>
+        </footer>
       </section>
       <section className="surface-card preliminary-diagnosis" aria-label="이상적 local MPP와 공학적 전기 연결 비교">
         <div className="panel-heading">
