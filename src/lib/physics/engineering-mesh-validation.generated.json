@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "generatedAt": "2026-08-16T10:50:46.420Z",
+  "artifactSchemaVersion": 2,
+  "artifactPath": "docs/engineering-mesh-convergence-audit-2026.json",
+  "artifactSha256": "b006db374e09be3537df95862ccff29461147a75336dee12646398c6c628b755",
+  "configurationSha256": "eb37c98787766bee3e67a3e15583954f5cad2f890387a25361181bd3f93b25d4",
+  "implementationSha256": "7dd7c055d17f8484ba4266fa988a868caecf81cde9128b1faa0b12e4a847056e",
+  "officialMinimumResolution": {
+    "azimuthSamples": 32,
+    "meridionalSegments": 16,
+    "phaseSamples": 16,
+    "circuitSamples": 256
+  },
+  "layoutVersion": "surface-spatial-uniform-cell-grid-v3",
+  "contracts": [
+    {
+      "contractId": "static-land-matched",
+      "footprintMode": "static",
+      "phaseGateRequired": false,
+      "pass": true,
+      "shapes": [
+        {
+          "shape": "plane",
+          "pass": true
+        },
+        {
+          "shape": "cube",
+          "pass": true
+        },
+        {
+          "shape": "sphere",
+          "pass": true
+        },
+        {
+          "shape": "hemisphere",
+          "pass": true
+        },
+        {
+          "shape": "cylinder",
+          "pass": true
+        },
+        {
+          "shape": "cone",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "contractId": "swept-rotation-envelope",
+      "footprintMode": "swept",
+      "phaseGateRequired": true,
+      "pass": true,
+      "shapes": [
+        {
+          "shape": "plane",
+          "pass": true
+        },
+        {
+          "shape": "cube",
+          "pass": true
+        },
+        {
+          "shape": "sphere",
+          "pass": true
+        },
+        {
+          "shape": "hemisphere",
+          "pass": true
+        },
+        {
+          "shape": "cylinder",
+          "pass": true
+        },
+        {
+          "shape": "cone",
+          "pass": true
+        }
+      ]
+    }
+  ],
+  "officialRankingEligible": true
+}

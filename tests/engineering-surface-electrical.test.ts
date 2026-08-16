@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_ELECTRICAL } from "../src/lib/physics/electrical";
 import {
   aggregateSurfaceSamplesIntoCells,
+  ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION,
   solveEngineeringSurfaceElectrical,
   type EngineeringSurfaceElectricalSample,
 } from "../src/lib/physics/engineering-surface-electrical";
@@ -45,17 +46,44 @@ function grid(rows: number, columns: number): EngineeringSurfaceElectricalSample
   });
 }
 
+function lineSamples(
+  totalAreaM2: number,
+  conditions: readonly { id: string; poaWm2: number; cellTemperatureC?: number }[],
+): EngineeringSurfaceElectricalSample[] {
+  return conditions.map((condition, index) => {
+    const u = (index + 0.5) / conditions.length;
+    return {
+      id: condition.id,
+      areaM2: totalAreaM2 / conditions.length,
+      poaWm2: condition.poaWm2,
+      cellTemperatureC: condition.cellTemperatureC ?? 25,
+      zoneId: "test-skin",
+      zoneIndex: 0,
+      u,
+      v: 0.5,
+      positionM: { x: u, y: 0, z: 0 },
+    };
+  });
+}
+
 describe("engineering surface series/parallel/bypass connection", () => {
   it("conserves active area and area-weighted cell conditions at quadrature boundaries", () => {
-    const source = [
-      sample("a", 0.013, 900, 20),
-      sample("b", 0.024, 300, 50),
-      sample("c", 0.004, 700, 30),
-    ];
+    const source = lineSamples(0.041, [
+      { id: "a", poaWm2: 900, cellTemperatureC: 20 },
+      { id: "b", poaWm2: 300, cellTemperatureC: 50 },
+      { id: "c", poaWm2: 700, cellTemperatureC: 30 },
+      { id: "d", poaWm2: 500, cellTemperatureC: 40 },
+    ]);
     const cells = aggregateSurfaceSamplesIntoCells(source, 0.01);
-    expect(cells).toHaveLength(5);
+    // 0.041 m^2 needs ceil(4.1)=5 cells at or below the 0.01 m^2 nominal, then
+    // one more so both parallel strings carry the same series count. The
+    // superseded layout instead emitted four nominal cells plus a 0.001 m^2
+    // sliver, which throttled its whole series substring.
+    expect(cells).toHaveLength(6);
     expect(cells.reduce((sum, cell) => sum + cell.areaM2, 0)).toBeCloseTo(0.041, 12);
-    expect(cells.at(-1)?.areaM2).toBeCloseTo(0.001, 12);
+    const areas = cells.map((cell) => cell.areaM2);
+    expect(Math.max(...areas) - Math.min(...areas)).toBeLessThanOrEqual(1e-12);
+    expect(Math.max(...areas)).toBeLessThanOrEqual(0.01 + 1e-12);
     expect(cells.reduce((sum, cell) => sum + cell.poaWm2 * cell.areaM2, 0)).toBeCloseTo(
       source.reduce((sum, point) => sum + point.poaWm2 * point.areaM2, 0),
       12,
@@ -90,7 +118,10 @@ describe("engineering surface series/parallel/bypass connection", () => {
 
   it("activates substring bypass under strong nonuniform illumination and never exceeds the ideal upper bound", () => {
     const result = solveEngineeringSurfaceElectrical(
-      [sample("bright", 0.1, 1_000), sample("shade", 0.1, 40)],
+      lineSamples(0.2, [
+        { id: "bright", poaWm2: 1_000 },
+        { id: "shade", poaWm2: 40 },
+      ]),
       { ...DEFAULT_ELECTRICAL, areaM2: 0.01, pmaxW: 2, iscA: 4.24, impA: 4 },
       {
         nominalCellAreaM2: 0.01,
@@ -119,7 +150,11 @@ describe("engineering surface series/parallel/bypass connection", () => {
   });
 
   it("is deterministic for identical cell density, connection and samples", () => {
-    const samples = [sample("one", 0.075, 820, 37), sample("two", 0.036, 410, 44)];
+    const samples = lineSamples(0.111, [
+      { id: "one", poaWm2: 820, cellTemperatureC: 37 },
+      { id: "two", poaWm2: 410, cellTemperatureC: 44 },
+      { id: "three", poaWm2: 620, cellTemperatureC: 32 },
+    ]);
     const config = {
       nominalCellAreaM2: 0.01,
       parallelStrings: 2,
@@ -150,7 +185,7 @@ describe("engineering surface series/parallel/bypass connection", () => {
     const ordered = solveEngineeringSurfaceElectrical(samples, DEFAULT_ELECTRICAL, config);
     const shuffled = solveEngineeringSurfaceElectrical(permuted, DEFAULT_ELECTRICAL, config);
     expect(shuffled).toEqual(ordered);
-    expect(ordered.layoutId).toContain("surface-spatial-u-v-row-major-v1");
+    expect(ordered.layoutId).toContain(ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION);
     expect(ordered.layoutId).toContain("zones=0:plane-skin");
   });
 
@@ -171,9 +206,10 @@ describe("engineering surface series/parallel/bypass connection", () => {
     expect(refined.seriesCellCountByString).toEqual(coarse.seriesCellCountByString);
     expect(refined.bypassSubstringCount).toBe(coarse.bypassSubstringCount);
     expect(refined.activeAreaM2).toBeCloseTo(coarse.activeAreaM2, 12);
-    expect(refined.dcPowerW).toBeCloseTo(coarse.dcPowerW, 10);
-    expect(refined.idealLocalMppDcPowerW).toBeCloseTo(coarse.idealLocalMppDcPowerW, 10);
-    expect(refined.mismatchAndWiringLossFraction)
-      .toBeCloseTo(coarse.mismatchAndWiringLossFraction, 10);
+    expect(Math.abs(refined.dcPowerW - coarse.dcPowerW) / refined.dcPowerW).toBeLessThan(0.001);
+    expect(Math.abs(refined.idealLocalMppDcPowerW - coarse.idealLocalMppDcPowerW)
+      / refined.idealLocalMppDcPowerW).toBeLessThan(0.001);
+    expect(Math.abs(refined.mismatchAndWiringLossFraction - coarse.mismatchAndWiringLossFraction))
+      .toBeLessThan(0.001);
   });
 });

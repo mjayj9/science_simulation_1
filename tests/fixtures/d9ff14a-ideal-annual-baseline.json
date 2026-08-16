@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "baselineCommit": "d9ff14abc6c4bec6217ca38ef45f1f499377d83c",
+  "sourceArtifact": "docs/full-year-comparison-audit-2026.json",
+  "sourceArtifactSha256AtBaseline": "e447ef56a859596756b6717616cde03174704dfd6fd3cf87e22b25f61140cb62",
+  "sourceArtifactSchemaVersion": 2,
+  "configurationFingerprint": "057fd3875d7b4f54d911ee7d1e7635f6bbb78579c381eb419d3ae7c2cb7d1e51",
+  "implementationFingerprint": "bef7d5621d827949da54783dce1615860618aa90ff5c6d0a4070cf682067888a",
+  "relativeTolerance": 0.001,
+  "contract": "Actual-clock 2025 offline-model-estimate, 8760 intervals plus closing endpoint; values are immutable pre-RC local-MPP transient E11 references and are never used as calibration targets.",
+  "staticLandMatchedAcKWhYear": {
+    "plane": 13.601257383989608,
+    "cube": 39.72850722512647,
+    "cylinder": 40.07255865933409,
+    "sphere": 27.41687898980288,
+    "hemisphere": 17.69258752013026,
+    "cone": 19.250082086768305
+  },
+  "controlledMotorNetAcKWhYear": {
+    "plane": 6.510508190577407,
+    "cube": 24.55241504686802,
+    "cylinder": 40.11401604710236,
+    "sphere": 27.448043084342487,
+    "hemisphere": 17.71861469873412,
+    "cone": 19.285720813785197
+  }
+}

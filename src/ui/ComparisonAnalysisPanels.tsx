@@ -10,6 +10,7 @@ import {
   Sun,
   ThermometerSun,
 } from "lucide-react";
+import { comparisonRankPrefix } from "./comparison-rank-label";
 
 export type ComparisonRotationMode = "static" | "fixed" | "auto";
 
@@ -436,10 +437,10 @@ export function RankExplanationPanel({ rows, officialComparison }: { rows: Shape
   return (
     <section className="surface-card rank-explanation" aria-labelledby="rank-explanation-title">
       <div className="analysis-panel-heading">
-        <div><BarChart3 size={18} /><span><strong id="rank-explanation-title">왜 이 형상이 이 순위인가?</strong><small>형상 multiplier 없이 현재 계산 원장과 공정 기준 형상을 나란히 봅니다.</small></span></div>
-        <label className="rank-shape-select"><span>분석 형상</span><select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>{rows.map((row) => <option key={row.id} value={row.id}>#{row.rank} {row.label}</option>)}</select></label>
+        <div><BarChart3 size={18} /><span><strong id="rank-explanation-title">{officialComparison ? "왜 이 형상이 이 순위인가?" : "형상별 탐색 신호"}</strong><small>형상 multiplier 없이 현재 계산 원장과 공정 기준 형상을 나란히 봅니다.</small></span></div>
+        <label className="rank-shape-select"><span>분석 형상</span><select value={selected.id} onChange={(event) => setSelectedId(event.target.value)}>{rows.map((row) => <option key={row.id} value={row.id}>{comparisonRankPrefix(officialComparison, row.rank)}{row.label}</option>)}</select></label>
       </div>
-      <div className="rank-summary"><strong>#{selected.rank} · {selected.label}</strong><span>{finite(selected.annualKWh, 3)} kWh/year</span><small>{selected.comparedWith} 기준 신호 · {officialComparison ? "공식 비교" : "탐색 비교(공식 순위 제외)"}</small></div>
+      <div className="rank-summary"><strong>{officialComparison ? `#${selected.rank} · ` : ""}{selected.label}</strong><span>{finite(selected.annualKWh, 3)} kWh/year</span><small>{selected.comparedWith} 기준 신호 · {officialComparison ? "공식 비교" : "탐색값 · 순위 판정 불가"}</small></div>
       <div className="driver-grid">
         {selected.drivers.map((driver) => <article className={`rank-driver ${driver.tone}`} key={driver.id}><span>{driver.label}</span><strong>{driver.value}</strong><small>{driver.explanation}</small></article>)}
       </div>

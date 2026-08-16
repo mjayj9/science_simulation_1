@@ -44,6 +44,8 @@ worker wire contract는 protocol v5, 계산 cache는 v6다. fingerprint에는 �
 - `local-mpp-area-integral`: 각 미소면이 독립 MPPT를 갖는 이상적 연속막 상한이다. 전압·전류 mismatch, bypass와 배선 손실이 없는 이론적 상한으로만 해석한다.
 - `explicit-series-parallel-bypass`: 동일한 명목 셀 면적 밀도로 셀을 만들고, 셀 직렬·스트링 병렬·bypass substring·배선 저항을 명시해 공통 I–V 운전점을 푼다. 제조사별 실제 레이아웃은 아니지만 local-MPP와 동일한 결과로 표시하지 않는다.
 
+공식 공학 연결은 광학 구적점 순서로 셀을 다시 만드는 대신 material-space 셀 경계를 고정하고 경계 셀을 정확히 clipping한다. 광학망·회전 위상·회로 표본 해상도가 달라져도 셀 ID, 직렬/병렬/bypass topology와 총 활성면적은 바뀌지 않아야 한다. `static-land-matched`는 정지/자연 0 RPM의 정적 footprint 계약이고, `swept-rotation-envelope`는 통제 회전의 swept footprint 및 위상 적분 계약이다. 두 계약이 독립 수렴 감사를 통과한 경우에만 공학 연결 순위를 공식으로 연다.
+
 두 경로 모두 전체 DC를 합친 뒤 공통 인버터를 한 번 적용한다. 고정 RPM이 능동 모터 구동이면 `P_motor=τ|ω|/η_motor`를 gross AC에서 차감하고 net AC는 0 아래로 내리지 않는다. 풍력으로 생긴 전기는 계산하지 않는다.
 
 ## 열 모델 계약
@@ -55,7 +57,9 @@ worker wire contract는 protocol v5, 계산 cache는 v6다. fingerprint에는 �
 
 annual transient variant의 authoritative period energy는 complete event의 E11이다. streamed per-weather rows는 계속 준정상 진단이므로 authoritative transient 연간값과 혼합하지 않는다. E00/E10/E01/E11로 `optical`, `thermal`, `interaction`, `net`을 월별·연간 계산하고 2×2 항등식 폐합을 검사한다.
 
-현재 annual transient opt-in은 연속표면 local-MPP에 한정된다. `explicit-series-parallel-bypass`, 외부 장애물, plane tracking과 함께 요청하면 입력 검증에서 거부한다. 이 조합은 임의의 준정상값으로 대체하지 않는다.
+공식 공학 연결 연간 경로는 `기상·태양위치 -> 형상별 POA -> 회전 상대풍과 지속 과도온도 -> 온도별 셀 I-V -> 직렬·병렬·bypass -> 인버터 -> 모터 차감 -> 월간·연간 net AC`를 한 계산으로 실행한다. 셀 또는 전기 구역의 온도와 일사가 실제 회로 입력으로 전달되며 준정상 온도로 fallback하지 않는다. 정지와 자연 0 RPM은 `static-land-matched`, 통제 회전은 `swept-rotation-envelope` geometry contract를 사용한다.
+
+이 결합 경로는 장애물 없음, world-Y 세로축 회전, 고정 자세 평면을 지원한다. 외부 장애물과 plane tracking은 실행 전에 거부하며 계산된 것처럼 표시하지 않는다. 별도의 이상적 local-MPP annual transient 경로와 결합 공학 경로의 결과는 서로 다른 provenance로 유지한다.
 
 ## 회전 모델 계약
 
@@ -78,6 +82,7 @@ src/lib/geometry/comparison-surfaces.ts       공정 형상·면적·구적
 src/lib/physics/continuous-surface.ts         연속표면 광학·전기 계산
 src/lib/physics/engineering-surface-electrical.ts
                                                명시적 셀·스트링·bypass 연결
+src/lib/physics/circuit.ts                      온도·일사별 셀 I-V와 공통 회로 운전점
 src/lib/physics/annual-transient.ts           지속 열상태와 E00/E10/E01/E11
 src/lib/physics/natural-rotation.ts           형상별 동역학과 시간가중 RPM
 src/workers/protocol.ts                       protocol v5/cache v6 결과 계약
@@ -91,6 +96,10 @@ src/ui/SimulatorClient.tsx                    입력 snapshot·worker·결과 �
 
 - [통합 생성 검증 보고서](generated-validation-report-2026.md)
 - [실제 전년 비교 감사](full-year-comparison-audit-2026.md)
+- [공학 연결 mesh 수렴 감사](engineering-mesh-convergence-audit-2026.md)
+- [과도 열 + 공학 회로 실제 전년 감사](transient-engineering-full-year-audit-2026.md)
+- [공학 mesh compact gate](../src/lib/physics/engineering-mesh-validation.generated.json)
+- [과도 열 + 공학 회로 compact gate](../src/lib/physics/transient-engineering-validation.generated.json)
 - [공정 기하 감사](fair-geometry-audit-2026.md)
 - [연간 과도 열 감사](annual-transient-audit-2026.json)
 - [준정상·과도 열 비교](thermal-model-comparison-audit-2026.md)
@@ -98,3 +107,9 @@ src/ui/SimulatorClient.tsx                    입력 snapshot·worker·결과 �
 - [1차 출처 재현 감사](research-source-equivalent-audit.md)
 
 적용 범위와 미지원 조합은 [알려진 한계](known-limitations.md)를 따른다.
+
+## RC UI / Worker performance evidence (2026-08-15)
+
+The production manifest, rather than source-level import declarations, is the measurement authority. The initial route contains `index` 176,751 B, `framework` 190,152 B, and the runtime 694 B: 367,597 B total. This is 1,267,588 B (77.52%) below the recorded 1,635,185 B baseline. Screen-level `Suspense` boundaries keep SimulatorClient (379,270 B), charts (384,837 B), circuit editor (178,018 B), ThreeWorkspace (66,000 B), GLTFLoader (44,280 B), and analysis (32,297 B) outside that initial graph. Named Three.js imports reduce its shared core to 569,080 B, but it remains the only client chunk above 500 kB; it is lazy-only. It is not split artificially because a cyclic vendor split would increase runtime risk without reducing initial-route bytes.
+
+The controlled production-circuit hot-path benchmark reuses the audited cylinder L0 fixture (swept footprint, spring-morning irradiance, phase pi/4, circuitSamples=256). Across 15 alternating repetitions, rebuilding the physical layout on every solve had a 13.9954 ms median; reusing the stable prebuilt layout had an 11.3918 ms median (1.22855x). The maximum relative DC result difference was exactly 0 and both result sequences had SHA-256 `eedfc7897df52614b4ac10efb6ce749f7ca2f7153e6d0f90a41f9f88c3423dcc`. [`layout-reuse-result-invariance.test.ts`](../tests/layout-reuse-result-invariance.test.ts) is the permanent numerical regression. Wall time is performance evidence, not a pass gate. The older d9ff14a seasonal cylinder fixture and the RC six-shape mesh audit are not workload-equivalent, so their aggregate elapsed times are not presented as a speedup.

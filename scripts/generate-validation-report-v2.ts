@@ -8,6 +8,10 @@ import {
   assertValidationReportLocalLinksExist,
   renderValidationArtifactLinks,
   validateAnnualAudit,
+  validateEngineeringMeshAudit,
+  validateEngineeringMeshGate,
+  validateTransientEngineeringAudit,
+  validateTransientEngineeringGate,
   validateGeometryAudit,
   validateNaturalAudit,
   validateResearchAudit,
@@ -15,6 +19,7 @@ import {
   validateThermalComparisonAudit,
   type AnnualGroup,
   type AnnualResolution,
+  type TransientEngineeringRankingRow,
 } from "./validation-report-contract";
 
 const manifest = readJsonFile("docs/validation-audit-manifest-2026.json") as ValidationAuditManifest;
@@ -29,6 +34,14 @@ const natural = validateNaturalAudit(readJsonFile("docs/natural-rotation-audit-2
 const thermal = validateThermalAudit(readJsonFile("docs/annual-transient-audit-2026.json"));
 const thermalCompare = validateThermalComparisonAudit(readJsonFile("docs/thermal-model-comparison-audit-2026.json"));
 const research = validateResearchAudit(readJsonFile("docs/research-source-equivalent-audit.json"));
+const engineeringMesh = validateEngineeringMeshAudit(readJsonFile("docs/engineering-mesh-convergence-audit-2026.json"));
+const engineeringMeshGate = validateEngineeringMeshGate(
+  readJsonFile("src/lib/physics/engineering-mesh-validation.generated.json"), engineeringMesh,
+);
+const transientEngineering = validateTransientEngineeringAudit(
+  readJsonFile("docs/transient-engineering-full-year-audit-2026.json"), engineeringMesh,
+);
+const transientEngineeringGate = validateTransientEngineeringGate(readJsonFile("src/lib/physics/transient-engineering-validation.generated.json"), transientEngineering, engineeringMesh);
 
 function markdownCell(value: string): string {
   return value.replaceAll("|", "\\|").replaceAll(/\r?\n/g, " ");
@@ -42,6 +55,14 @@ function groupFamily(group: AnnualGroup): string {
 
 function formatResolution(value: AnnualResolution): string {
   return `azimuth=${value.azimuthSamples}, meridional=${value.meridionalSegments}, phase=${value.phaseSamples}, circuit=${value.circuitSamples}`;
+}
+
+function officialRowResolution(row: TransientEngineeringRankingRow): string {
+  const contractId = String(row.provenance.footprintMethod);
+  if (contractId !== "static-land-matched" && contractId !== "swept-rotation-envelope") {
+    throw new Error(`Unsupported official geometry contract: ${contractId}`);
+  }
+  return formatResolution(transientEngineeringGate.validatedMinimumResolution[contractId][row.shape]);
 }
 
 type ExtendedConvergence = {
@@ -63,6 +84,13 @@ type ExtendedConvergence = {
 
 const extendedEngineering = annual.convergenceGate.engineering.extendedCylinder as ExtendedConvergence;
 const engineeringAnnualResolution = formatResolution(annual.convergenceGate.lowResolution);
+const officialCombinedCoverage = transientEngineering.coverage.annual as {
+  points: number; intervals: number; durationHours: number; closingEndpointPresent: boolean;
+};
+const officialUnsupported = transientEngineering.unsupportedMatrix as Record<
+  "obstacle" | "verticalRotation" | "planeTracking",
+  { supported: boolean; reason: string }
+>;
 
 const lines: string[] = [
   "# Generated engineering validation report",
@@ -74,9 +102,12 @@ const lines: string[] = [
   `- Fair geometry: ${geometry.rows.length}/${geometry.rows.length} cases passed instantaneous projection, swept occupation, and installed-world-height checks.`,
   `- Annual comparison: ${String(annual.conditions.intervals)} actual hourly intervals plus one closing endpoint; no representative-day scaling.`,
   `- Official ideal local-MPP convergence: ${annual.convergenceGate.officialIdealPass ? "PASS" : "FAIL"}.`,
-  `- Engineering connection convergence: ${annual.convergenceGate.engineeringRankingVerdict.toUpperCase()}; official ranking eligible = ${annual.convergenceGate.engineeringOfficialRankingEligible ? "yes" : "no"}. Reason: ${markdownCell(annual.convergenceGate.engineeringReason)}`,
-  `- Overall dual-model convergence gate: ${annual.convergenceGate.pass ? "PASS" : "FAIL"}; this does not invalidate the separately passing official ideal upper-bound result.`,
-  `- Engineering annual values are exploratory calculations at the audit low resolution (${engineeringAnnualResolution}). The extended cylinder evidence uses ${formatResolution(extendedEngineering.selectedResolution)} versus ${formatResolution(extendedEngineering.referenceResolution)} and remains ${extendedEngineering.pass ? "PASS" : "FAIL"}; it is not the annual-row resolution.`,
+  `- Official engineering mesh gate: ${engineeringMeshGate.status.toUpperCase()}; ${engineeringMesh.geometryContracts.length} geometry contracts, ${engineeringMesh.geometryContracts.reduce((sum, contract) => sum + contract.shapes.length, 0)} shape-contract cases; official eligible = ${engineeringMeshGate.officialRankingEligible ? "yes" : "no"}.`,
+  `- Official transient + engineering full-year gate: ${transientEngineeringGate.status.toUpperCase()}; ${officialCombinedCoverage.intervals} actual intervals plus closing endpoint; official eligible = ${transientEngineeringGate.officialRankingEligible ? "yes" : "no"}.`,
+  `- Validated coupled settings: thermal nodes=${transientEngineeringGate.validatedCoupledSettings.thermalNodeCount}, thermal substep<=${transientEngineeringGate.validatedCoupledSettings.maximumThermalSubstepSeconds}s, electrical coupling<=${transientEngineeringGate.validatedCoupledSettings.maximumElectricalCouplingStepSeconds}s.`,
+  `- Legacy annual engineering exploratory gate: ${annual.convergenceGate.engineeringRankingVerdict.toUpperCase()}; official eligible = ${annual.convergenceGate.engineeringOfficialRankingEligible ? "yes" : "no"}. Reason: ${markdownCell(annual.convergenceGate.engineeringReason)}`,
+  `- Legacy exploratory dual-model gate: ${annual.convergenceGate.pass ? "PASS" : "FAIL"}; it does not control the new mesh-certified coupled ranking.`,
+  `- Legacy engineering values below remain exploratory at ${engineeringAnnualResolution}. The old extended cylinder fixture uses ${formatResolution(extendedEngineering.selectedResolution)} versus ${formatResolution(extendedEngineering.referenceResolution)} and is ${extendedEngineering.pass ? "PASS" : "FAIL"}; it is excluded from official ranking.`,
   "- Wind-generated electricity is excluded. Active-motor demand is deducted from inverter AC and net generation is clipped at zero.",
   "- Ideal local-MPP integration is an upper bound; explicit series/parallel/bypass wiring is reported as a separate engineering model.",
   "- Natural rotation with no source-backed C_Q starts at and remains at exactly 0 RPM. User-C_Q auxiliary-rotor sensitivity is excluded from official ranks when full footprint, height, and shadow accounting is absent.",
@@ -92,7 +123,28 @@ const lines: string[] = [
   "|---|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|",
   `| ${markdownCell(extendedEngineering.fixture)} | ${formatResolution(extendedEngineering.selectedResolution)} | ${formatResolution(extendedEngineering.referenceResolution)} | ${extendedEngineering.selectedWh.toFixed(6)} | ${extendedEngineering.referenceWh.toFixed(6)} | ${extendedEngineering.selectedSampleCount} | ${extendedEngineering.referenceSampleCount} | ${(100 * extendedEngineering.relativeDifference).toFixed(6)}% | ${(100 * extendedEngineering.tolerance).toFixed(6)}% | ${extendedEngineering.pass ? "pass" : "fail"} | ${extendedEngineering.dayOffsets.join(", ")} | ${extendedEngineering.elapsedMs.toFixed(3)} |`,
   "",
-  "## Actual full-year comparison groups",
+  "### Official engineering mesh v2: independent optical, phase, and circuit gates",
+  "",
+  "| Geometry contract | Shape | Optical level | Resolution | A_PV m2 | Layout | AC Wh | Delta from prior | Gate |",
+  "|---|---|---|---|---:|---|---:|---:|---|",
+  ...engineeringMesh.geometryContracts.flatMap((contract) => contract.shapes.flatMap((shape) => shape.levels.map((level, index) => {
+    const delta = index === 0 ? undefined : shape.consecutiveDeltas[index - 1];
+    return `| ${contract.contractId} | ${shape.shape} | ${level.levelId} | ${formatResolution(level.resolution)} | ${level.activeAreaM2.toFixed(9)} | ${level.layoutId} | ${level.acWh.toFixed(9)} | ${delta ? `${(100 * delta.relativeDifference).toFixed(6)}%` : "-"} | ${shape.opticalMeshPass ? "pass" : "fail"} |`;
+  }))),
+  "",
+  "| Geometry contract | Shape | Phase levels / status | Consecutive deltas | Phase gate | Circuit levels | Consecutive deltas | Circuit gate | Official eligible |",
+  "|---|---|---|---|---|---|---|---|---|",
+  ...engineeringMesh.geometryContracts.flatMap((contract) => contract.shapes.map((shape) => {
+    const phase = shape.phaseConvergence.required
+      ? shape.phaseConvergence.levels.map((level) => level.phaseSamples).join(" / ")
+      : shape.phaseConvergence.status;
+    const phaseDeltas = shape.phaseConvergence.consecutiveDeltas.map((delta) => `${(100 * delta.relativeDifference).toFixed(6)}%`).join(" / ") || "N/A";
+    const circuitLevels = shape.circuitConvergence.levels.map((level) => level.circuitSamples).join(" / ");
+    const circuitDeltas = shape.circuitConvergence.consecutiveDeltas.map((delta) => `${(100 * delta.relativeDifference).toFixed(6)}%`).join(" / ");
+    return `| ${contract.contractId} | ${shape.shape} | ${phase} | ${phaseDeltas} | ${shape.phaseConvergence.pass ? "pass" : "fail"} | ${circuitLevels} | ${circuitDeltas} | ${shape.circuitConvergence.pass ? "pass" : "fail"} | ${shape.officialEligible ? "yes" : "no"} |`;
+  })),
+  "",
+  "## Legacy actual full-year comparison groups (exploratory engineering retained for provenance)",
   "",
 ];
 
@@ -107,13 +159,43 @@ for (const group of annual.groups) {
     "",
     `| ${orderLabel} | Shape | A_land | A_PV | A_PV/A_land | Gross AC kWh/y | Motor kWh/y | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation | Weather/time |`,
     "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|---|",
-    ...group.rows.map((row, index) => `| ${index + 1} | ${row.shape} | ${row.landAreaM2.toFixed(4)} | ${row.activePvAreaM2.toFixed(4)} | ${row.pvLandRatio.toFixed(3)} | ${row.grossAcKWhYear.toFixed(6)} | ${row.motorKWhYear.toFixed(6)} | ${row.acKWhYear.toFixed(6)} | ${row.kWhPerLandM2Year.toFixed(6)} | ${row.kWhPerPvM2Year.toFixed(6)} | ${markdownCell(row.electricalModel)} | ${markdownCell(row.thermalModel)} | ${markdownCell(row.geometryContract)} | ${markdownCell(row.rotationModel)} | ${markdownCell(row.weatherSource)}; ${markdownCell(row.timeResolution)} |`),
+    ...group.rows.map((row, index) => `| ${group.officialRankingEligible ? index + 1 : "not-ranked"} | ${row.shape} | ${row.landAreaM2.toFixed(4)} | ${row.activePvAreaM2.toFixed(4)} | ${row.pvLandRatio.toFixed(3)} | ${row.grossAcKWhYear.toFixed(6)} | ${row.motorKWhYear.toFixed(6)} | ${row.acKWhYear.toFixed(6)} | ${row.kWhPerLandM2Year.toFixed(6)} | ${row.kWhPerPvM2Year.toFixed(6)} | ${markdownCell(row.electricalModel)} | ${markdownCell(row.thermalModel)} | ${markdownCell(row.geometryContract)} | ${markdownCell(row.rotationModel)} | ${markdownCell(row.weatherSource)}; ${markdownCell(row.timeResolution)} |`),
+    "",
+  );
+}
+
+for (const mode of ["static", "controlled", "natural"] as const) {
+  const group = transientEngineering.rankings[mode];
+  const certifiedRows = transientEngineeringGate.officialRankings[mode];
+  lines.push(
+    `## Official transient + engineering annual ranking: ${mode}`,
+    "",
+    `Official: ${group.official && transientEngineeringGate.officialRankingEligible ? "yes" : "no"}; compact gate rows are authoritative and are exact-checked against the full audit. Full-year coupled path: POA -> persistent transient temperature -> cell I-V -> series/parallel/bypass -> inverter -> motor deduction.`,
+    "",
+    "| Rank | Shape | A_land m2 | A_PV m2 | A_PV/A_land | Ideal local-MPP DC kWh/y | Engineering DC kWh/y | Mismatch+wiring kWh/y | Gross AC kWh/y | Motor kWh/y | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Layout | Geometry/rotation/electrical/thermal/resolution/status | Weather/time |",
+    "|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
+    ...certifiedRows.map((certifiedRow) => {
+      const row = group.rows.find((candidate) => candidate.shape === certifiedRow.shape);
+      if (!row) throw new Error(`Full official audit is missing compact gate row ${mode}/${certifiedRow.shape}.`);
+      return `| ${certifiedRow.rank} | ${certifiedRow.shape} | ${certifiedRow.landAreaM2.toFixed(6)} | ${certifiedRow.activePvAreaM2.toFixed(6)} | ${(certifiedRow.activePvAreaM2 / certifiedRow.landAreaM2).toFixed(6)} | ${row.idealLocalMppDcKWhYear.toFixed(6)} | ${row.dcKWhYear.toFixed(6)} | ${row.mismatchAndWiringLossKWhYear.toFixed(6)} | ${row.grossAcKWhYear.toFixed(6)} | ${row.motorKWhYear.toFixed(6)} | ${certifiedRow.netAcKWhYear.toFixed(6)} | ${certifiedRow.kWhPerLandM2Year.toFixed(6)} | ${certifiedRow.kWhPerPvM2Year.toFixed(6)} | ${markdownCell(certifiedRow.layoutId)} | ${markdownCell(String(row.provenance.footprintMethod))}; ${markdownCell(String(row.provenance.rotationModel))}; ${markdownCell(String(row.provenance.electricalModel))}; ${markdownCell(String(row.provenance.thermalModel))}; ${officialRowResolution(row)}; convergence=pass; ${certifiedRow.status} | ${markdownCell(String(row.provenance.weatherSource))}; ${markdownCell(String(row.provenance.timeResolution))} |`;
+    }),
     "",
   );
 }
 
 lines.push(
-  "## Ideal local-MPP upper bound versus engineering connection",
+  "## Official ideal local-MPP DC upper bound versus engineering circuit DC",
+  "",
+  "These are same-row, same-geometry, same-weather transient calculations. The difference is explicit series/parallel/bypass mismatch plus wiring loss; it is not an AC efficiency comparison.",
+  "",
+  "| Mode | Shape | Ideal local-MPP DC kWh/y | Engineering DC kWh/y | Loss kWh/y | Engineering / ideal |",
+  "|---|---|---:|---:|---:|---:|",
+  ...(["static", "controlled", "natural"] as const).flatMap((mode) => transientEngineering.rankings[mode].rows.map((row) => `| ${mode} | ${row.shape} | ${row.idealLocalMppDcKWhYear.toFixed(6)} | ${row.dcKWhYear.toFixed(6)} | ${row.mismatchAndWiringLossKWhYear.toFixed(6)} | ${(100 * row.dcKWhYear / row.idealLocalMppDcKWhYear).toFixed(6)}% |`)),
+  "",
+);
+
+lines.push(
+  "## Legacy exploratory ideal local-MPP versus engineering connection",
   "",
   "Only groups with the same geometry, rotation, thermal, weather, and time contracts are paired. Engineering values and their order remain exploratory because the engineering convergence gate failed; they are not official ranks.",
   "",
@@ -176,6 +258,14 @@ lines.push(
   `| Static | ${thermalCompare.quasiSteady.staticAcEnergyWh.toFixed(6)} | ${thermalCompare.transient.staticAcEnergyWh.toFixed(6)} | ${thermalCompare.differences.staticTransientMinusQuasiWh.toFixed(6)} | ${thermalCompare.differences.staticTransientMinusQuasiPercent.toFixed(6)}% |`,
   `| Controlled RPM | ${thermalCompare.quasiSteady.rotatingAcEnergyWh.toFixed(6)} | ${thermalCompare.transient.rotatingAcEnergyWh.toFixed(6)} | ${thermalCompare.differences.rotatingTransientMinusQuasiWh.toFixed(6)} | ${thermalCompare.differences.rotatingTransientMinusQuasiPercent.toFixed(6)}% |`,
   "",
+  "## Same-contract quasi-steady versus transient + engineering circuit",
+  "",
+  "Both sides use the mesh-certified engineering connection and actual 8760-hour weather; only the thermal state model changes.",
+  "",
+  "| Mode | Shape | Quasi-steady net AC kWh/y | Transient net AC kWh/y | Transient - quasi kWh/y | Difference |",
+  "|---|---|---:|---:|---:|---:|",
+  ...(["static", "controlled", "natural"] as const).flatMap((mode) => transientEngineering.rankings[mode].rows.map((row) => `| ${mode} | ${row.shape} | ${row.quasiSteadyEngineeringNetAcKWhYear.toFixed(6)} | ${row.netAcKWhYear.toFixed(6)} | ${row.transientMinusQuasiSteadyKWhYear.toFixed(6)} | ${(100 * row.transientMinusQuasiSteadyFraction).toFixed(6)}% |`)),
+  "",
   "## Shape-specific natural RPM",
   "",
   "| Shape | Official no-C_Q RPM | Confidence | Official eligible | Unverified user-C_Q RPM | Sensitivity eligible |",
@@ -231,7 +321,10 @@ lines.push(
   "- A-D remain not-evaluated and are excluded from the validation-success count.",
   "- The engineering connection uses equal-density cells, strings, bypass substrings, and wiring resistance, but remains a configurable topology rather than a manufacturer-specific module layout.",
   "- The offline annual weather fixture is deterministic model-estimate data, not measured Seoul TMY. Rankings apply only to the stated inputs.",
-  "- Annual transient + explicit engineering circuit is unsupported and is not silently presented as a combined result.",
+  "- The official combined path is weather/solar -> shape POA -> persistent transient thermal state -> temperature-dependent cell I-V -> explicit series/parallel/bypass circuit -> inverter -> motor deduction -> monthly/annual net AC.",
+  `- Obstacles: supported=${String(officialUnsupported.obstacle.supported)}; ${markdownCell(officialUnsupported.obstacle.reason)}`,
+  `- Plane tracking: supported=${String(officialUnsupported.planeTracking.supported)}; ${markdownCell(officialUnsupported.planeTracking.reason)}`,
+  `- Vertical-axis rotation: supported=${String(officialUnsupported.verticalRotation.supported)}; ${markdownCell(officialUnsupported.verticalRotation.reason)}`,
   "",
   ...renderValidationArtifactLinks(),
   "## Provenance",
@@ -250,6 +343,11 @@ atomicWriteUtf8(resolve(outputPath), markdown);
 console.log(JSON.stringify({
   outputPath,
   annualGroupCount: annual.groups.length,
+  engineeringMeshGateStatus: engineeringMeshGate.status,
+  transientEngineeringGateStatus: transientEngineeringGate.status,
+  officialEngineeringRankingCounts: Object.fromEntries(
+    Object.entries(transientEngineeringGate.officialRankings).map(([mode, rows]) => [mode, rows.length]),
+  ),
   researchSummary: research.summary,
   sourceSetSha256: manifest.sourceSetSha256,
   auditSetSha256: manifest.auditSetSha256,

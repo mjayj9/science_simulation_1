@@ -26,6 +26,20 @@ function populatedFixtureRoot(): string {
 }
 
 describe("validation audit provenance", () => {
+  it("hashes generated gates as derived audits without creating a source-freshness cycle", () => {
+    const gates = [
+      "src/lib/physics/engineering-mesh-validation.generated.json",
+      "src/lib/physics/transient-engineering-validation.generated.json",
+    ];
+    for (const gate of gates) {
+      expect(VALIDATION_SOURCE_PATHS).not.toContain(gate);
+      expect(VALIDATION_AUDIT_PATHS).toContain(gate);
+    }
+    expect(VALIDATION_SOURCE_PATHS).toContain(
+      "src/lib/physics/engineering-mesh-validation-gate.ts",
+    );
+  });
+
   it("binds every generated audit to the exact source and fixture bytes", () => {
     const root = populatedFixtureRoot();
     const manifest = createValidationAuditManifest(root);

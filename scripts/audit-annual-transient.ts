@@ -76,7 +76,7 @@ const convergence = auditAnnualThermalMeshConvergence({
   ...commonInput,
   weather: weather.slice(0, 14 * 24 + 1),
   warmup: false,
-}, [3, 6, 12], 0.02, 0.25);
+}, [3, 6, 12], 0.01, 0.2);
 if (!decomposition.e11.coverage.isFullCalendarYear
   || decomposition.e11.coverage.intervals !== 8760
   || !decomposition.e11.coverage.closingEndpointPresent) {
@@ -95,7 +95,14 @@ if (!convergence.converged) {
   throw new Error("Annual transient reduced thermal mesh failed its convergence tolerance.");
 }
 const report = {
+  schemaVersion: 1,
+  pass: true,
   generatedAtUtc: new Date().toISOString(),
+  acceptance: {
+    heatResidualToleranceFraction: 1e-8,
+    thermalMeshEnergyToleranceFraction: 0.01,
+    thermalMeshTemperatureToleranceC: 0.2,
+  },
   scenario: {
     weatherSource: "deterministic synthetic audit fixture; not a research benchmark",
     year,

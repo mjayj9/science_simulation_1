@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createContinuousSurface } from "../src/lib/geometry";
-import { DEFAULT_ELECTRICAL } from "../src/lib/physics";
+import {
+  DEFAULT_ELECTRICAL,
+  ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION,
+} from "../src/lib/physics";
 import type { WeatherPoint } from "../src/lib/weather";
 import {
   CONTINUOUS_SURFACE_MODEL_VERSION,
@@ -111,13 +114,13 @@ function regionSum(
 
 describe("continuous-surface engineering electrical worker", () => {
   it("bumps protocol/cache/model identity and fingerprints connection changes", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(5);
-    expect(SIMULATION_CACHE_VERSION).toBe(6);
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(6);
+    expect(SIMULATION_CACHE_VERSION).toBe(7);
     expect(CONTINUOUS_SURFACE_MODEL_VERSION).toBe("continuous-pv-electrical-v3");
     const start = Date.UTC(2026, 5, 21, 3);
     const input = pairedInput([point(start), point(start + HOUR_MS)]);
     const baseline = simulationInputFingerprint(input);
-    expect(baseline).toMatch(/^sim-v5-cache-v6-/);
+    expect(baseline).toMatch(/^sim-v6-cache-v7-/);
     const changed = structuredClone(input);
     const surface = changed.variants[1].continuousSurface!;
     if (surface.electricalModel !== "explicit-series-parallel-bypass") throw new Error("fixture");
@@ -137,16 +140,16 @@ describe("continuous-surface engineering electrical worker", () => {
     if (surface.electricalModel !== "explicit-series-parallel-bypass") throw new Error("fixture");
     surface.engineeringConnection.nominalCellAreaM2 = 1e-9;
     expect(() => validateKernelInput(tooDense)).toThrow(/maximum is 4096/);
-    const unsupportedTransient = structuredClone(input);
-    const variant = unsupportedTransient.variants[1];
+    const supportedTransient = structuredClone(input);
+    const variant = supportedTransient.variants[1];
     variant.annualTransientThermal = {
       surface: createContinuousSurface("sphere", 16),
       gammaPerC: -0.004,
     };
-    expect(() => validateKernelInput(unsupportedTransient)).toThrow(/does not yet support explicit/);
+    expect(validateKernelInput(supportedTransient)).toBe(supportedTransient);
   });
 
-  it("uses the explicit connection at uniform weather without exceeding the local-MPP surface upper bound", async () => {
+  it("uses the explicit connection under uniform weather without exceeding the local-MPP surface upper bound", async () => {
     const start = Date.UTC(2026, 5, 21, 3);
     const input = pairedInput([point(start), point(start + HOUR_MS)]);
     input.physics!.solarOverride = { azimuthDeg: 180, elevationDeg: 90 };
@@ -157,7 +160,13 @@ describe("continuous-surface engineering electrical worker", () => {
       expect(engineering).toBeLessThanOrEqual(ideal + 1e-9);
       expect(engineering).toBeGreaterThan(0);
       expect(row.mismatchLossFractionByVariant.engineering).toBeGreaterThan(0);
-      expect(row.bypassActiveCountByVariant.engineering).toBe(0);
+      // Uniform weather is not uniform cell POA on a sphere: surface normals
+      // create deterministic series mismatch, and the shaded lower cells drive
+      // real bypass activity. The count is two rather than one because the
+      // uniform-cell layout now gives both parallel strings the same series
+      // length, so the dark cells group differently across substrings. The
+      // mismatch itself is optical, not a cell-sizing artifact.
+      expect(row.bypassActiveCountByVariant.engineering).toBe(2);
       expect(regionSum(row, "dcPowerW")).toBeCloseTo(engineering, 11);
       expect(regionSum(row, "acPowerW")).toBeCloseTo(row.acPowerWByVariant.engineering, 11);
     });
@@ -225,7 +234,7 @@ describe("continuous-surface engineering electrical worker", () => {
     expect(second.complete.electricalLayoutIdByVariant)
       .toEqual(first.complete.electricalLayoutIdByVariant);
     expect(first.complete.electricalLayoutIdByVariant.engineering)
-      .toContain("surface-spatial-u-v-row-major-v1");
+      .toContain(ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION);
     expect(first.rows.every((row) => row.electricalLayoutIdByVariant.engineering ===
       first.complete.electricalLayoutIdByVariant.engineering)).toBe(true);
     expect(second.complete.acEnergyWhByVariant).toEqual(first.complete.acEnergyWhByVariant);

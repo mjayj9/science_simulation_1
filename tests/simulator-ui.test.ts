@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION } from "../src/lib/physics/engineering-surface-electrical";
 import {
   advanceLocalDateTime,
   annualPlaneScenarioFingerprint,
@@ -13,6 +14,7 @@ import {
   automaticDataModeFromSeries,
   comparisonAnnualVariantId,
   electricalConnectionDeltaKWh,
+  engineeringTransientThermalDeltaKWh,
   resolveComparisonFootprintMode,
   partitionComparisonAnnualVariantStages,
   resolveAnnualComparisonRankEligibility,
@@ -191,6 +193,10 @@ describe("SimulatorClient equal-land comparison wiring", () => {
     fileURLToPath(new URL("../src/ui/SimulatorClient.tsx", import.meta.url)),
     "utf8",
   );
+  const chartSource = readFileSync(
+    fileURLToPath(new URL("../src/ui/SimulationCharts.tsx", import.meta.url)),
+    "utf8",
+  );
 
   it("offers all six shapes and keeps equal land as the default basis", () => {
     expect(source).toContain(
@@ -204,16 +210,18 @@ describe("SimulatorClient equal-land comparison wiring", () => {
 
   it("stages ideal quasi, actual transient E11, and engineering variants under the worker cap", () => {
     expect(comparisonAnnualVariantId("sphere", "ideal-quasi")).toBe("compare:sphere:ideal-quasi");
+    expect(comparisonAnnualVariantId("sphere", "engineering-quasi")).toBe("compare:sphere:engineering-quasi");
     expect(comparisonAnnualVariantId("sphere", "ideal-transient")).toBe("compare:sphere:ideal-transient");
     expect(comparisonAnnualVariantId("sphere", "engineering")).toBe("compare:sphere:engineering");
     expect(annualTransientComparisonSupport({ obstaclesIncluded: false, planeTrackingMode: "fixed" })).toEqual({ supported: true });
     expect(annualTransientComparisonSupport({ obstaclesIncluded: true, planeTrackingMode: "fixed" }).supported).toBe(false);
     expect(annualTransientComparisonSupport({ obstaclesIncluded: false, planeTrackingMode: "dual-axis" }).supported).toBe(false);
+    expect(annualTransientComparisonSupport({ obstaclesIncluded: false, planeTrackingMode: "fixed", engineeringReferenceCellsInSeries: 2 }).supported).toBe(false);
     const variants = (["plane", "cube", "cylinder", "sphere", "hemisphere", "cone"] as const)
-      .flatMap((shape) => (["ideal-quasi", "engineering", "ideal-transient"] as const)
+      .flatMap((shape) => (["ideal-quasi", "engineering-quasi", "ideal-transient", "engineering"] as const)
         .map((model) => ({ variantId: comparisonAnnualVariantId(shape, model) })));
     const stages = partitionComparisonAnnualVariantStages(variants);
-    expect(stages.map((stage) => stage.length)).toEqual([12, 6]);
+    expect(stages.map((stage) => stage.length)).toEqual([12, 12]);
     expect(stages.flat().map((variant) => variant.variantId).sort()).toEqual(
       variants.map((variant) => variant.variantId).sort(),
     );
@@ -221,6 +229,7 @@ describe("SimulatorClient equal-land comparison wiring", () => {
     expect(() => partitionComparisonAnnualVariantStages(variants, 5)).toThrow(/상한 5개/);
     expect(source).toContain("const variants = shapeNames.flatMap");
     expect(source).toContain('comparisonAnnualVariantId(shapeName, "ideal-quasi")');
+    expect(source).toContain('comparisonAnnualVariantId(shapeName, "engineering-quasi")');
     expect(source).toContain('comparisonAnnualVariantId(shapeName, "ideal-transient")');
     expect(source).toContain('comparisonAnnualVariantId(shapeName, "engineering")');
     expect(source).toContain('electricalModel: "explicit-series-parallel-bypass"');
@@ -311,7 +320,7 @@ describe("SimulatorClient equal-land comparison wiring", () => {
       source.indexOf("const comparisonSurfaceInput"),
       source.indexOf("const comparisonSurfaceByShape"),
     );
-    expect(comparisonSurfaceInputBlock).toContain("comparisonRotation.selfStarting");
+    expect(comparisonSurfaceInputBlock).toContain("footprintMode: comparisonFootprintMode");
   });
 
   it("isolates electrical-connection delta on the shared quasi-steady path", () => {
@@ -323,6 +332,10 @@ describe("SimulatorClient equal-land comparison wiring", () => {
       idealQuasiWh: Number.NaN,
       engineeringQuasiWh: 900,
     })).toThrow(/finite/);
+    expect(engineeringTransientThermalDeltaKWh({
+      engineeringQuasiWh: 900,
+      engineeringTransientWh: 930,
+    })).toBeCloseTo(0.03, 12);
   });
 
   it("distinguishes full-year intervals from the non-integrated closing endpoint", () => {
@@ -400,7 +413,9 @@ describe("SimulatorClient equal-land comparison wiring", () => {
   });
 
   it("requires production layout provenance and authoritative closed E11 before official ranking", () => {
-    const layoutId = "surface-spatial-u-v-row-major-v1|zones=0:plane-skin|activeAreaM2=0.05|nominalCellAreaM2=0.0025|cells=20|parallel=2|bypass=10";
+    // Built from the exported constant so a layout-version bump cannot leave
+    // this asserting readiness against a superseded physical layout.
+    const layoutId = `${ENGINEERING_SURFACE_SPATIAL_LAYOUT_VERSION}|coordinate=zone-local-u|zones=0:plane-skin:0.05:20:4:0:1|activeAreaM2=0.05|nominalCellAreaM2=0.0025|cells=20|parallel=2|bypass=10`;
     expect(engineeringAnnualResultReady({ energyWh: 0, layoutId })).toBe(true);
     expect(engineeringAnnualResultReady({ energyWh: 900, layoutId: "legacy-layout" })).toBe(false);
     expect(engineeringAnnualResultReady({ energyWh: undefined, layoutId })).toBe(false);
@@ -434,8 +449,8 @@ describe("SimulatorClient equal-land comparison wiring", () => {
     expect(source).toContain('unit="kWh/m²-land/year"');
     expect(source).toContain('unit="kWh/m²-PV/year"');
     expect(source).toContain('unit="kWh/year"');
-    expect(source).toContain("<LabelList dataKey={dataKey}");
-    expect(source).toContain('<XAxis dataKey="name" interval={0} angle={-28}');
+    expect(chartSource).toContain("<LabelList dataKey={dataKey}");
+    expect(chartSource).toContain('<XAxis dataKey="name" interval={0} angle={-28}');
     expect(source).toContain("bestCompareEnergy) * 100 : 0).toFixed(4)");
   });
 

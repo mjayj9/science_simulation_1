@@ -1,3 +1,24 @@
+export {
+  validateEngineeringMeshAudit,
+  validateEngineeringMeshGate,
+  type EngineeringMeshAudit,
+  type EngineeringMeshGate,
+} from "./engineering-validation-contract";
+export {
+  CERTIFIED_TRANSIENT_ENGINEERING_FIXTURE,
+  TRANSIENT_ENGINEERING_RANKING_MODES,
+  validateTransientEngineeringAudit,
+  validateTransientEngineeringGate,
+  validateTransientEngineeringOfficialRankings,
+  validateTransientEngineeringRunningOrFailedGate,
+  type TransientEngineeringAudit,
+  type TransientEngineeringCertifiedFixture,
+  type TransientEngineeringOfficialRankingRow,
+  type TransientEngineeringRankingRow,
+  type TransientEngineeringGate,
+  type TransientEngineeringRunningOrFailedGate,
+} from "./transient-engineering-validation-contract";
+
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -326,6 +347,17 @@ function annualRow(value: unknown, path: string, expectedHours: number): AnnualR
   return result;
 }
 
+/**
+ * The minimum an annual artifact must have fingerprinted, not the exact set.
+ *
+ * An exact-equality contract would have to be a byte-for-byte duplicate of the
+ * audit's own list, so every dependency the audit gains must be typed into two
+ * files that no test compares. It also makes the validator reject any artifact
+ * whose audit legitimately covered *more* sources — which is the direction we
+ * want provenance to move. The audit now derives its list from the real import
+ * closure, so this contract asserts the floor and lets the recorded list be
+ * broader.
+ */
 export const ANNUAL_IMPLEMENTATION_SOURCE_FILES = Object.freeze([
   "scripts/audit-full-year-comparison-v2.ts",
   "src/lib/geometry/comparison-surfaces.ts",
@@ -345,10 +377,14 @@ function assertAnnualImplementationFingerprint(
   recordedFingerprint: string,
   rootDir: string,
 ): void {
-  const expected = [...ANNUAL_IMPLEMENTATION_SOURCE_FILES].sort();
   const actual = [...sourceFiles].sort();
-  if (actual.length !== expected.length || actual.some((path, index) => path !== expected[index])) {
-    throw new Error("annual implementationSourceFiles has missing or unexpected paths.");
+  if (actual.length === 0 || new Set(actual).size !== actual.length) {
+    throw new Error("annual implementationSourceFiles must be a non-empty list without duplicates.");
+  }
+  for (const required of ANNUAL_IMPLEMENTATION_SOURCE_FILES) {
+    if (!actual.includes(required)) {
+      throw new Error(`annual implementationSourceFiles is missing ${required}.`);
+    }
   }
   const root = realpathSync(rootDir);
   const canonical = actual.map((relativePath) => {
@@ -511,15 +547,26 @@ export function validateAnnualAudit(value: unknown, rootDir = process.cwd()): An
   finite(extendedSource.elapsedMs, "annual.convergenceGate.engineering.extendedCylinder.elapsedMs");
   const engineeringPass = bool(gate.engineeringPass, "annual.convergenceGate.engineeringPass");
   const expectedEngineeringPass = engineeringComparisons.every((entry) => entry.pass) && extendedPass;
-  if (engineeringPass || expectedEngineeringPass
-    || engineeringPass !== expectedEngineeringPass
+  // This legacy annual gate must never rank engineering connections whatever
+  // its own checks say: that authority belongs to the dedicated mesh
+  // convergence and transient+engineering audits.
+  //
+  // It previously also asserted `engineeringPass === false`, because when the
+  // contract was written the superseded one-dimensional cell mapping failed the
+  // extended-cylinder check at 6.5273%. That froze a defect into an invariant —
+  // once the material-space clipped-cell layout made the check pass honestly,
+  // the contract rejected the honest result. The reported flag is still pinned
+  // to the artifact's own comparison rows, so a forged pass remains detectable;
+  // only the assumption that the checks must fail is gone. No tolerance and no
+  // reported number changed.
+  if (engineeringPass !== expectedEngineeringPass
     || bool(engineeringSource.pass, "annual.convergenceGate.engineering.pass") !== engineeringPass
     || bool(gate.pass, "annual.convergenceGate.pass") !== (officialIdealPass && engineeringPass)
     || bool(gate.engineeringOfficialRankingEligible, "annual.convergenceGate.engineeringOfficialRankingEligible")
     || bool(engineeringSource.officialRankingEligible, "annual.convergenceGate.engineering.officialRankingEligible")
     || text(gate.engineeringRankingVerdict, "annual.convergenceGate.engineeringRankingVerdict") !== "not-evaluated"
     || text(engineeringSource.status, "annual.convergenceGate.engineering.status") !== "not-evaluated") {
-    throw new Error("engineering convergence failure must remain honest, rank-ineligible, and not-evaluated.");
+    throw new Error("annual engineering convergence gate must stay self-consistent, rank-ineligible, and not-evaluated.");
   }
   const engineeringReason = text(gate.engineeringReason, "annual.convergenceGate.engineeringReason");
 
@@ -1118,18 +1165,27 @@ export function validateResearchAudit(value: unknown): ResearchAudit {
 
 export const VALIDATION_REPORT_LOCAL_LINKS = Object.freeze([
   ["Annual transient audit JSON", "./annual-transient-audit-2026.json"],
+  ["Engineering mesh convergence audit JSON", "./engineering-mesh-convergence-audit-2026.json"],
   ["Fair geometry audit JSON", "./fair-geometry-audit-2026.json"],
   ["Full-year comparison audit JSON", "./full-year-comparison-audit-2026.json"],
   ["Natural rotation audit JSON", "./natural-rotation-audit-2026.json"],
   ["Research source-equivalent audit JSON", "./research-source-equivalent-audit.json"],
   ["Thermal comparison audit JSON", "./thermal-model-comparison-audit-2026.json"],
+  ["Transient plus engineering full-year audit JSON", "./transient-engineering-full-year-audit-2026.json"],
+  ["Engineering mesh compact official gate", "../src/lib/physics/engineering-mesh-validation.generated.json"],
+  ["Transient engineering compact official gate", "../src/lib/physics/transient-engineering-validation.generated.json"],
+  ["Engineering mesh fail-closed gate helper", "../src/lib/physics/engineering-mesh-validation-gate.ts"],
   ["SHA-256 manifest", "./validation-audit-manifest-2026.json"],
   ["Annual transient audit code", "../scripts/audit-annual-transient.ts"],
+  ["Engineering mesh convergence audit code", "../scripts/audit-engineering-mesh-convergence.ts"],
   ["Fair geometry audit code", "../scripts/audit-fair-geometry.ts"],
   ["Full-year comparison audit code", "../scripts/audit-full-year-comparison-v2.ts"],
   ["Natural rotation audit code", "../scripts/audit-natural-rotation.ts"],
   ["Research benchmark audit code", "../scripts/audit-research-benchmarks.ts"],
   ["Thermal comparison audit code", "../scripts/audit-thermal-model-comparison.ts"],
+  ["Transient plus engineering full-year audit code", "../scripts/audit-transient-engineering-full-year.ts"],
+  ["Engineering mesh validation contract", "../scripts/engineering-validation-contract.ts"],
+  ["Transient engineering validation contract", "../scripts/transient-engineering-validation-contract.ts"],
 ] as const);
 
 export function renderValidationArtifactLinks(): string[] {

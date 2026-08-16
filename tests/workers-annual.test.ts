@@ -136,8 +136,8 @@ function continuousCylinderInput(times: number[]): SimulationKernelInput {
 
 describe("annual worker protocol", () => {
   it("creates a deterministic fingerprint and fingerprint-bound cancel request", () => {
-    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(5);
-    expect(SIMULATION_CACHE_VERSION).toBe(6);
+    expect(SIMULATION_WORKER_PROTOCOL_VERSION).toBe(6);
+    expect(SIMULATION_CACHE_VERSION).toBe(7);
     const start = Date.UTC(2026, 0, 1);
     const input = baseInput([start, start + 3_600_000]);
     const cloned = structuredClone(input);
@@ -200,7 +200,7 @@ describe("annual worker protocol", () => {
       mutate(copy);
       expect(simulationInputFingerprint(copy)).not.toBe(baseline);
     });
-    expect(baseline).toMatch(/^sim-v5-cache-v6-/);
+    expect(baseline).toMatch(/^sim-v6-cache-v7-/);
   });
 
   it("serializes authoritative comparison quadrature as absolute-area worker samples", () => {

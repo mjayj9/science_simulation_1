@@ -15,6 +15,7 @@
 - 장애물은 정적 AABB의 직달 ray 차폐다. 실제 삼각형 실루엣, sky-dome 차폐와 세밀한 자체음영을 대체하지 않는다.
 - 반사판 옵션은 면적·반사율 예산이 있는 등가 모델이다. 특정 연구의 cup reflector나 정반사 집광 geometry를 자동 재현하지 않는다.
 - offline weather fixture는 결정론적 모델 추정값이며 계측 서울 TMY나 발전 보증자료가 아니다. 외부 자료를 쓸 때도 provenance, 공간·시간 해상도와 누락 구간을 확인해야 한다.
+- 현재 기상 입력 경로는 offline model estimate와 원격 API(`open-meteo`, `nasa-power`, `pvgis`)뿐이다. **EPW·TMY3·사용자 CSV 파일 입력 경로는 구현돼 있지 않다.** 따라서 계측 기반 전년 기상으로 공식 순위를 재현하는 것은 현재 불가능하며, 이는 이번 RC의 후속 과제다. 파일 입력을 추가할 때는 결측 구간 처리, 시간대·closing endpoint 계약, 그리고 감사 fixture provenance에 파일 SHA-256을 포함하는 문제를 함께 풀어야 한다.
 
 ## 이상적 상한과 공학적 전기 연결
 
@@ -29,7 +30,9 @@
 - annual transient는 실제 weather clock에서 열상태를 유지하고 별도 저해상도 열노드망을 쓴다. 열용량, 흡수 일사, 전기 추출, 장파복사, 양면 대류와 인접 노드 전도를 포함하지만, 상세 적층재·접촉저항·내부 유동·비/증발·CFD는 대체하지 않는다.
 - 열노드망은 광학 구적망과 분리돼 있으므로 감사 fixture의 mesh 수렴 결과를 다른 형상·기상·차폐 해상도에 무조건 일반화할 수 없다.
 - warm-up/주기 수렴은 초기온도 민감도를 줄이지만 실제 전년도 말의 알려지지 않은 열상태를 측정한 것은 아니다.
-- 현재 annual transient opt-in은 `local-mpp-area-integral` 연속표면만 지원한다. 공학적 전기 연결, 외부 장애물 또는 plane tracking과의 결합은 검증 단계에서 거부된다. 해당 조합에 과도열 결과가 있다고 해석하면 안 된다.
+- mesh 수렴과 실제 전년 결합 감사를 통과한 공식 공학 경로는 `explicit-series-parallel-bypass`에 지속 과도 열상태를 연결한다. 셀/전기 구역별 온도와 일사는 실제 I-V·직렬/병렬/bypass 회로 입력으로 쓰며 준정상 온도로 fallback하지 않는다.
+- 이 결합 경로의 검증 범위는 장애물 없음, world-Y 세로축 회전, 고정 자세 평면이다. 외부 장애물과 plane tracking은 실행 전에 거부되며 해당 조합에 과도열 결과가 있다고 해석하면 안 된다.
+- 이상적 `local-mpp-area-integral` annual transient와 공학 회로 결합 결과는 서로 다른 provenance와 gate를 가지며 같은 종류의 값으로 합치지 않는다.
 - transient variant의 streamed 시간행은 준정상 진단이고, authoritative 월·연간 에너지는 complete event의 E11이다. 두 경로를 하나의 시계열처럼 혼합하지 않는다.
 
 ## 회전과 공력

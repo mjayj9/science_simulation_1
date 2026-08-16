@@ -3,6 +3,7 @@ import {
   createComparisonSurface,
   type IdealSurfaceModel,
 } from "../src/lib/geometry";
+import { OFFICIAL_ENGINEERING_SURFACE_CONNECTION } from "../src/lib/physics";
 import type { WeatherPoint } from "../src/lib/weather";
 import {
   createContinuousSurfaceWorkItem,
@@ -123,7 +124,7 @@ describe("annual transient authoritative guard rails", () => {
     }))).not.toThrow();
   });
 
-  it("rejects unsupported obstacles, tracking, and engineering electrical topology", () => {
+  it("rejects unsupported obstacles/tracking and accepts an explicit engineering topology", () => {
     const obstacle = transientInput();
     obstacle.variants[0].obstacleBounds = [];
     expect(() => validateKernelInput(obstacle)).toThrow(/does not support obstacleBounds/);
@@ -142,15 +143,10 @@ describe("annual transient authoritative guard rails", () => {
     engineering.variants[0].continuousSurface = createContinuousSurfaceWorkItem(surface, {
       landAreaM2: LAND_AREA_M2,
       electricalModel: "explicit-series-parallel-bypass",
-      engineeringConnection: {
-        nominalCellAreaM2: 0.01,
-        parallelStrings: 1,
-        cellsPerBypassSubstring: 2,
-        cellIvModel: "piecewise-nameplate",
-      },
+      engineeringConnection: OFFICIAL_ENGINEERING_SURFACE_CONNECTION,
     });
     expect(() => validateKernelInput(engineering))
-      .toThrow(/does not yet support explicit engineering electrical connections/);
+      .not.toThrow();
   });
 
   it("closes every monthly E history to its annual value and clears quasi-steady regions", async () => {

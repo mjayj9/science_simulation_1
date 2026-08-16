@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-13T16:15:15.014Z",
+  "generatedAt": "2026-08-16T04:26:37.934Z",
   "scenario": {
     "weatherSource": "same deterministic synthetic 8761-boundary fixture as annual transient audit",
     "year": 2025,
@@ -40,15 +40,15 @@
       "includesThermalHistory": true,
       "periodIntegration": "actual-weather-clock"
     },
-    "staticAcEnergyWh": 38561.615392519685,
-    "rotatingAcEnergyWh": 38652.1384346527,
-    "rotatingMinusStaticWh": 90.5230421330125
+    "staticAcEnergyWh": 38561.61546916094,
+    "rotatingAcEnergyWh": 38652.13849159104,
+    "rotatingMinusStaticWh": 90.52302243009763
   },
   "differences": {
-    "staticTransientMinusQuasiWh": 856.8855889144033,
-    "staticTransientMinusQuasiPercent": 2.2726209506810178,
-    "rotatingTransientMinusQuasiWh": 942.4618840917319,
-    "rotatingTransientMinusQuasiPercent": 2.4992574063266844
+    "staticTransientMinusQuasiWh": 856.8856655556592,
+    "staticTransientMinusQuasiPercent": 2.2726211539479717,
+    "rotatingTransientMinusQuasiWh": 942.4619410300729,
+    "rotatingTransientMinusQuasiPercent": 2.4992575573180114
   },
-  "requestFingerprint": "sim-v5-cache-v6-242f779eef57234a"
+  "requestFingerprint": "sim-v6-cache-v7-242f779eef57234a"
 }

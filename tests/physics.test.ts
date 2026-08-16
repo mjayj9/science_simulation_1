@@ -353,6 +353,23 @@ describe("PV and circuit models", () => {
     expect(new Set(result.deviceStates.map((state) => state.deviceId)).size).toBe(20);
   });
 
+  it("recovers parallel device states at the internal bus when array wiring resistance is nonzero", () => {
+    const wiringResistanceOhm = 0.2;
+    const result = calculateCircuit({
+      devices: [syntheticCurve("parallel-a"), syntheticCurve("parallel-b", 0.75)],
+      topology: "parallel",
+      wiringResistanceOhm,
+      samples: 512,
+    });
+    const internalBusVoltageV = result.mpp.voltageV + result.mpp.currentA * wiringResistanceOhm;
+    expect(result.deviceStates.every((state) =>
+      Math.abs(state.voltageV - internalBusVoltageV) < 1e-12)).toBe(true);
+    expect(result.deviceStates.reduce((sum, state) => sum + state.currentA, 0))
+      .toBeCloseTo(result.mpp.currentA, 12);
+    expect(result.mpp.voltageV)
+      .toBeCloseTo(internalBusVoltageV - result.mpp.currentA * wiringResistanceOhm, 12);
+  });
+
   it("activates a bypass diode and improves a strongly shaded string", () => {
     const devices = [syntheticCurve("a"), syntheticCurve("shade", 0.1), syntheticCurve("b")];
     const bypassed = calculateCircuit({ devices, topology: "series", bypassEnabled: true, bypassForwardVoltageV: 0.5 });

@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "generatedAtUtc": "2026-08-16T05:06:42.985Z",
+  "status": "running-or-failed",
+  "artifactSchemaVersion": 1,
+  "artifactPath": "docs/transient-engineering-full-year-audit-2026.json",
+  "artifactSha256": "",
+  "meshAuditPath": "docs/engineering-mesh-convergence-audit-2026.json",
+  "meshAuditSha256": "ee52a7d519a37266062f66dc030b0d939c0039aa2969806dc5263f52781f5f2e",
+  "thermalAuditPath": "docs/annual-transient-audit-2026.json",
+  "thermalAuditSha256": "a8efe836d6bf5c1f3d9e86237b945c4c614af6bdbaa1ab7e9136e4abbe308540",
+  "implementationSha256": "5d9b343b3b828e03c18a2b97ed37bc0ba2d8b0d7361c8adca3a4073b841bb3c6",
+  "configurationSha256": "c39b8648f6260c3b0bd4c9280ed239a19e716057748b19236bd4eacbc8ce4cbf",
+  "year": 2025,
+  "coverage": {
+    "points": 8761,
+    "intervals": 8760,
+    "durationHours": 8760,
+    "closingEndpointPresent": true
+  },
+  "geometryContracts": [
+    {
+      "contractId": "static-land-matched",
+      "footprintMode": "static",
+      "rotationModel": "stationary-rpm0",
+      "phaseGateRequired": false,
+      "validatedResolution": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "layoutIdByShape": {
+        "plane": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:plane-skin:0.057735026919:24:5:0:1|activeAreaM2=0.057735026919|nominalCellAreaM2=0.0025|cells=24|parallel=2|bypass=10",
+        "cube": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cube-face-1:0.05:20:4:0:1,1:cube-face-2:0.05:20:4:0:1,2:cube-face-3:0.05:20:4:0:1,3:cube-face-4:0.05:20:4:0:1,4:cube-face-5:0.05:20:4:0:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
+        "sphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:sphere-skin:0.2:80:9:0:1|activeAreaM2=0.2|nominalCellAreaM2=0.0025|cells=80|parallel=2|bypass=10",
+        "hemisphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:hemisphere-skin:0.1:40:6:0:1|activeAreaM2=0.1|nominalCellAreaM2=0.0025|cells=40|parallel=2|bypass=10",
+        "cylinder": "surface-spatial-clipped-cell-grid-v2|coordinate=global-area-u|zones=0:cylinder-top:0.05:20:4:0:0.2,1:cylinder-side:0.2:80:9:0.2:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
+        "cone": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cone-skin:0.111803398875:45:7:0:1|activeAreaM2=0.111803398875|nominalCellAreaM2=0.0025|cells=45|parallel=2|bypass=10"
+      },
+      "pass": true,
+      "officialEligible": true
+    },
+    {
+      "contractId": "swept-rotation-envelope",
+      "footprintMode": "swept",
+      "rotationModel": "controlled-y-axis-phase-quadrature",
+      "phaseGateRequired": true,
+      "validatedResolution": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "layoutIdByShape": {
+        "plane": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:plane-skin:0.0367552596948:15:4:0:1|activeAreaM2=0.0367552596948|nominalCellAreaM2=0.0025|cells=15|parallel=2|bypass=10",
+        "cube": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cube-face-1:0.0318309886184:13:4:0:1,1:cube-face-2:0.0318309886184:13:4:0:1,2:cube-face-3:0.0318309886184:13:4:0:1,3:cube-face-4:0.0318309886184:13:4:0:1,4:cube-face-5:0.0318309886184:13:4:0:1|activeAreaM2=0.159154943092|nominalCellAreaM2=0.0025|cells=65|parallel=2|bypass=10",
+        "sphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:sphere-skin:0.2:80:9:0:1|activeAreaM2=0.2|nominalCellAreaM2=0.0025|cells=80|parallel=2|bypass=10",
+        "hemisphere": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:hemisphere-skin:0.1:40:6:0:1|activeAreaM2=0.1|nominalCellAreaM2=0.0025|cells=40|parallel=2|bypass=10",
+        "cylinder": "surface-spatial-clipped-cell-grid-v2|coordinate=global-area-u|zones=0:cylinder-top:0.05:20:4:0:0.2,1:cylinder-side:0.2:80:9:0.2:1|activeAreaM2=0.25|nominalCellAreaM2=0.0025|cells=100|parallel=2|bypass=10",
+        "cone": "surface-spatial-clipped-cell-grid-v2|coordinate=zone-local-u|zones=0:cone-skin:0.111803398875:45:7:0:1|activeAreaM2=0.111803398875|nominalCellAreaM2=0.0025|cells=45|parallel=2|bypass=10"
+      },
+      "pass": true,
+      "officialEligible": true
+    }
+  ],
+  "validatedMinimumResolution": {
+    "static-land-matched": {
+      "plane": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "cube": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "cylinder": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "sphere": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "hemisphere": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      },
+      "cone": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 1,
+        "circuitSamples": 256
+      }
+    },
+    "swept-rotation-envelope": {
+      "plane": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "cube": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "cylinder": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "sphere": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "hemisphere": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      },
+      "cone": {
+        "azimuthSamples": 32,
+        "meridionalSegments": 16,
+        "phaseSamples": 8,
+        "circuitSamples": 256
+      }
+    }
+  },
+  "validatedCoupledSettings": {
+    "thermalNodeCount": 6,
+    "maximumThermalSubstepSeconds": 900,
+    "maximumElectricalCouplingStepSeconds": 900,
+    "couplingConvergenceToleranceFraction": 0.02,
+    "thermalMeshEnergyToleranceFraction": 0.01,
+    "thermalMeshTemperatureToleranceC": 0.2,
+    "maximumElectricalExtractionClosureErrorW": 1e-8,
+    "maximumHeatEnergyResidualFraction": 1e-8
+  },
+  "certifiedFixture": {
+    "year": 2025,
+    "location": {
+      "latitudeDeg": 37.5665,
+      "longitudeDeg": 126.978,
+      "elevationM": 38
+    },
+    "reportingOffsetMinutes": 540,
+    "weather": {
+      "source": "offline/model-estimate (not measured Seoul TMY)",
+      "seed": "full-year-fair-comparison-2025",
+      "preset": "partly-cloudy",
+      "stepMinutes": 60,
+      "intervals": 8760,
+      "closingEndpointPresent": true
+    },
+    "geometry": {
+      "landAreaM2": 0.05,
+      "maximumHeightM": 0.252313252202016,
+      "planeTiltDeg": 30,
+      "planeAzimuthDeg": 180
+    },
+    "optics": {
+      "albedo": 0.2,
+      "iam": {
+        "model": "ashrae",
+        "b0": 0.05
+      },
+      "diffuseModel": "hay-davies",
+      "soilingLossFraction": 0.02,
+      "reflector": "none",
+      "obstacles": "none"
+    },
+    "pv": {
+      "referenceCell": {
+        "areaM2": 0.0025,
+        "efficiency": 0.2,
+        "pmaxW": 0.5,
+        "vocV": 0.62,
+        "iscA": 1.06,
+        "vmpV": 0.5,
+        "impA": 1,
+        "seriesResistanceOhm": 0.02,
+        "shuntResistanceOhm": 100,
+        "idealityFactor": 1,
+        "cellsInSeries": 1,
+        "referenceTemperatureC": 25,
+        "referenceIrradianceWm2": 1000,
+        "alphaIscAperC": 0.00053,
+        "gammaPmpPerC": -0.004,
+        "bandgapEv": 1.121
+      },
+      "electricalAvailabilityFactor": 1,
+      "absorptivity": 0.9
+    },
+    "inverter": {
+      "ratedAcPowerW": 100,
+      "nominalEfficiency": 0.96,
+      "mpptMinVoltageV": 0.1,
+      "mpptMaxVoltageV": 100,
+      "maxDcVoltageV": 500,
+      "maxInputCurrentA": 100,
+      "startPowerW": 0,
+      "nightConsumptionW": 0,
+      "wiringLossFraction": 0.015
+    },
+    "thermal": {
+      "materialConfig": {
+        "arealHeatCapacityJm2K": 11000,
+        "emissivity": 0.84,
+        "backConvectionFactor": 0.65,
+        "minimumConvectionWm2K": 2.8,
+        "maximumSubstepSeconds": 900,
+        "minimumTemperatureC": -80,
+        "maximumTemperatureC": 180,
+        "air": {
+          "thermalConductivityWmK": 0.0263,
+          "kinematicViscosityM2s": 0.00001589,
+          "prandtl": 0.707,
+          "viscosityRatio": 1
+        }
+      },
+      "thermalNodeCount": 6
+    },
+    "controlledRotation": {
+      "rpm": 2,
+      "motor": {
+        "requiredTorqueNm": 0.002,
+        "motorEfficiency": 0.85,
+        "source": "user-assumption for audit; not measured and not fitted",
+        "confidence": "low"
+      }
+    },
+    "connection": {
+      "nominalCellAreaM2": 0.0025,
+      "parallelStrings": 2,
+      "cellsPerBypassSubstring": 10,
+      "bypassForwardVoltageV": 0.5,
+      "stringWiringResistanceOhm": 0.01,
+      "arrayWiringResistanceOhm": 0.005,
+      "cellIvModel": "piecewise-nameplate"
+    }
+  },
+  "officialRankings": {
+    "static": [],
+    "controlled": [],
+    "natural": []
+  },
+  "layoutVersion": "surface-spatial-clipped-cell-grid-v2",
+  "officialRankingEligible": false
+}

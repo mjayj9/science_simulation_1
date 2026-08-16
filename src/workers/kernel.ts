@@ -2,8 +2,11 @@ import {
   MAX_PANELS_PER_VARIANT,
   PANEL_AREA_M2,
 } from "../lib/geometry";
-import { simulateAnnualRotationDecomposition } from "../lib/physics/annual-transient";
-import { thermalModelMetadata } from "../lib/physics/annual-transient";
+import {
+  MAX_ENGINEERING_CIRCUIT_COUPLING_SECONDS,
+  simulateAnnualRotationDecomposition,
+  thermalModelMetadata,
+} from "../lib/physics/annual-transient";
 import {
   DEFAULT_ELECTRICAL,
   DEFAULT_INVERTER,
@@ -545,11 +548,6 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
       if (workerSurface === undefined) {
         throw new RangeError(`${variant.variantId}.annualTransientThermal requires a continuous surface.`);
       }
-      if (workerSurface.electricalModel !== "local-mpp-area-integral") {
-        throw new RangeError(
-          `${variant.variantId}.annualTransientThermal does not yet support explicit engineering electrical connections.`,
-        );
-      }
       if (variant.obstacleBounds !== undefined) {
         throw new RangeError(`${variant.variantId}.annualTransientThermal does not support obstacleBounds.`);
       }
@@ -594,6 +592,16 @@ export function validateKernelInput(input: SimulationKernelInput): SimulationKer
         !Number.isInteger(transient.thermalNodeCount) || transient.thermalNodeCount < 1
       )) {
         throw new RangeError(`${variant.variantId}.thermalNodeCount must be a positive integer.`);
+      }
+      if (transient.maximumElectricalCouplingStepSeconds !== undefined && (
+        !Number.isFinite(transient.maximumElectricalCouplingStepSeconds)
+        || transient.maximumElectricalCouplingStepSeconds <= 0
+        || transient.maximumElectricalCouplingStepSeconds
+          > MAX_ENGINEERING_CIRCUIT_COUPLING_SECONDS
+      )) {
+        throw new RangeError(
+          `${variant.variantId}.maximumElectricalCouplingStepSeconds must be in (0, ${MAX_ENGINEERING_CIRCUIT_COUPLING_SECONDS}].`,
+        );
       }
       [
         transient.referenceEfficiency ?? variant.referenceEfficiency,
@@ -2220,6 +2228,32 @@ export async function runSimulationKernel(
   for (const variant of transientVariants) {
       if (hooks.isCancelled?.()) throw new SimulationCancelledError();
       const transient = variant.annualTransientThermal!;
+      const continuousSurface = variant.continuousSurface!;
+      const transientElectrical = {
+        ...input.physics?.electrical,
+        ...variant.electrical,
+      };
+      const transientElectricalConfig = transientElectrical.config ?? DEFAULT_ELECTRICAL;
+      const electricalAvailabilityFactor = 1 - Math.min(
+        1,
+        Math.max(0, transientElectrical.aggregateLossFraction ?? 0),
+      );
+      const engineeringElectrical = continuousSurface.electricalModel
+        === "explicit-series-parallel-bypass"
+        ? {
+            referenceCell: {
+              ...engineeringReferenceCellConfig(
+                transientElectricalConfig,
+                continuousSurface.engineeringConnection.nominalCellAreaM2,
+                transient.referenceEfficiency ?? variant.referenceEfficiency,
+              ),
+              referenceTemperatureC: transient.referenceTemperatureC ?? 25,
+              gammaPmpPerC: transient.gammaPerC,
+            },
+            connection: continuousSurface.engineeringConnection,
+            maximumCouplingStepSeconds: transient.maximumElectricalCouplingStepSeconds,
+          }
+        : undefined;
       const rotation = variant.rotation;
       const rpm = rotation?.mode === "fixed" ? rotation.rpm : 0;
       const surfaceOptions = variant.continuousSurface?.surfaceOptions;
@@ -2236,6 +2270,8 @@ export async function runSimulationKernel(
           : rotation?.angleRad ?? 0,
         referenceEfficiency: transient.referenceEfficiency ?? variant.referenceEfficiency,
         gammaPerC: transient.gammaPerC,
+        electricalAvailabilityFactor,
+        ...(engineeringElectrical === undefined ? {} : { engineeringElectrical }),
         referenceTemperatureC: transient.referenceTemperatureC,
         absorptivity: transient.absorptivity,
         soilingLossFraction: surfaceOptions?.soilingLossFraction,
@@ -2417,8 +2453,15 @@ export async function runSimulationKernel(
   if (hooks.isCancelled?.()) throw new SimulationCancelledError();
   const authoritativeEnergyPathByVariant = Object.fromEntries(input.variants.map((variant) => [
     variant.variantId,
-    variant.annualTransientThermal ? "annual-transient-e11" : "worker-quasi-steady",
+    variant.annualTransientThermal
+      ? variant.continuousSurface?.electricalModel === "explicit-series-parallel-bypass"
+        ? "annual-transient-engineering-e11"
+        : "annual-transient-e11"
+      : "worker-quasi-steady",
   ])) as SimulationCompleteEvent["authoritativeEnergyPathByVariant"];
+  const annualEngineeringElectricalAuditByVariant: NonNullable<
+    SimulationCompleteEvent["annualEngineeringElectricalAuditByVariant"]
+  > = {};
   Object.entries(annualTransientRotationByVariant).forEach(([variantId, decomposition]) => {
     dcEnergyWhByVariant[variantId] = decomposition.e11.dcEnergyWh;
     acEnergyWhByVariant[variantId] = decomposition.e11.acEnergyWh;
@@ -2427,6 +2470,55 @@ export async function runSimulationKernel(
     // cannot be reconciled to the authoritative transient E11 aggregate, so
     // an empty object explicitly means region attribution is unavailable.
     surfaceRegionEnergyWhByVariant[variantId] = {};
+    const variant = input.variants.find((candidate) => candidate.variantId === variantId)!;
+    if (variant.continuousSurface?.electricalModel === "explicit-series-parallel-bypass") {
+      const result = decomposition.e11;
+      const circuit = result.engineeringCircuit;
+      if (result.electricalModel !== "explicit-series-parallel-bypass" || circuit === undefined) {
+        throw new Error(`${variantId} did not return the required coupled engineering circuit audit.`);
+      }
+      electricalLayoutIdByVariant[variantId] = result.electricalLayoutId;
+      annualEngineeringElectricalAuditByVariant[variantId] = {
+        status: "authoritative-annual-transient-engineering",
+        electricalModel: result.electricalModel,
+        thermalModel: result.thermalModel.model,
+        periodIntegration: result.thermalModel.periodIntegration,
+        electricalLayoutId: result.electricalLayoutId,
+        annual: {
+          idealLocalMppDcEnergyWh: result.idealLocalMppDcEnergyWh,
+          engineeringDcEnergyWh: result.dcEnergyWh,
+          mismatchAndWiringLossEnergyWh: result.mismatchAndWiringLossEnergyWh,
+          grossAcEnergyWh: result.grossAcEnergyWh,
+          netAcEnergyWh: result.acEnergyWh,
+          motorEnergyWh: result.motorEnergyWh,
+          inverterLossWh: result.inverterLossWh,
+          bypassActivationDeviceHours: result.bypassActivationDeviceHours,
+        },
+        monthly: result.monthly.map((entry) => ({
+          monthUtc: entry.month,
+          idealLocalMppDcEnergyWh: entry.idealLocalMppDcEnergyWh,
+          engineeringDcEnergyWh: entry.dcEnergyWh,
+          mismatchAndWiringLossEnergyWh: entry.mismatchAndWiringLossEnergyWh,
+          grossAcEnergyWh: entry.grossAcEnergyWh,
+          netAcEnergyWh: entry.acEnergyWh,
+          motorEnergyWh: entry.motorEnergyWh,
+          bypassActivationDeviceHours: entry.bypassActivationDeviceHours,
+        })),
+        topology: {
+          activeAreaM2: variant.continuousSurface.activeAreaM2,
+          cellCount: circuit.cellCount,
+          parallelStringCount: circuit.parallelStringCount,
+          seriesCellCountByString: circuit.seriesCellCountByString,
+          bypassSubstringCount: circuit.bypassSubstringCount,
+        },
+        coupling: {
+          maximumStepSeconds: circuit.maximumCouplingStepSeconds,
+          circuitSolveCount: circuit.circuitSolveCount,
+          maximumElectricalExtractionClosureErrorW:
+            circuit.maximumElectricalExtractionClosureErrorW,
+        },
+      };
+    }
   });
   const monthlyKeys = new Set([
     ...monthly.keys(),
@@ -2484,6 +2576,9 @@ export async function runSimulationKernel(
     ...(Object.keys(annualTransientRotationByVariant).length === 0
       ? {}
       : { annualTransientRotationByVariant }),
+    ...(Object.keys(annualEngineeringElectricalAuditByVariant).length === 0
+      ? {}
+      : { annualEngineeringElectricalAuditByVariant }),
     monthlyEnergy,
     reportingOffsetMinutes,
     steps: input.weather.length,

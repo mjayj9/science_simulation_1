@@ -10,6 +10,8 @@
 |---|---|---|---|
 | 공정 기하 | [`fair-geometry-audit-2026.json`](fair-geometry-audit-2026.json) | [`fair-geometry-audit-2026.md`](fair-geometry-audit-2026.md) | 공통 수평투영, `H_max`, 회전 불변성·면적 불변식 |
 | 실제 전년 비교 | [`full-year-comparison-audit-2026.json`](full-year-comparison-audit-2026.json) | [`full-year-comparison-audit-2026.md`](full-year-comparison-audit-2026.md) | 정지·통제 RPM·자연 RPM, 이상적·공학적 연결, 실제 시간 구간 |
+| 공학 연결 mesh 수렴 | [`engineering-mesh-convergence-audit-2026.json`](engineering-mesh-convergence-audit-2026.json) | [`engineering-mesh-convergence-audit-2026.md`](engineering-mesh-convergence-audit-2026.md) | 두 geometry contract, immutable topology/면적, 광학·위상·회로 3단계 수렴 |
+| 과도 열 + 공학 회로 전년 | [`transient-engineering-full-year-audit-2026.json`](transient-engineering-full-year-audit-2026.json) | [`transient-engineering-full-year-audit-2026.md`](transient-engineering-full-year-audit-2026.md) | 실제 전년 persistent T(t)→cell I-V→회로→인버터→모터, official 순위 |
 | 연간 과도 열 | [`annual-transient-audit-2026.json`](annual-transient-audit-2026.json) | 통합 보고서에서 생성 | persistent `T(t)`, E00/E10/E01/E11, 열잔차·mesh 수렴 |
 | 열모델 비교 | [`thermal-model-comparison-audit-2026.json`](thermal-model-comparison-audit-2026.json) | [`thermal-model-comparison-audit-2026.md`](thermal-model-comparison-audit-2026.md) | 같은 전년 clock의 준정상·과도 차이 |
 | 자연회전 | [`natural-rotation-audit-2026.json`](natural-rotation-audit-2026.json) | [`natural-rotation-audit-2026.md`](natural-rotation-audit-2026.md) | 형상별 ODE, no-C_Q 0 RPM, 공정 제외 sensitivity |
@@ -22,7 +24,7 @@
 - 실제 전년 계산은 비윤년 8,761개 weather 경계/8,760개 구간 또는 윤년 8,785개 경계/8,784개 구간을 직접 적분한다. closing endpoint는 중복 에너지로 계산하지 않는다.
 - 정지, 모든 형상에 같은 통제 RPM, 형상별 자연회전을 별도 group으로 계산한다. 자연회전은 월평균 풍속을 한 번 푸는 방식이 아니라 각 weather interval에서 동역학 ODE를 적분한다.
 - 전기 결과는 `local-mpp-area-integral` 이상적 연속막 상한과 `explicit-series-parallel-bypass` 공학적 연결로 분리한다.
-- 공학적 연결의 전년 계산값은 현재 mesh 수렴 기준을 통과하지 못했으므로 `not-evaluated` 탐색값이다. 공식 순위는 수렴한 이상적 local-MPP 결과에만 부여한다.
+- legacy 전년 감사의 저해상도 공학 행은 `not-evaluated` 탐색값이고 순위 번호를 갖지 않는다. 공식 공학 연결 순위는 두 geometry contract의 mesh gate와 실제 전년 transient+engineering gate, 그리고 두 compact gate의 artifact SHA가 모두 통과한 자동 생성 보고서에서만 제공한다.
 - 준정상 결과에는 `준정상 광학 회전·열이력 미포함` provenance를 붙인다. annual transient opt-in의 authoritative 월·연간 결과는 full-clock E11이며 E00/E10/E01/E11 폐합, 열수지 잔차와 mesh 수렴을 함께 보고한다.
 - 모든 순위 행은 `A_land`, `A_PV`, `A_PV/A_land`, 총 AC, kWh/m²-land/year, kWh/m²-PV/year, 전기·열·회전 모델, 기상 출처, 시간 해상도와 실제 전년/대표일 구분을 가진다.
 
@@ -44,4 +46,4 @@ npm run audit:all
 
 ## 판정 범위
 
-자동 검증은 모델 내부의 불변식과 지정 fixture를 검사한다. 실제 제조 가능성, 계측 기상 오차, 구조·전기 안전성과 장기 신뢰성을 인증하지 않는다. 특히 annual transient와 공학적 전기 연결의 결합, 장애물/plane tracking을 포함한 annual transient는 현재 미지원이다. 상세 해석 경계는 [알려진 한계](known-limitations.md)를 따른다.
+자동 검증은 모델 내부의 불변식과 지정 fixture를 검사한다. 실제 제조 가능성, 계측 기상 오차, 구조·전기 안전성과 장기 신뢰성을 인증하지 않는다. 공식 결합 경로는 장애물 없음, world-Y 세로축 회전, 고정 자세 평면만 검증했으며 외부 장애물과 plane tracking은 현재 미지원이다. 상세 해석 경계는 [알려진 한계](known-limitations.md)를 따른다.

@@ -4,7 +4,7 @@ Every annual row uses 8,760 actual hourly intervals plus a non-integrated closin
 
 Static land-matched designs and swept-envelope rotation-effect baselines are intentionally separate. Controlled active rotation reports motor-net AC. Transient ideal and quasi-steady engineering results remain separate because their combined solver is unsupported.
 
-Official ideal convergence: PASS. Engineering official ranking: NOT EVALUATED (Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.). Preflight 238.5 s.
+Official ideal convergence: PASS. Engineering official ranking: NOT EVALUATED (All pre-registered engineering convergence checks passed.). Preflight 59.2 s.
 
 ## static-land-matched:local-mpp-area-integral
 
@@ -90,81 +90,81 @@ Calculation resolution: azimuth=16; meridional=4; phase<=4; ideal local-MPP.
 
 Static designs sized so instantaneous horizontal projection equals A_land.
 
-Official rank: not evaluated. Ordered exploratory output only. Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.
+Official rank: not evaluated. Ordered exploratory output only. All pre-registered engineering convergence checks passed.
 Calculation resolution: azimuth=16; meridional=4; phase=4; circuit=32; exploratory non-converged output.
 
 | Exploratory order | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cube | 0.0500 | 0.2500 | 5.000 | 23.179101 | 0.000000 | 23.179101 | 463.582020 | 92.716404 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
-| 2 | cylinder | 0.0500 | 0.2500 | 5.000 | 21.718897 | 0.000000 | 21.718897 | 434.377946 | 86.875589 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
-| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 14.870907 | 0.000000 | 14.870907 | 297.418131 | 74.354533 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
-| 4 | hemisphere | 0.0500 | 0.1000 | 2.000 | 14.335540 | 0.000000 | 14.335540 | 286.710801 | 143.355400 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
-| 5 | plane | 0.0500 | 0.0577 | 1.155 | 11.359858 | 0.000000 | 11.359858 | 227.197164 | 196.758516 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
-| 6 | cone | 0.0500 | 0.1118 | 2.236 | 10.675096 | 0.000000 | 10.675096 | 213.501928 | 95.480965 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 23.045993 | 0.000000 | 23.045993 | 460.919854 | 92.183971 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 2 | cube | 0.0500 | 0.2500 | 5.000 | 22.311687 | 0.000000 | 22.311687 | 446.233736 | 89.246747 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 15.210542 | 0.000000 | 15.210542 | 304.210845 | 76.052711 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 4 | plane | 0.0500 | 0.0577 | 1.155 | 12.310268 | 0.000000 | 12.310268 | 246.205355 | 213.220092 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 5 | cone | 0.0500 | 0.1118 | 2.236 | 10.890407 | 0.000000 | 10.890407 | 217.808138 | 97.406760 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
+| 6 | hemisphere | 0.0500 | 0.1000 | 2.000 | 10.734512 | 0.000000 | 10.734512 | 214.690242 | 107.345121 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | held static 0 RPM |
 
 ## swept-held-static:explicit-series-parallel-bypass
 
 Pure-rotation baseline: rotating-envelope geometry held at 0 RPM.
 
-Official rank: not evaluated. Ordered exploratory output only. Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.
+Official rank: not evaluated. Ordered exploratory output only. All pre-registered engineering convergence checks passed.
 Calculation resolution: azimuth=16; meridional=4; phase=4; circuit=32; exploratory non-converged output.
 
 | Exploratory order | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 21.718897 | 0.000000 | 21.718897 | 434.377946 | 86.875589 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
-| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 14.870907 | 0.000000 | 14.870907 | 297.418131 | 74.354533 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
-| 3 | hemisphere | 0.0500 | 0.1000 | 2.000 | 14.335540 | 0.000000 | 14.335540 | 286.710801 | 143.355400 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
-| 4 | cube | 0.0500 | 0.1592 | 3.183 | 13.223588 | 0.000000 | 13.223588 | 264.471761 | 83.086254 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
-| 5 | cone | 0.0500 | 0.1118 | 2.236 | 10.675096 | 0.000000 | 10.675096 | 213.501928 | 95.480965 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
-| 6 | plane | 0.0500 | 0.0368 | 0.735 | 6.072813 | 0.000000 | 6.072813 | 121.456265 | 165.222972 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 23.045993 | 0.000000 | 23.045993 | 460.919854 | 92.183971 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 15.210542 | 0.000000 | 15.210542 | 304.210845 | 76.052711 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 3 | cube | 0.0500 | 0.1592 | 3.183 | 13.197589 | 0.000000 | 13.197589 | 263.951773 | 82.922895 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 10.890407 | 0.000000 | 10.890407 | 217.808138 | 97.406760 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 10.734512 | 0.000000 | 10.734512 | 214.690242 | 107.345121 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
+| 6 | plane | 0.0500 | 0.0368 | 0.735 | 6.751196 | 0.000000 | 6.751196 | 135.023915 | 183.679718 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | held static 0 RPM |
 
 ## controlled-kinematic:explicit-series-parallel-bypass
 
 Common controlled 2 RPM gross AC before an active motor demand is deducted.
 
-Official rank: not evaluated. Ordered exploratory output only. Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.
+Official rank: not evaluated. Ordered exploratory output only. All pre-registered engineering convergence checks passed.
 Calculation resolution: azimuth=16; meridional=4; phase=4; circuit=32; exploratory non-converged output.
 
 | Exploratory order | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 21.726371 | 0.000000 | 21.726371 | 434.527412 | 86.905482 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
-| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 14.752493 | 0.000000 | 14.752493 | 295.049859 | 73.762465 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
-| 3 | hemisphere | 0.0500 | 0.1000 | 2.000 | 14.032218 | 0.000000 | 14.032218 | 280.644362 | 140.322181 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
-| 4 | cube | 0.0500 | 0.1592 | 3.183 | 13.083130 | 0.000000 | 13.083130 | 261.662593 | 82.203728 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
-| 5 | cone | 0.0500 | 0.1118 | 2.236 | 10.806862 | 0.000000 | 10.806862 | 216.137242 | 96.659513 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
-| 6 | plane | 0.0500 | 0.0368 | 0.735 | 5.074236 | 0.000000 | 5.074236 | 101.484719 | 138.054689 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 23.067144 | 0.000000 | 23.067144 | 461.342882 | 92.268576 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 15.222061 | 0.000000 | 15.222061 | 304.441221 | 76.110305 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 3 | cube | 0.0500 | 0.1592 | 3.183 | 13.190839 | 0.000000 | 13.190839 | 263.816771 | 82.880483 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 10.958179 | 0.000000 | 10.958179 | 219.163588 | 98.012936 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 10.495499 | 0.000000 | 10.495499 | 209.909986 | 104.954993 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
+| 6 | plane | 0.0500 | 0.0368 | 0.735 | 5.677947 | 0.000000 | 5.677947 | 113.558942 | 154.479853 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; kinematic gross AC before motor demand |
 
 ## controlled-motor-net:explicit-series-parallel-bypass
 
 Common controlled 2 RPM with active-motor demand deducted and net AC clipped at zero.
 
-Official rank: not evaluated. Ordered exploratory output only. Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.
+Official rank: not evaluated. Ordered exploratory output only. All pre-registered engineering convergence checks passed.
 Calculation resolution: azimuth=16; meridional=4; phase=4; circuit=32; exploratory non-converged output.
 
 | Exploratory order | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 21.726371 | 0.004317 | 21.724336 | 434.486716 | 86.897343 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
-| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 14.752493 | 0.004317 | 14.750490 | 295.009794 | 73.752449 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
-| 3 | hemisphere | 0.0500 | 0.1000 | 2.000 | 14.032218 | 0.004317 | 14.030231 | 280.604630 | 140.302315 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
-| 4 | cube | 0.0500 | 0.1592 | 3.183 | 13.083130 | 0.004317 | 13.081131 | 261.622623 | 82.191171 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
-| 5 | cone | 0.0500 | 0.1118 | 2.236 | 10.806862 | 0.004317 | 10.804901 | 216.098014 | 96.641970 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
-| 6 | plane | 0.0500 | 0.0368 | 0.735 | 5.074236 | 0.004317 | 5.072359 | 101.447179 | 138.003622 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 23.067144 | 0.004317 | 23.065106 | 461.302128 | 92.260426 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 15.222061 | 0.004317 | 15.220059 | 304.401187 | 76.100297 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 3 | cube | 0.0500 | 0.1592 | 3.183 | 13.190839 | 0.004317 | 13.188840 | 263.776800 | 82.867926 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 10.958179 | 0.004317 | 10.956195 | 219.123908 | 97.995191 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 10.495499 | 0.004317 | 10.493525 | 209.870503 | 104.935252 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
+| 6 | plane | 0.0500 | 0.0368 | 0.735 | 5.677947 | 0.004317 | 5.676050 | 113.520997 | 154.428234 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | swept-rotation-envelope | controlled 2 RPM; active motor net AC; tau=0.002 Nm; eta=0.85 |
 
 ## natural-no-cq:explicit-series-parallel-bypass
 
 Natural dynamics with absent C_Q; exact zero-RPM result reuses the identical static land-matched calculation.
 
-Official rank: not evaluated. Ordered exploratory output only. Engineering official ranking is not evaluated: the extended cylinder mesh check differed by 6.5273%, versus the pre-registered 2.00% tolerance. The production azimuth limit is 128, so a still-higher reference cannot be executed.
+Official rank: not evaluated. Ordered exploratory output only. All pre-registered engineering convergence checks passed.
 Calculation resolution: azimuth=16; meridional=4; phase=4; circuit=32; exploratory non-converged output.
 
 | Exploratory order | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cube | 0.0500 | 0.2500 | 5.000 | 23.179101 | 0.000000 | 23.179101 | 463.582020 | 92.716404 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
-| 2 | cylinder | 0.0500 | 0.2500 | 5.000 | 21.718897 | 0.000000 | 21.718897 | 434.377946 | 86.875589 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
-| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 14.870907 | 0.000000 | 14.870907 | 297.418131 | 74.354533 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
-| 4 | hemisphere | 0.0500 | 0.1000 | 2.000 | 14.335540 | 0.000000 | 14.335540 | 286.710801 | 143.355400 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
-| 5 | plane | 0.0500 | 0.0577 | 1.155 | 11.359858 | 0.000000 | 11.359858 | 227.197164 | 196.758516 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
-| 6 | cone | 0.0500 | 0.1118 | 2.236 | 10.675096 | 0.000000 | 10.675096 | 213.501928 | 95.480965 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 23.045993 | 0.000000 | 23.045993 | 460.919854 | 92.183971 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 2 | cube | 0.0500 | 0.2500 | 5.000 | 22.311687 | 0.000000 | 22.311687 | 446.233736 | 89.246747 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 15.210542 | 0.000000 | 15.210542 | 304.210845 | 76.052711 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 4 | plane | 0.0500 | 0.0577 | 1.155 | 12.310268 | 0.000000 | 12.310268 | 246.205355 | 213.220092 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 5 | cone | 0.0500 | 0.1118 | 2.236 | 10.890407 | 0.000000 | 10.890407 | 217.808138 | 97.406760 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
+| 6 | hemisphere | 0.0500 | 0.1000 | 2.000 | 10.734512 | 0.000000 | 10.734512 | 214.690242 | 107.345121 | explicit-series-parallel-bypass | 준정상 광학 회전·열이력 미포함 | static-land-matched | shape dynamics; no C_Q; exact 0 RPM; static footprint contract |
 
 ## transient-static-land-matched:local-mpp-area-integral
 
@@ -175,12 +175,12 @@ Calculation resolution: optical phase=6; thermal nodes=6; maximum substep=900s.
 
 | Rank | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072559 | 0.000000 | 40.072559 | 801.451173 | 160.290235 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
-| 2 | cube | 0.0500 | 0.2500 | 5.000 | 39.728507 | 0.000000 | 39.728507 | 794.570145 | 158.914029 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
-| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337580 | 137.084395 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
-| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001642 | 172.177968 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
-| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851750 | 176.925875 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
-| 6 | plane | 0.0500 | 0.0577 | 1.155 | 13.601257 | 0.000000 | 13.601257 | 272.025148 | 235.580688 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072560 | 0.000000 | 40.072560 | 801.451191 | 160.290238 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 2 | cube | 0.0500 | 0.2500 | 5.000 | 39.728509 | 0.000000 | 39.728509 | 794.570181 | 158.914036 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337589 | 137.084397 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001646 | 172.177970 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851755 | 176.925877 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
+| 6 | plane | 0.0500 | 0.0577 | 1.155 | 13.601258 | 0.000000 | 13.601258 | 272.025167 | 235.580705 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | held static 0 RPM |
 
 ## transient-swept-held-static:local-mpp-area-integral
 
@@ -191,12 +191,12 @@ Calculation resolution: optical phase=6; thermal nodes=6; maximum substep=900s.
 
 | Rank | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072559 | 0.000000 | 40.072559 | 801.451173 | 160.290235 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
-| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337580 | 137.084395 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
-| 3 | cube | 0.0500 | 0.1592 | 3.183 | 24.383641 | 0.000000 | 24.383641 | 487.672813 | 153.206933 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
-| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001642 | 172.177968 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
-| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851750 | 176.925875 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
-| 6 | plane | 0.0500 | 0.0368 | 0.735 | 7.840353 | 0.000000 | 7.840353 | 156.807067 | 213.312419 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072560 | 0.000000 | 40.072560 | 801.451191 | 160.290238 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337589 | 137.084397 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 3 | cube | 0.0500 | 0.1592 | 3.183 | 24.383641 | 0.000000 | 24.383641 | 487.672827 | 153.206937 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001646 | 172.177970 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851755 | 176.925877 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
+| 6 | plane | 0.0500 | 0.0368 | 0.735 | 7.840354 | 0.000000 | 7.840354 | 156.807073 | 213.312428 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | held static 0 RPM |
 
 ## transient-controlled-motor-net:local-mpp-area-integral
 
@@ -207,12 +207,12 @@ Calculation resolution: optical phase=6; thermal nodes=6; maximum substep=900s.
 
 | Rank | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.116188 | 0.004317 | 40.114016 | 802.280321 | 160.456064 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
-| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 27.450185 | 0.004317 | 27.448043 | 548.960862 | 137.240215 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
-| 3 | cube | 0.0500 | 0.1592 | 3.183 | 24.554543 | 0.004317 | 24.552415 | 491.048301 | 154.267373 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
-| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.287822 | 0.004317 | 19.285721 | 385.714416 | 172.496731 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
-| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.720695 | 0.004317 | 17.718615 | 354.372294 | 177.186147 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
-| 6 | plane | 0.0500 | 0.0368 | 0.735 | 6.512353 | 0.004317 | 6.510508 | 130.210164 | 177.131334 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.116189 | 0.004317 | 40.114017 | 802.280338 | 160.456068 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 2 | sphere | 0.0500 | 0.2000 | 4.000 | 27.450185 | 0.004317 | 27.448043 | 548.960869 | 137.240217 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 3 | cube | 0.0500 | 0.1592 | 3.183 | 24.554543 | 0.004317 | 24.552416 | 491.048312 | 154.267377 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.287822 | 0.004317 | 19.285721 | 385.714420 | 172.496733 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.720695 | 0.004317 | 17.718615 | 354.372298 | 177.186149 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
+| 6 | plane | 0.0500 | 0.0368 | 0.735 | 6.512353 | 0.004317 | 6.510508 | 130.210168 | 177.131339 | local-mpp-area-integral | annual actual-clock transient thermal history included | swept-rotation-envelope | controlled 2 RPM; active motor net AC |
 
 ## transient-natural-no-cq:local-mpp-area-integral
 
@@ -223,9 +223,9 @@ Calculation resolution: optical phase=6; thermal nodes=6; maximum substep=900s.
 
 | Rank | Shape | A_land | A_PV | A_PV/A_land | Gross AC | Motor | Net AC kWh/y | kWh/m2-land/y | kWh/m2-PV/y | Electrical | Thermal | Geometry | Rotation |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---|---|
-| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072559 | 0.000000 | 40.072559 | 801.451173 | 160.290235 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
-| 2 | cube | 0.0500 | 0.2500 | 5.000 | 39.728507 | 0.000000 | 39.728507 | 794.570145 | 158.914029 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
-| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337580 | 137.084395 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
-| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001642 | 172.177968 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
-| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851750 | 176.925875 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
-| 6 | plane | 0.0500 | 0.0577 | 1.155 | 13.601257 | 0.000000 | 13.601257 | 272.025148 | 235.580688 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 1 | cylinder | 0.0500 | 0.2500 | 5.000 | 40.072560 | 0.000000 | 40.072560 | 801.451191 | 160.290238 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 2 | cube | 0.0500 | 0.2500 | 5.000 | 39.728509 | 0.000000 | 39.728509 | 794.570181 | 158.914036 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 3 | sphere | 0.0500 | 0.2000 | 4.000 | 27.416879 | 0.000000 | 27.416879 | 548.337589 | 137.084397 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 4 | cone | 0.0500 | 0.1118 | 2.236 | 19.250082 | 0.000000 | 19.250082 | 385.001646 | 172.177970 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 5 | hemisphere | 0.0500 | 0.1000 | 2.000 | 17.692588 | 0.000000 | 17.692588 | 353.851755 | 176.925877 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |
+| 6 | plane | 0.0500 | 0.0577 | 1.155 | 13.601258 | 0.000000 | 13.601258 | 272.025167 | 235.580705 | local-mpp-area-integral | annual actual-clock transient thermal history included | static-land-matched | shape dynamics; no C_Q; exact 0 RPM |

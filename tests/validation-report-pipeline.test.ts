@@ -346,6 +346,76 @@ describe("generated report contracts", () => {
     expect(() => validateAnnualAudit(audit, root)).toThrow(/current source bytes/);
   });
 
+  it("accepts an honestly converged annual engineering gate but still rejects a forged one", () => {
+    type ConvergenceGateAudit = {
+      convergenceGate: {
+        pass: boolean;
+        officialIdealPass: boolean;
+        engineeringPass: boolean;
+        engineeringOfficialRankingEligible: boolean;
+        engineeringRankingVerdict: string;
+        engineering: {
+          pass: boolean;
+          status: string;
+          officialRankingEligible: boolean;
+          comparisons: Array<{ lowWh: number; highWh: number; relativeDifference: number; tolerance: number; pass: boolean }>;
+          extendedCylinder: { selectedWh: number; referenceWh: number; relativeDifference: number; tolerance: number; pass: boolean };
+        };
+      };
+    };
+
+    // The shipped fixture encodes the superseded 6.5273% cell-mapping failure.
+    const failing = structuredClone(makeAnnualAudit(2025)) as unknown as ConvergenceGateAudit;
+    expect(failing.convergenceGate.engineering.extendedCylinder.relativeDifference)
+      .toBeCloseTo(0.065273, 6);
+    expect(() => validateAnnualAudit(failing)).not.toThrow();
+
+    // The material-space clipped-cell layout now converges. An audit reporting
+    // that honestly must be accepted: freezing "engineering convergence fails"
+    // into the contract would have made the fix unpublishable.
+    const converged = structuredClone(makeAnnualAudit(2025)) as unknown as ConvergenceGateAudit;
+    const gate = converged.convergenceGate;
+    for (const comparison of gate.engineering.comparisons) {
+      comparison.relativeDifference = comparison.tolerance / 2;
+      comparison.lowWh = comparison.highWh * (1 + comparison.relativeDifference);
+      comparison.pass = true;
+    }
+    const extended = gate.engineering.extendedCylinder;
+    extended.relativeDifference = extended.tolerance / 2;
+    extended.selectedWh = extended.referenceWh * (1 + extended.relativeDifference);
+    extended.pass = true;
+    gate.engineering.pass = true;
+    gate.engineeringPass = true;
+    gate.pass = gate.officialIdealPass && true;
+    expect(() => validateAnnualAudit(converged as never)).not.toThrow();
+
+    // Convergence never promotes this legacy gate into a ranking authority.
+    for (const promote of [
+      (audit: ConvergenceGateAudit) => { audit.convergenceGate.engineeringOfficialRankingEligible = true; },
+      (audit: ConvergenceGateAudit) => { audit.convergenceGate.engineering.officialRankingEligible = true; },
+      (audit: ConvergenceGateAudit) => { audit.convergenceGate.engineeringRankingVerdict = "pass"; },
+      (audit: ConvergenceGateAudit) => { audit.convergenceGate.engineering.status = "pass"; },
+    ]) {
+      const promoted = structuredClone(converged);
+      promote(promoted);
+      expect(() => validateAnnualAudit(promoted as never)).toThrow(/rank-ineligible/);
+    }
+
+    // A pass flag that its own comparison rows do not support stays rejected.
+    const forged = structuredClone(converged);
+    forged.convergenceGate.engineering.comparisons[0].pass = false;
+    forged.convergenceGate.engineering.comparisons[0].relativeDifference =
+      forged.convergenceGate.engineering.comparisons[0].tolerance * 2;
+    forged.convergenceGate.engineering.comparisons[0].lowWh =
+      forged.convergenceGate.engineering.comparisons[0].highWh
+        * (1 + forged.convergenceGate.engineering.comparisons[0].relativeDifference);
+    expect(() => validateAnnualAudit(forged as never)).toThrow(/self-consistent/);
+
+    const forgedExtended = structuredClone(converged);
+    forgedExtended.convergenceGate.engineering.extendedCylinder.pass = false;
+    expect(() => validateAnnualAudit(forgedExtended as never)).toThrow();
+  });
+
   it("recalculates research metrics, policy, conditions, category counts, and sensitivity", () => {
     const audit = JSON.parse(readFileSync(
       resolve(process.cwd(), "docs/research-source-equivalent-audit.json"),

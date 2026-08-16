@@ -16,12 +16,12 @@ import type { AnnualRotationDecompositionResult, ThermalModelMetadata } from "..
 import type { WeatherPoint } from "../lib/weather";
 
 /**
- * v5 adds material-space surface addressing and deterministic engineering
- * layout IDs. The version is part of every fingerprint, so pre-spatial wiring
- * results cannot be mistaken for the current manufacturing contract.
+ * v6 couples the immutable engineering cell layout to actual-clock transient
+ * material temperatures. The version is part of every fingerprint, so old
+ * quasi-steady/engineering cohorts cannot be published as combined results.
  */
-export const SIMULATION_WORKER_PROTOCOL_VERSION = 5 as const;
-export const SIMULATION_CACHE_VERSION = 6 as const;
+export const SIMULATION_WORKER_PROTOCOL_VERSION = 6 as const;
+export const SIMULATION_CACHE_VERSION = 7 as const;
 export const CONTINUOUS_SURFACE_MODEL_VERSION = "continuous-pv-electrical-v3" as const;
 export const CONTINUOUS_SURFACE_MESH_VERSION = "comparison-surface-mesh-v2" as const;
 
@@ -313,6 +313,11 @@ export interface SimulationVariantWorkItem {
     effectiveSkyTemperatureOffsetC?: number;
     thermalNodeCount?: number;
     maximumThermalSubstepSeconds?: number;
+    /**
+     * Engineering I-V/circuit state refresh cadence. It is independent of the
+     * finer thermal stability step and cannot exceed one actual clock hour.
+     */
+    maximumElectricalCouplingStepSeconds?: number;
     warmupPeriodHours?: number;
     warmupConvergenceToleranceC?: number;
   };
@@ -457,6 +462,46 @@ export interface SimulationMonthlyEnergy {
   motorEnergyWhByVariant?: Record<string, number>;
 }
 
+export interface AnnualEngineeringElectricalAudit {
+  status: "authoritative-annual-transient-engineering";
+  electricalModel: "explicit-series-parallel-bypass";
+  thermalModel: "annual-transient-material-state";
+  periodIntegration: "actual-weather-clock";
+  electricalLayoutId: string;
+  annual: {
+    idealLocalMppDcEnergyWh: number;
+    engineeringDcEnergyWh: number;
+    mismatchAndWiringLossEnergyWh: number;
+    grossAcEnergyWh: number;
+    netAcEnergyWh: number;
+    motorEnergyWh: number;
+    inverterLossWh: number;
+    bypassActivationDeviceHours: number;
+  };
+  monthly: readonly {
+    monthUtc: string;
+    idealLocalMppDcEnergyWh: number;
+    engineeringDcEnergyWh: number;
+    mismatchAndWiringLossEnergyWh: number;
+    grossAcEnergyWh: number;
+    netAcEnergyWh: number;
+    motorEnergyWh: number;
+    bypassActivationDeviceHours: number;
+  }[];
+  topology: {
+    activeAreaM2: number;
+    cellCount: number;
+    parallelStringCount: number;
+    seriesCellCountByString: readonly number[];
+    bypassSubstringCount: number;
+  };
+  coupling: {
+    maximumStepSeconds: number;
+    circuitSolveCount: number;
+    maximumElectricalExtractionClosureErrorW: number;
+  };
+}
+
 export interface SimulationCompleteEvent {
   protocolVersion: typeof SIMULATION_WORKER_PROTOCOL_VERSION;
   type: "simulation/complete";
@@ -474,6 +519,7 @@ export interface SimulationCompleteEvent {
   authoritativeEnergyPathByVariant: Record<
     string,
     "worker-quasi-steady" | "annual-transient-e11"
+      | "annual-transient-engineering-e11"
   >;
   /**
    * Quasi-steady region energies close to their parent variant. An opt-in
@@ -490,6 +536,11 @@ export interface SimulationCompleteEvent {
   annualTransientRotationByVariant?: Record<
     string,
     AnnualRotationDecompositionResult
+  >;
+  /** Present only for a fully coupled transient + explicit-circuit E11 path. */
+  annualEngineeringElectricalAuditByVariant?: Record<
+    string,
+    AnnualEngineeringElectricalAudit
   >;
   monthlyEnergy: SimulationMonthlyEnergy[];
   /** Fixed offset used for `monthlyEnergy`; zero preserves the legacy UTC contract. */

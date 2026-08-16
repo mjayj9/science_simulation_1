@@ -3061,3 +3061,58 @@ svg {
   .analysis-panel-heading > .analysis-segmented { width: 100%; }
   .rank-shape-select { min-width: 0; }
 }
+
+.visualization-fallback {
+  align-items: center;
+  color: var(--muted, #86a0aa);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  justify-content: center;
+  min-height: 12rem;
+  width: 100%;
+}
+
+.mini-scene > .visualization-fallback,
+.chart-medium > .visualization-fallback,
+.chart-large > .visualization-fallback {
+  height: 100%;
+}
+
+.chart-provenance {
+  display: grid;
+  gap: 3px;
+  margin: 0 12px 12px;
+  padding: 8px 9px;
+  border: 1px solid #203a46;
+  border-radius: 7px;
+  background: #091a23;
+  color: #6f8993;
+  font: 0.48rem/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.chart-provenance strong {
+  color: #83cdb8;
+  font-size: 0.46rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.artifact-ranking-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.artifact-ranking-grid h4 {
+  color: #9ed8c8;
+  font-size: 0.72rem;
+  margin: 0 0 6px;
+}
+
+@media (max-width: 1100px) {
+  .artifact-ranking-grid {
+    grid-template-columns: 1fr;
+  }
+}

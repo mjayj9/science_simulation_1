@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-13T16:06:52.965Z",
+  "generatedAt": "2026-08-16T04:24:15.060Z",
   "contract": "static uses instantaneous horizontal projection; controlled rotation uses 360-degree swept occupation; H_max is installed world height including support clearance",
   "tolerances": {
     "areaM2": 1e-10,

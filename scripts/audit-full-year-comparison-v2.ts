@@ -31,6 +31,7 @@ import {
   type SimulationStepFunction,
   type SimulationVariantWorkItem,
 } from "../src/workers/index";
+import { computeSourceClosure } from "./source-closure";
 
 const jsonPath = process.argv[3]?.startsWith("--")
   ? "docs/full-year-comparison-audit-2026.json"
@@ -46,19 +47,18 @@ const phaseGateOnly = process.argv.includes("--phase-gate-only");
 const requestedShapesArgument = process.argv.find((argument) => argument.startsWith("--shapes="))
   ?.slice("--shapes=".length);
 const auditImplementationVersion = 6;
-const implementationSourceFiles = Object.freeze([
-  "scripts/audit-full-year-comparison-v2.ts",
-  "src/lib/geometry/comparison-surfaces.ts",
-  "src/lib/geometry/continuous-surfaces.ts",
-  "src/lib/physics/annual-transient.ts",
-  "src/lib/physics/engineering-surface-electrical.ts",
-  "src/lib/physics/natural-rotation.ts",
-  "src/lib/physics/pipeline.ts",
-  "src/lib/physics/transient-thermal.ts",
-  "src/lib/weather/offline.ts",
-  "src/workers/kernel.ts",
-  "src/workers/protocol.ts",
-]);
+/**
+ * Derived, not hand-listed. This audit is the ideal-path baseline the combined
+ * transient+engineering audit validates against, so under-covering its
+ * provenance would propagate an unprovable baseline into the official ranking.
+ * The superseded literal list omitted `solar.ts`, `irradiance.ts`, `circuit.ts`
+ * and `inverter.ts`, all of which move these annual numbers.
+ */
+const implementationSourceFiles = computeSourceClosure({
+  entryPoints: ["scripts/audit-full-year-comparison-v2.ts"],
+  rootDir: process.cwd(),
+  label: "annual.implementation",
+});
 const implementationFingerprint = createHash("sha256").update(
   implementationSourceFiles
     .slice()

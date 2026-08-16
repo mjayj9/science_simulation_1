@@ -4,7 +4,7 @@
 
 ## 결과를 읽는 방법
 
-최신 순위와 수치는 [자동 생성 검증 보고서](generated-validation-report-2026.md) 및 그 원본인 [실제 전년 비교 감사 JSON](full-year-comparison-audit-2026.json)을 따른다. 이 문서에는 숫자표를 복제하지 않는다. 과거 `fair-comparison-audit-2026.json`의 12대표일 가중치는 실제 8,760/8,784시간 worker 결과가 아니므로 최신 전년 순위와 혼합하지 않는다.
+최신 이상적 상한은 [실제 전년 비교 감사 JSON](full-year-comparison-audit-2026.json), 공식 공학 연결 순위는 [과도 열 + 공학 회로 실제 전년 감사](transient-engineering-full-year-audit-2026.md), 통합 표는 [자동 생성 검증 보고서](generated-validation-report-2026.md)를 따른다. 이 문서에는 숫자표를 복제하지 않는다. 과거 `fair-comparison-audit-2026.json`의 대표일 가중치와 legacy 저해상도 공학 행은 공식 순위와 혼합하지 않는다.
 
 공식 비교는 같은 `A_land`와 공통 `H_max=2√(A_land/π)`를 적용하지만 형상별 `A_PV`는 같지 않다. 따라서 하나의 “효율 순위” 대신 다음 세 질문을 분리한다.
 
@@ -32,7 +32,7 @@ source-backed 자가기동 `C_Q`가 없는 대칭 형상의 공식 자연 RPM은
 
 ## 전기 연결별 비교
 
-각 회전 group은 두 전기 계약을 분리해 제시한다. 다만 공학적 연결은 현재 mesh 수렴 기준을 통과하지 못했으므로 공식 순위가 아니라 `not-evaluated` 탐색 순서와 수렴 실패 근거만 보고한다.
+각 회전 group은 두 전기 계약을 분리한다. 기존 `full-year-comparison-audit-2026.json`의 저해상도 공학 행은 재현 provenance를 위한 탐색값이며 공식 순위 번호가 없다. 공식 공학 순위는 `static-land-matched`와 `swept-rotation-envelope`의 광학망·위상·회로표본 수렴, immutable 셀 topology/면적, 그리고 실제 전년 transient+회로 결합 gate가 모두 통과한 별도 감사에서만 제공한다.
 
 - 이상적 연속막 상한: `local-mpp-area-integral`.
 - 공학적 전기 연결: 동일 명목 셀 밀도, 명시적 셀 직렬·스트링 병렬·bypass substring·배선 저항을 쓰는 `explicit-series-parallel-bypass`.
@@ -45,7 +45,7 @@ source-backed 자가기동 `C_Q`가 없는 대칭 형상의 공식 자연 RPM은
 
 annual transient 감사는 실제 전년 weather clock에 걸쳐 열상태 `T(t)`를 이어가며 E00/E10/E01/E11과 광학·열·상호작용·순 효과를 계산한다. 그 결과를 대표일 환산처럼 취급하지 않는다. 같은 fixture의 준정상·과도 차이는 [열모델 비교 감사](thermal-model-comparison-audit-2026.md), 에너지 폐합과 열망 수렴은 [annual transient 감사 JSON](annual-transient-audit-2026.json)을 따른다.
 
-현재 과도 열경로는 local-MPP 연속표면에 한정되므로 공학적 연결·장애물·plane tracking과 결합한 연간 과도열 순위를 제공하지 않는다. 미지원 조합을 준정상 결과로 대체해 “열이력 포함”이라고 표시하면 안 된다.
+공식 공학 열경로는 실제 전년 동안 지속한 온도상태를 셀 I-V와 직렬·병렬·bypass 회로, 인버터, 모터 원장까지 연결한다. 장애물 없음, world-Y 세로축 회전, 고정 자세 평면이 검증 범위이며 외부 장애물·plane tracking은 실행 전에 거부한다. 이 경로의 same-contract 준정상·과도 차이와 순위는 [결합 감사](transient-engineering-full-year-audit-2026.md)가 권위다.
 
 ## 시간과 기상 provenance
 

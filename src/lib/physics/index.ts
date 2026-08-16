@@ -10,6 +10,7 @@ export * from "./transient-thermal";
 export * from "./annual-transient";
 export * from "./electrical";
 export * from "./engineering-surface-electrical";
+export * from "./engineering-mesh-validation-gate";
 export * from "./circuit";
 export * from "./inverter";
 export * from "./rotation";

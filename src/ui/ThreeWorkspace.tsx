@@ -1,10 +1,55 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import * as THREE from "three";
+import {
+  ACESFilmicToneMapping,
+  ArrowHelper,
+  Box3,
+  BoxGeometry,
+  BufferGeometry,
+  CircleGeometry,
+  Color,
+  ConeGeometry,
+  CylinderGeometry,
+  DirectionalLight,
+  DodecahedronGeometry,
+  DoubleSide,
+  EdgesGeometry,
+  Float32BufferAttribute,
+  FogExp2,
+  GridHelper,
+  Group,
+  HemisphereLight,
+  Line,
+  LineBasicMaterial,
+  LineDashedMaterial,
+  LineLoop,
+  LineSegments,
+  MathUtils,
+  Mesh,
+  MeshBasicMaterial,
+  MeshPhysicalMaterial,
+  MeshStandardMaterial,
+  PCFShadowMap,
+  PerspectiveCamera,
+  PlaneGeometry,
+  Points,
+  PointsMaterial,
+  Quaternion,
+  Raycaster,
+  RingGeometry,
+  Scene,
+  SphereGeometry,
+  SRGBColorSpace,
+  Uint16BufferAttribute,
+  Vector2,
+  Vector3,
+  WebGLRenderer,
+  type Material,
+  type Object3D,
+} from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import {
   createContinuousSurface,
   continuousSurfaceDimensions,
@@ -231,13 +276,13 @@ export function rigidSweptFootprintAreaM2(panels: readonly ScenePanel[]) {
   const halfSize = PANEL_SIZE / 2;
   const halfDepth = PANEL_DEPTH / 2;
   panels.forEach((panel) => {
-    const quaternion = new THREE.Quaternion(...panel.quaternion).normalize();
+    const quaternion = new Quaternion(...panel.quaternion).normalize();
     for (const x of [-halfSize, halfSize]) {
       for (const y of [-halfSize, halfSize]) {
         for (const z of [-halfDepth, halfDepth]) {
-          const corner = new THREE.Vector3(x, y, z)
+          const corner = new Vector3(x, y, z)
             .applyQuaternion(quaternion)
-            .add(new THREE.Vector3(...panel.position));
+            .add(new Vector3(...panel.position));
           radiusM = Math.max(radiusM, Math.hypot(corner.x, corner.z));
         }
       }
@@ -331,7 +376,7 @@ function selectedZoneIndex(
 
 function zoneIndexAtSurfacePoint(
   data: ContinuousSurfaceHitData,
-  point: THREE.Vector3,
+  point: Vector3,
 ) {
   if (data.kind === "plane" || data.kind === "cube") return 0;
   const radiusM = data.dimensions.radiusM ?? 1;
@@ -359,16 +404,16 @@ function zoneIndexAtSurfacePoint(
 }
 
 function colorForIrradiance(value = 0) {
-  const t = THREE.MathUtils.clamp(value / 1000, 0, 1);
-  const low = new THREE.Color("#17334a");
-  const high = new THREE.Color("#f7bb38");
+  const t = MathUtils.clamp(value / 1000, 0, 1);
+  const low = new Color("#17334a");
+  const high = new Color("#f7bb38");
   return low.lerp(high, Math.pow(t, 0.72));
 }
 
 function colorForSurfaceZone(panel: ScenePanel | undefined, selected: boolean) {
   const color = colorForIrradiance(panel?.irradianceWm2);
-  if (panel?.bypassActive) color.lerp(new THREE.Color("#d9683b"), 0.58);
-  if (selected) color.lerp(new THREE.Color("#fff0a6"), 0.52);
+  if (panel?.bypassActive) color.lerp(new Color("#d9683b"), 0.58);
+  if (selected) color.lerp(new Color("#fff0a6"), 0.52);
   return color;
 }
 
@@ -380,7 +425,7 @@ function pushSurfaceTriangle(
   a: SurfacePoint,
   b: SurfacePoint,
   c: SurfacePoint,
-  color: THREE.Color,
+  color: Color,
   zoneIndex: number,
 ) {
   for (const point of [a, b, c]) {
@@ -396,18 +441,18 @@ export interface PlanarZonePatch {
 }
 
 export function planarZonePatch(zone: SurfaceZone): PlanarZonePatch {
-  const normal = new THREE.Vector3(...zone.representativeNormal).normalize();
-  const averages = new Map<number, { position: THREE.Vector3; count: number }>();
+  const normal = new Vector3(...zone.representativeNormal).normalize();
+  const averages = new Map<number, { position: Vector3; count: number }>();
   zone.samples.forEach((sample) => {
-    const current = averages.get(sample.v) ?? { position: new THREE.Vector3(), count: 0 };
-    current.position.add(new THREE.Vector3(...sample.position));
+    const current = averages.get(sample.v) ?? { position: new Vector3(), count: 0 };
+    current.position.add(new Vector3(...sample.position));
     current.count += 1;
     averages.set(sample.v, current);
   });
   const columns = [...averages.entries()]
     .map(([v, value]) => ({ v, position: value.position.multiplyScalar(1 / value.count) }))
     .sort((left, right) => left.v - right.v);
-  let axisU: THREE.Vector3;
+  let axisU: Vector3;
   let widthM: number;
   if (columns.length >= 2 && columns.at(-1)!.v > columns[0].v) {
     const span = columns.at(-1)!.position.clone().sub(columns[0].position);
@@ -415,13 +460,13 @@ export function planarZonePatch(zone: SurfaceZone): PlanarZonePatch {
     axisU = span.normalize();
   } else {
     axisU = Math.abs(normal.y) < 0.9
-      ? new THREE.Vector3(0, 1, 0).cross(normal).normalize()
-      : new THREE.Vector3(1, 0, 0);
+      ? new Vector3(0, 1, 0).cross(normal).normalize()
+      : new Vector3(1, 0, 0);
     widthM = Math.sqrt(zone.areaM2);
   }
   const heightM = zone.areaM2 / Math.max(widthM, 1e-12);
   const axisV = normal.clone().cross(axisU).normalize();
-  const centre = new THREE.Vector3(...zone.representativePosition);
+  const centre = new Vector3(...zone.representativePosition);
   const point = (u: number, v: number): SurfacePoint => ({
     position: centre.clone().addScaledVector(axisU, u).addScaledVector(axisV, v).toArray() as Vec3Tuple,
     normal: normal.toArray() as Vec3Tuple,
@@ -484,7 +529,7 @@ function createContinuousSurfaceGeometry(
             zoneIndex === selectedIndex,
           );
           if (model.kind === "cylinder" && dimensions.includesTopDisk) {
-            color.lerp(new THREE.Color(cylinderRegion === "top" ? "#f0b84c" : "#34b998"), 0.18);
+            color.lerp(new Color(cylinderRegion === "top" ? "#f0b84c" : "#34b998"), 0.18);
           }
           const p00 = pointOnSurfaceModel(model, q0, v0, cylinderRegion);
           const p01 = pointOnSurfaceModel(model, q0, v1, cylinderRegion);
@@ -511,27 +556,27 @@ function createContinuousSurfaceGeometry(
     }
   }
 
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
-  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geometry.setAttribute("zoneIndex", new THREE.Uint16BufferAttribute(zoneIndices, 1));
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+  geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+  geometry.setAttribute("zoneIndex", new Uint16BufferAttribute(zoneIndices, 1));
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
   return geometry;
 }
 
 function offsetSurfacePoint(point: SurfacePoint, distance = 0.00045) {
-  return new THREE.Vector3(...point.position).addScaledVector(
-    new THREE.Vector3(...point.normal),
+  return new Vector3(...point.position).addScaledVector(
+    new Vector3(...point.normal),
     distance,
   );
 }
 
 function createZoneBoundaryGroup(model: IdealSurfaceModel) {
-  const group = new THREE.Group();
+  const group = new Group();
   group.name = `${model.kind}-integration-region-boundaries`;
-  const material = new THREE.LineBasicMaterial({
+  const material = new LineBasicMaterial({
     color: "#9de7d7",
     transparent: true,
     opacity: 0.76,
@@ -540,7 +585,7 @@ function createZoneBoundaryGroup(model: IdealSurfaceModel) {
   if (model.kind === "plane" || model.kind === "cube") {
     model.zones.forEach((zone) => {
       const points = planarZonePatch(zone).corners.map((point) => offsetSurfacePoint(point));
-      const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), material);
+      const line = new LineLoop(new BufferGeometry().setFromPoints(points), material);
       line.raycast = () => {};
       group.add(line);
     });
@@ -557,7 +602,7 @@ function createZoneBoundaryGroup(model: IdealSurfaceModel) {
     );
     const radius = Math.max(...points.map((point) => Math.hypot(point.x, point.z)));
     if (radius < 0.0001) continue;
-    const line = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(points), material);
+    const line = new LineLoop(new BufferGeometry().setFromPoints(points), material);
     line.raycast = () => {};
     group.add(line);
   }
@@ -566,17 +611,17 @@ function createZoneBoundaryGroup(model: IdealSurfaceModel) {
 }
 
 function addSunRay(
-  group: THREE.Group,
-  origin: THREE.Vector3,
-  sunDirection: THREE.Vector3,
+  group: Group,
+  origin: Vector3,
+  sunDirection: Vector3,
   length = 0.22,
   opacity = 0.45,
 ) {
   const start = origin.clone().addScaledVector(sunDirection, length);
-  const geometry = new THREE.BufferGeometry().setFromPoints([start, origin]);
-  const line = new THREE.Line(
+  const geometry = new BufferGeometry().setFromPoints([start, origin]);
+  const line = new Line(
     geometry,
-    new THREE.LineDashedMaterial({
+    new LineDashedMaterial({
       color: "#ffd76a",
       dashSize: 0.012,
       gapSize: 0.008,
@@ -589,17 +634,17 @@ function addSunRay(
 }
 
 function addAoiArc(
-  group: THREE.Group,
-  origin: THREE.Vector3,
-  normal: THREE.Vector3,
-  sunDirection: THREE.Vector3,
+  group: Group,
+  origin: Vector3,
+  normal: Vector3,
+  sunDirection: Vector3,
 ) {
-  const cosine = THREE.MathUtils.clamp(normal.dot(sunDirection), -1, 1);
+  const cosine = MathUtils.clamp(normal.dot(sunDirection), -1, 1);
   const angle = Math.acos(cosine);
   if (angle < 1e-4) return;
   const tangent = sunDirection.clone().addScaledVector(normal, -cosine);
   if (tangent.lengthSq() < 1e-12) {
-    tangent.copy(Math.abs(normal.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0));
+    tangent.copy(Math.abs(normal.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0));
     tangent.addScaledVector(normal, -tangent.dot(normal));
   }
   tangent.normalize();
@@ -611,29 +656,29 @@ function addAoiArc(
       .addScaledVector(normal, radius * Math.cos(theta))
       .addScaledVector(tangent, radius * Math.sin(theta));
   });
-  const arc = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(points),
-    new THREE.LineBasicMaterial({ color: "#ff8fc7", depthTest: false }),
+  const arc = new Line(
+    new BufferGeometry().setFromPoints(points),
+    new LineBasicMaterial({ color: "#ff8fc7", depthTest: false }),
   );
   arc.renderOrder = 5;
   group.add(arc);
 }
 
-function obstacleGeometry(type: SceneObstacle["type"]): THREE.BufferGeometry {
+function obstacleGeometry(type: SceneObstacle["type"]): BufferGeometry {
   switch (type) {
     case "mountain":
-      return new THREE.ConeGeometry(0.09, 0.18, 9);
+      return new ConeGeometry(0.09, 0.18, 9);
     case "tree":
-      return new THREE.ConeGeometry(0.045, 0.12, 10);
+      return new ConeGeometry(0.045, 0.12, 10);
     case "wall":
-      return new THREE.BoxGeometry(0.16, 0.09, 0.012);
+      return new BoxGeometry(0.16, 0.09, 0.012);
     case "ground":
     case "water":
-      return new THREE.BoxGeometry(0.22, 0.006, 0.22);
+      return new BoxGeometry(0.22, 0.006, 0.22);
     case "other":
-      return new THREE.DodecahedronGeometry(0.065, 0);
+      return new DodecahedronGeometry(0.065, 0);
     default:
-      return new THREE.BoxGeometry(0.1, 0.13, 0.09);
+      return new BoxGeometry(0.1, 0.13, 0.09);
   }
 }
 
@@ -650,11 +695,11 @@ function obstacleColor(item: SceneObstacle) {
   }[item.type];
 }
 
-function disposeObject3D(root: THREE.Object3D) {
-  const geometries = new Set<THREE.BufferGeometry>();
-  const materials = new Set<THREE.Material>();
+function disposeObject3D(root: Object3D) {
+  const geometries = new Set<BufferGeometry>();
+  const materials = new Set<Material>();
   root.traverse((object) => {
-    if (!(object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)) return;
+    if (!(object instanceof Mesh || object instanceof Line || object instanceof Points)) return;
     geometries.add(object.geometry);
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
     objectMaterials.forEach((material) => materials.add(material));
@@ -663,7 +708,7 @@ function disposeObject3D(root: THREE.Object3D) {
   materials.forEach((material) => material.dispose());
 }
 
-function clearAndDispose(group: THREE.Group) {
+function clearAndDispose(group: Group) {
   group.children.forEach((child) => disposeObject3D(child));
   group.clear();
 }
@@ -687,7 +732,7 @@ export function cameraPoseForView(
       target,
     };
   }
-  const direction = new THREE.Vector3(0.48, 0.36, 0.56).normalize().multiplyScalar(safeDistance);
+  const direction = new Vector3(0.48, 0.36, 0.56).normalize().multiplyScalar(safeDistance);
   return {
     position: [target[0] + direction.x, target[1] + direction.y, target[2] + direction.z] as Vec3Tuple,
     up: [0, 1, 0] as Vec3Tuple,
@@ -766,22 +811,22 @@ export function ThreeWorkspace({
 }: ThreeWorkspaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
-    scene: THREE.Scene;
-    camera: THREE.PerspectiveCamera;
-    renderer: THREE.WebGLRenderer;
+    scene: Scene;
+    camera: PerspectiveCamera;
+    renderer: WebGLRenderer;
     orbit: OrbitControls;
     transform: TransformControls;
-    panelGroup: THREE.Group;
-    obstacleGroup: THREE.Group;
-    helperGroup: THREE.Group;
-    rayGroup: THREE.Group;
-    siteOverlayGroup: THREE.Group;
-    supportGroup: THREE.Group;
-    importedGroup: THREE.Group;
-    sunLight: THREE.DirectionalLight;
-    sunOrb: THREE.Mesh;
-    meshById: Map<string, THREE.Mesh>;
-    obstacleMeshById: Map<string, THREE.Mesh>;
+    panelGroup: Group;
+    obstacleGroup: Group;
+    helperGroup: Group;
+    rayGroup: Group;
+    siteOverlayGroup: Group;
+    supportGroup: Group;
+    importedGroup: Group;
+    sunLight: DirectionalLight;
+    sunOrb: Mesh;
+    meshById: Map<string, Mesh>;
+    obstacleMeshById: Map<string, Mesh>;
     raf: number;
     resizeObserver: ResizeObserver;
   } | null>(null);
@@ -796,8 +841,8 @@ export function ThreeWorkspace({
 
   const [sunX, sunY, sunZ] = sunVector;
   const normalizedSun = useMemo(() => {
-    const v = new THREE.Vector3(sunX, sunY, sunZ);
-    return v.lengthSq() > 0 ? v.normalize() : new THREE.Vector3(0, 1, 0);
+    const v = new Vector3(sunX, sunY, sunZ);
+    return v.lengthSq() > 0 ? v.normalize() : new Vector3(0, 1, 0);
   }, [sunX, sunY, sunZ]);
   const continuousKind = continuousSurface?.kind;
   const cylinderAspectRatio = continuousSurface?.cylinderAspectRatio;
@@ -901,21 +946,21 @@ export function ThreeWorkspace({
     const host = hostRef.current;
     if (!host || stateRef.current) return;
 
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color("#08131d");
-    scene.fog = new THREE.FogExp2("#08131d", 1.15);
+    const scene = new Scene();
+    scene.background = new Color("#08131d");
+    scene.fog = new FogExp2("#08131d", 1.15);
 
-    const camera = new THREE.PerspectiveCamera(40, 1, 0.003, 50);
+    const camera = new PerspectiveCamera(40, 1, 0.003, 50);
     camera.position.set(0.48, 0.36, 0.56);
     camera.lookAt(0, 0.08, 0);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
+    const renderer = new WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = SRGBColorSpace;
+    renderer.toneMapping = ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.type = PCFShadowMap;
     renderer.domElement.setAttribute("aria-label", "3D 연속 PV 형상과 토지 투영면적 장면");
     renderer.domElement.setAttribute("role", "img");
     host.appendChild(renderer.domElement);
@@ -927,13 +972,13 @@ export function ThreeWorkspace({
     orbit.minDistance = 0.16;
     orbit.maxDistance = 2.8;
 
-    const ambient = new THREE.HemisphereLight("#bde7ff", "#1c251f", 1.35);
+    const ambient = new HemisphereLight("#bde7ff", "#1c251f", 1.35);
     scene.add(ambient);
-    const fill = new THREE.DirectionalLight("#8db7ff", 1.1);
+    const fill = new DirectionalLight("#8db7ff", 1.1);
     fill.position.set(-0.4, 0.6, 0.35);
     scene.add(fill);
 
-    const sunLight = new THREE.DirectionalLight("#fff0bd", 3.2);
+    const sunLight = new DirectionalLight("#fff0bd", 3.2);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.set(1024, 1024);
     sunLight.shadow.camera.left = -0.5;
@@ -943,43 +988,43 @@ export function ThreeWorkspace({
     scene.add(sunLight);
     scene.add(sunLight.target);
 
-    const sunOrb = new THREE.Mesh(
-      new THREE.SphereGeometry(0.025, 24, 16),
-      new THREE.MeshBasicMaterial({ color: "#ffd266", toneMapped: false }),
+    const sunOrb = new Mesh(
+      new SphereGeometry(0.025, 24, 16),
+      new MeshBasicMaterial({ color: "#ffd266", toneMapped: false }),
     );
     scene.add(sunOrb);
 
-    const ground = new THREE.Mesh(
-      new THREE.CircleGeometry(0.65, 96),
-      new THREE.MeshStandardMaterial({ color: "#16241f", roughness: 0.92, metalness: 0.02 }),
+    const ground = new Mesh(
+      new CircleGeometry(0.65, 96),
+      new MeshStandardMaterial({ color: "#16241f", roughness: 0.92, metalness: 0.02 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
     ground.name = "simulation-ground";
     scene.add(ground);
 
-    const grid = new THREE.GridHelper(1.15, 58, "#2c5362", "#18343e");
+    const grid = new GridHelper(1.15, 58, "#2c5362", "#18343e");
     grid.position.y = 0.0005;
-    (grid.material as THREE.Material).opacity = 0.62;
-    (grid.material as THREE.Material).transparent = true;
+    (grid.material as Material).opacity = 0.62;
+    (grid.material as Material).transparent = true;
     scene.add(grid);
 
-    const compassMaterial = new THREE.LineBasicMaterial({ color: "#5f8290", transparent: true, opacity: 0.7 });
-    const compassGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0.002, -0.42),
-      new THREE.Vector3(0, 0.002, 0.42),
-      new THREE.Vector3(-0.42, 0.002, 0),
-      new THREE.Vector3(0.42, 0.002, 0),
+    const compassMaterial = new LineBasicMaterial({ color: "#5f8290", transparent: true, opacity: 0.7 });
+    const compassGeometry = new BufferGeometry().setFromPoints([
+      new Vector3(0, 0.002, -0.42),
+      new Vector3(0, 0.002, 0.42),
+      new Vector3(-0.42, 0.002, 0),
+      new Vector3(0.42, 0.002, 0),
     ]);
-    scene.add(new THREE.LineSegments(compassGeometry, compassMaterial));
+    scene.add(new LineSegments(compassGeometry, compassMaterial));
 
-    const panelGroup = new THREE.Group();
-    const obstacleGroup = new THREE.Group();
-    const helperGroup = new THREE.Group();
-    const rayGroup = new THREE.Group();
-    const siteOverlayGroup = new THREE.Group();
-    const supportGroup = new THREE.Group();
-    const importedGroup = new THREE.Group();
+    const panelGroup = new Group();
+    const obstacleGroup = new Group();
+    const helperGroup = new Group();
+    const rayGroup = new Group();
+    const siteOverlayGroup = new Group();
+    const supportGroup = new Group();
+    const importedGroup = new Group();
     scene.add(siteOverlayGroup, supportGroup, panelGroup, obstacleGroup, helperGroup, rayGroup, importedGroup);
 
     const transform = new TransformControls(camera, renderer.domElement);
@@ -990,9 +1035,9 @@ export function ThreeWorkspace({
       if (!event.value && transform.object?.userData.panelId) {
         const object = transform.object;
         if (surfaceSnapRef.current) {
-          const ray = new THREE.Raycaster(
-            new THREE.Vector3(object.position.x, 2, object.position.z),
-            new THREE.Vector3(0, -1, 0),
+          const ray = new Raycaster(
+            new Vector3(object.position.x, 2, object.position.z),
+            new Vector3(0, -1, 0),
             0,
             4,
           );
@@ -1016,8 +1061,8 @@ export function ThreeWorkspace({
       }
     });
 
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
+    const raycaster = new Raycaster();
+    const pointer = new Vector2();
     const handlePointer = (event: PointerEvent) => {
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1032,7 +1077,7 @@ export function ThreeWorkspace({
       let panelId = hit?.object.userData.panelId as string | undefined;
       const surfaceData = hit?.object.userData.continuousSurface as ContinuousSurfaceHitData | undefined;
       if (!panelId && hit && surfaceData) {
-        const geometry = hit.object instanceof THREE.Mesh ? hit.object.geometry : undefined;
+        const geometry = hit.object instanceof Mesh ? hit.object.geometry : undefined;
         const zoneAttribute = geometry?.getAttribute("zoneIndex");
         const zoneFromTriangle = hit.face && zoneAttribute
           ? Math.round(zoneAttribute.getX(hit.face.a))
@@ -1058,8 +1103,8 @@ export function ThreeWorkspace({
     resizeObserver.observe(host);
     resize();
 
-    const meshById = new Map<string, THREE.Mesh>();
-    const obstacleMeshById = new Map<string, THREE.Mesh>();
+    const meshById = new Map<string, Mesh>();
+    const obstacleMeshById = new Map<string, Mesh>();
     let raf = 0;
     const animate = () => {
       raf = requestAnimationFrame(animate);
@@ -1129,17 +1174,17 @@ export function ThreeWorkspace({
         selectedPanelId,
         quality,
       );
-      const material = new THREE.MeshPhysicalMaterial({
+      const material = new MeshPhysicalMaterial({
         vertexColors: true,
         roughness: 0.28,
         metalness: 0.12,
         clearcoat: 0.7,
         clearcoatRoughness: 0.18,
-        emissive: new THREE.Color("#06131b"),
+        emissive: new Color("#06131b"),
         emissiveIntensity: 0.1,
-        side: THREE.DoubleSide,
+        side: DoubleSide,
       });
-      const mesh = new THREE.Mesh(geometry, material);
+      const mesh = new Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.name = `${model.kind}-continuous-pv-skin`;
@@ -1152,18 +1197,18 @@ export function ThreeWorkspace({
       panelGroup.add(mesh);
       if (showZoneBoundaries) panelGroup.add(createZoneBoundaryGroup(model));
     } else {
-      const geometry = new THREE.BoxGeometry(PANEL_SIZE, PANEL_SIZE, PANEL_DEPTH);
+      const geometry = new BoxGeometry(PANEL_SIZE, PANEL_SIZE, PANEL_DEPTH);
       stablePanels.forEach((panel) => {
-        const material = new THREE.MeshPhysicalMaterial({
+        const material = new MeshPhysicalMaterial({
           color: colorForIrradiance(panel.irradianceWm2),
           roughness: 0.28,
           metalness: 0.12,
           clearcoat: 0.7,
           clearcoatRoughness: 0.18,
-          emissive: panel.bypassActive ? new THREE.Color("#c6512c") : new THREE.Color("#06131b"),
+          emissive: panel.bypassActive ? new Color("#c6512c") : new Color("#06131b"),
           emissiveIntensity: panel.bypassActive ? 0.45 : 0.1,
         });
-        const mesh = new THREE.Mesh(geometry, material);
+        const mesh = new Mesh(geometry, material);
         mesh.position.set(...panel.position);
         mesh.quaternion.set(...panel.quaternion).normalize();
         mesh.castShadow = true;
@@ -1191,9 +1236,9 @@ export function ThreeWorkspace({
     state.helperGroup.position.y = assemblyLiftM;
     clearAndDispose(state.supportGroup);
     if (displayedSupportHeightM > 1e-6) {
-      const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.004, 0.0055, displayedSupportHeightM, 16),
-        new THREE.MeshStandardMaterial({ color: "#6f8791", roughness: 0.55, metalness: 0.62 }),
+      const pole = new Mesh(
+        new CylinderGeometry(0.004, 0.0055, displayedSupportHeightM, 16),
+        new MeshStandardMaterial({ color: "#6f8791", roughness: 0.55, metalness: 0.62 }),
       );
       pole.position.y = displayedSupportHeightM / 2;
       pole.castShadow = true;
@@ -1205,12 +1250,12 @@ export function ThreeWorkspace({
       const guideX = Math.sqrt(displayedSweptFootprintM2 / Math.PI) + 0.018;
       const bottom = assemblyGroundClearanceM;
       const top = assemblyGroundClearanceM + displayedStructureHeightM;
-      const guide = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(guideX, bottom, 0),
-          new THREE.Vector3(guideX, top, 0),
+      const guide = new Line(
+        new BufferGeometry().setFromPoints([
+          new Vector3(guideX, bottom, 0),
+          new Vector3(guideX, top, 0),
         ]),
-        new THREE.LineDashedMaterial({
+        new LineDashedMaterial({
           color: "#9fc8d7",
           dashSize: 0.008,
           gapSize: 0.005,
@@ -1233,16 +1278,16 @@ export function ThreeWorkspace({
     clearAndDispose(state.siteOverlayGroup);
 
     if (showParcelBoundary && parcelGeometry.areaM2 > 0) {
-      const parcelMaterial = new THREE.MeshBasicMaterial({
+      const parcelMaterial = new MeshBasicMaterial({
         color: "#55b98d",
         transparent: true,
         opacity: 0.095,
         depthWrite: false,
-        side: THREE.DoubleSide,
+        side: DoubleSide,
       });
       if (parcelGeometry.shape === "circle") {
-        const parcel = new THREE.Mesh(
-          new THREE.CircleGeometry(parcelGeometry.radiusM, 128),
+        const parcel = new Mesh(
+          new CircleGeometry(parcelGeometry.radiusM, 128),
           parcelMaterial,
         );
         parcel.rotation.x = -Math.PI / 2;
@@ -1253,18 +1298,18 @@ export function ThreeWorkspace({
         state.siteOverlayGroup.add(parcel);
 
         const ringWidthM = Math.max(0.001, parcelGeometry.radiusM * 0.012);
-        const boundary = new THREE.Mesh(
-          new THREE.RingGeometry(
+        const boundary = new Mesh(
+          new RingGeometry(
             Math.max(0, parcelGeometry.radiusM - ringWidthM),
             parcelGeometry.radiusM,
             128,
           ),
-          new THREE.MeshBasicMaterial({
+          new MeshBasicMaterial({
             color: "#78d8ad",
             transparent: true,
             opacity: 0.9,
             depthWrite: false,
-            side: THREE.DoubleSide,
+            side: DoubleSide,
           }),
         );
         boundary.rotation.x = -Math.PI / 2;
@@ -1274,11 +1319,11 @@ export function ThreeWorkspace({
         boundary.raycast = () => {};
         state.siteOverlayGroup.add(boundary);
       } else {
-        const parcelGroup = new THREE.Group();
+        const parcelGroup = new Group();
         parcelGroup.rotation.y = parcelGeometry.rotationRad;
         parcelGroup.name = "land-parcel-rectangle";
-        const rectangleGeometry = new THREE.PlaneGeometry(parcelGeometry.widthM, parcelGeometry.depthM);
-        const parcel = new THREE.Mesh(rectangleGeometry, parcelMaterial);
+        const rectangleGeometry = new PlaneGeometry(parcelGeometry.widthM, parcelGeometry.depthM);
+        const parcel = new Mesh(rectangleGeometry, parcelMaterial);
         parcel.rotation.x = -Math.PI / 2;
         parcel.position.y = 0.0012;
         parcel.renderOrder = 1;
@@ -1286,9 +1331,9 @@ export function ThreeWorkspace({
         parcel.raycast = () => {};
         parcelGroup.add(parcel);
 
-        const boundary = new THREE.LineSegments(
-          new THREE.EdgesGeometry(rectangleGeometry),
-          new THREE.LineBasicMaterial({ color: "#78d8ad", transparent: true, opacity: 0.9 }),
+        const boundary = new LineSegments(
+          new EdgesGeometry(rectangleGeometry),
+          new LineBasicMaterial({ color: "#78d8ad", transparent: true, opacity: 0.9 }),
         );
         boundary.rotation.x = -Math.PI / 2;
         boundary.position.y = 0.0015;
@@ -1302,14 +1347,14 @@ export function ThreeWorkspace({
 
     if (showSweptFootprint && displayedSweptFootprintM2 > 0) {
       const radiusM = Math.sqrt(displayedSweptFootprintM2 / Math.PI);
-      const footprint = new THREE.Mesh(
-        new THREE.RingGeometry(Math.max(0, radiusM - Math.max(0.0015, radiusM * 0.025)), radiusM, 128),
-        new THREE.MeshBasicMaterial({
+      const footprint = new Mesh(
+        new RingGeometry(Math.max(0, radiusM - Math.max(0.0015, radiusM * 0.025)), radiusM, 128),
+        new MeshBasicMaterial({
           color: "#f2b95f",
           transparent: true,
           opacity: 0.72,
           depthWrite: false,
-          side: THREE.DoubleSide,
+          side: DoubleSide,
         }),
       );
       footprint.rotation.x = -Math.PI / 2;
@@ -1367,7 +1412,7 @@ export function ThreeWorkspace({
     if (!state) return;
     state.transform.setMode(transformMode);
     state.transform.setTranslationSnap(gridSnap ? 0.01 : null);
-    state.transform.setRotationSnap(gridSnap ? THREE.MathUtils.degToRad(15) : null);
+    state.transform.setRotationSnap(gridSnap ? MathUtils.degToRad(15) : null);
   }, [transformMode, gridSnap]);
 
   useEffect(() => {
@@ -1377,7 +1422,7 @@ export function ThreeWorkspace({
     state.obstacleMeshById.clear();
     stableObstacles.forEach((item) => {
       const isGltfBoundary = item.label.startsWith("GLB 차폐 경계");
-      const material = new THREE.MeshStandardMaterial({
+      const material = new MeshStandardMaterial({
         color: obstacleColor(item),
         roughness: item.type === "water" ? 0.15 : 0.86,
         metalness: item.type === "water" ? 0.22 : 0.02,
@@ -1385,8 +1430,8 @@ export function ThreeWorkspace({
         opacity: isGltfBoundary ? 0.16 : item.type === "water" ? 0.72 : 1,
         wireframe: isGltfBoundary,
       });
-      const geometry = isGltfBoundary ? new THREE.BoxGeometry(0.35, 0.35, 0.35) : obstacleGeometry(item.type);
-      const mesh = new THREE.Mesh(geometry, material);
+      const geometry = isGltfBoundary ? new BoxGeometry(0.35, 0.35, 0.35) : obstacleGeometry(item.type);
+      const mesh = new Mesh(geometry, material);
       mesh.position.set(...item.position);
       if (item.rotation) mesh.rotation.set(...item.rotation);
       mesh.scale.set(...item.scale);
@@ -1432,12 +1477,12 @@ export function ThreeWorkspace({
       const { model } = continuousSurfaceState;
       const selection = selectedZoneIndex(stablePanels, model, selectedPanelId);
       model.zones.forEach((zone, zoneIndex) => {
-        const localNormal = new THREE.Vector3(...zone.representativeNormal).normalize();
-        const origin = new THREE.Vector3(...zone.representativePosition);
+        const localNormal = new Vector3(...zone.representativeNormal).normalize();
+        const origin = new Vector3(...zone.representativePosition);
         const isSelected = zoneIndex === selection;
         if (showNormals || isSelected) {
           state.helperGroup.add(
-            new THREE.ArrowHelper(
+            new ArrowHelper(
               localNormal,
               origin,
               isSelected ? 0.052 : 0.035,
@@ -1458,22 +1503,22 @@ export function ThreeWorkspace({
         const visibleSamples = sourceSamples.filter((_, index) => index % sampleStride === 0);
         const samplePositions: number[] = [];
         visibleSamples.forEach((sample) => {
-          const localPosition = new THREE.Vector3(...sample.position);
-          const localNormal = new THREE.Vector3(...sample.normal).normalize();
+          const localPosition = new Vector3(...sample.position);
+          const localNormal = new Vector3(...sample.normal).normalize();
           localPosition.addScaledVector(localNormal, 0.001);
           samplePositions.push(localPosition.x, localPosition.y, localPosition.z);
           if (selectedZone) {
             state.helperGroup.add(
-              new THREE.ArrowHelper(localNormal, localPosition, 0.014, "#73e6ff", 0.004, 0.0025),
+              new ArrowHelper(localNormal, localPosition, 0.014, "#73e6ff", 0.004, 0.0025),
             );
           }
         });
-        const points = new THREE.Points(
-          new THREE.BufferGeometry().setAttribute(
+        const points = new Points(
+          new BufferGeometry().setAttribute(
             "position",
-            new THREE.Float32BufferAttribute(samplePositions, 3),
+            new Float32BufferAttribute(samplePositions, 3),
           ),
-          new THREE.PointsMaterial({
+          new PointsMaterial({
             color: "#f9f871",
             size: 0.006,
             sizeAttenuation: true,
@@ -1495,11 +1540,11 @@ export function ThreeWorkspace({
           }, 0);
           return distance < nearestDistance ? sample : nearest;
         });
-        const diagnosticOrigin = new THREE.Vector3(...diagnosticSample.position);
-        const diagnosticNormal = new THREE.Vector3(...diagnosticSample.normal).normalize();
+        const diagnosticOrigin = new Vector3(...diagnosticSample.position);
+        const diagnosticNormal = new Vector3(...diagnosticSample.normal).normalize();
         diagnosticOrigin.addScaledVector(diagnosticNormal, 0.0012);
         state.helperGroup.add(
-          new THREE.ArrowHelper(diagnosticNormal, diagnosticOrigin, 0.048, "#fff0a6", 0.012, 0.007),
+          new ArrowHelper(diagnosticNormal, diagnosticOrigin, 0.048, "#fff0a6", 0.012, 0.007),
         );
       }
       return;
@@ -1507,12 +1552,12 @@ export function ThreeWorkspace({
 
     stablePanels.forEach((panel) => {
       if (showNormals || panel.id === selectedPanelId) {
-        const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion(...panel.quaternion));
+        const normal = new Vector3(0, 0, 1).applyQuaternion(new Quaternion(...panel.quaternion));
         const isSelected = panel.id === selectedPanelId;
         state.helperGroup.add(
-          new THREE.ArrowHelper(
+          new ArrowHelper(
             normal,
-            new THREE.Vector3(...panel.position),
+            new Vector3(...panel.position),
             isSelected ? 0.052 : 0.035,
             isSelected ? "#fff0a6" : "#5eead4",
             isSelected ? 0.014 : 0.011,
@@ -1532,7 +1577,7 @@ export function ThreeWorkspace({
     if (continuousSurfaceState) {
       const { model } = continuousSurfaceState;
       model.zones.forEach((zone) => {
-        const origin = new THREE.Vector3(
+        const origin = new Vector3(
           ...rotateAroundY([...zone.representativePosition] as Vec3Tuple, rotationAngleRad),
         );
         origin.y += assemblyLiftM;
@@ -1552,10 +1597,10 @@ export function ThreeWorkspace({
           }, 0);
           return distance < nearestDistance ? sample : nearest;
         });
-        const diagnosticOrigin = new THREE.Vector3(
+        const diagnosticOrigin = new Vector3(
           ...rotateAroundY([...diagnosticSample.position] as Vec3Tuple, rotationAngleRad),
         );
-        const diagnosticNormal = new THREE.Vector3(
+        const diagnosticNormal = new Vector3(
           ...rotateAroundY([...diagnosticSample.normal] as Vec3Tuple, rotationAngleRad),
         ).normalize();
         diagnosticOrigin.y += assemblyLiftM;
@@ -1567,7 +1612,7 @@ export function ThreeWorkspace({
     }
 
     stablePanels.forEach((panel) => {
-      const origin = new THREE.Vector3(...rotateAroundY(panel.position, rotationAngleRad));
+      const origin = new Vector3(...rotateAroundY(panel.position, rotationAngleRad));
       origin.y += assemblyLiftM;
       addSunRay(state.rayGroup, origin, normalizedSun);
     });
@@ -1577,7 +1622,7 @@ export function ThreeWorkspace({
     const state = stateRef.current;
     if (!state) return;
     const distance = 0.46;
-    const pos = normalizedSun.clone().multiplyScalar(distance).add(new THREE.Vector3(0, 0.09, 0));
+    const pos = normalizedSun.clone().multiplyScalar(distance).add(new Vector3(0, 0.09, 0));
     state.sunOrb.visible = sunElevationDeg > -6;
     state.sunOrb.position.copy(pos);
     state.sunLight.position.copy(pos);
@@ -1590,33 +1635,36 @@ export function ThreeWorkspace({
     if (!state) return;
     clearAndDispose(state.importedGroup);
     if (!gltfUrl) return;
-    const loader = new GLTFLoader();
     let active = true;
-    loader.load(
-      gltfUrl,
-      (gltf) => {
-        if (!active) {
-          disposeObject3D(gltf.scene);
-          return;
-        }
-        const box = new THREE.Box3().setFromObject(gltf.scene);
-        const size = box.getSize(new THREE.Vector3());
-        const maxSize = Math.max(size.x, size.y, size.z, 0.001);
-        gltf.scene.scale.setScalar(0.35 / maxSize);
-        const normalizedBox = new THREE.Box3().setFromObject(gltf.scene);
-        const center = normalizedBox.getCenter(new THREE.Vector3());
-        gltf.scene.position.set(-center.x, -normalizedBox.min.y + 0.002, -center.z);
-        gltf.scene.traverse((object) => {
-          if (object instanceof THREE.Mesh) {
-            object.castShadow = true;
-            object.receiveShadow = true;
+    void import("three/examples/jsm/loaders/GLTFLoader.js").then(({ GLTFLoader }) => {
+      if (!active) return;
+      const loader = new GLTFLoader();
+      loader.load(
+        gltfUrl,
+        (gltf) => {
+          if (!active) {
+            disposeObject3D(gltf.scene);
+            return;
           }
-        });
-        state.importedGroup.add(gltf.scene);
-      },
-      undefined,
-      () => undefined,
-    );
+          const box = new Box3().setFromObject(gltf.scene);
+          const size = box.getSize(new Vector3());
+          const maxSize = Math.max(size.x, size.y, size.z, 0.001);
+          gltf.scene.scale.setScalar(0.35 / maxSize);
+          const normalizedBox = new Box3().setFromObject(gltf.scene);
+          const center = normalizedBox.getCenter(new Vector3());
+          gltf.scene.position.set(-center.x, -normalizedBox.min.y + 0.002, -center.z);
+          gltf.scene.traverse((object) => {
+            if (object instanceof Mesh) {
+              object.castShadow = true;
+              object.receiveShadow = true;
+            }
+          });
+          state.importedGroup.add(gltf.scene);
+        },
+        undefined,
+        () => undefined,
+      );
+    });
     return () => {
       active = false;
     };

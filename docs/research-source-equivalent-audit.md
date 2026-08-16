@@ -1,6 +1,6 @@
 # Primary-source-equivalent reproduction audit
 
-Generated at: 2026-08-13T16:06:51.672Z
+Generated at: 2026-08-16T04:24:14.021Z
 
 No coefficient or multiplier was reverse-fitted to a reported output. Fixtures contain only values confirmed in a primary source or author-maintained public code. Studies A-D lack required inputs and are excluded from successful reproductions.
 
