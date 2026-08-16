@@ -44,7 +44,7 @@ describe("equal-land comparison geometry", () => {
   it("defaults to the documented A_land and constraints", () => {
     expect(DEFAULT_COMPARISON_BASIS).toBe("land");
     expect(DEFAULT_LAND_AREA_M2).toBe(A0);
-    expect(DEFAULT_MAX_HEIGHT_M).toBe(0.3);
+    expect(DEFAULT_MAX_HEIGHT_M).toBeCloseTo(2 * Math.sqrt(A0 / Math.PI), 15);
     for (const shape of SHAPES) {
       const geometry = calculateComparisonGeometry(shape);
       expect(geometry.basis).toBe("land");

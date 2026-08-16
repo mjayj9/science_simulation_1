@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "pass": true,
+  "generatedAtUtc": "2026-08-16T04:25:30.067Z",
+  "acceptance": {
+    "heatResidualToleranceFraction": 1e-8,
+    "thermalMeshEnergyToleranceFraction": 0.01,
+    "thermalMeshTemperatureToleranceC": 0.2
+  },
+  "scenario": {
+    "weatherSource": "deterministic synthetic audit fixture; not a research benchmark",
+    "year": 2025,
+    "latitudeDeg": 37.5665,
+    "longitudeDeg": 126.978,
+    "shape": "cylinder",
+    "landAreaM2": 0.05,
+    "activePvAreaM2": 0.24999999999999997,
+    "rpm": 2,
+    "weatherPoints": 8761,
+    "expectedIntervals": 8760,
+    "thermalNodes": 6,
+    "opticalSamples": 256
+  },
+  "coverage": {
+    "startTimeUtcMs": 1735689600000,
+    "endTimeUtcMs": 1767225600000,
+    "steps": 8761,
+    "intervals": 8760,
+    "durationHours": 8760,
+    "expectedCalendarHours": 8760,
+    "isFullCalendarYear": true,
+    "closingEndpointPresent": true
+  },
+  "thermalModel": {
+    "model": "annual-transient-material-state",
+    "labelKo": "전년 시간 적분·과도 열이력 포함",
+    "includesThermalHistory": true,
+    "periodIntegration": "actual-weather-clock"
+  },
+  "annualEnergyWh": {
+    "e00Wh": 38561.61546916094,
+    "e10Wh": 38652.13429284649,
+    "e01Wh": 38561.62065877798,
+    "e11Wh": 38652.13849159104,
+    "opticalWh": 90.51882368554652,
+    "thermalWh": 0.005189617040741723,
+    "interactionWh": -0.0009908724896376953,
+    "netWh": 90.52302243009763,
+    "closureResidualWh": 0
+  },
+  "monthlyEnergyWh": [
+    {
+      "month": "2025-01",
+      "e00Wh": 2611.375119983462,
+      "e10Wh": 2615.6514525020757,
+      "e01Wh": 2611.3753564281114,
+      "e11Wh": 2615.651643803761,
+      "opticalWh": 4.276332518613799,
+      "thermalWh": 0.00023644464954486466,
+      "interactionWh": -0.00004514296415436547,
+      "netWh": 4.2765238202991895,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-02",
+      "e00Wh": 2670.038842840643,
+      "e10Wh": 2674.837385776691,
+      "e01Wh": 2670.0391370391576,
+      "e11Wh": 2674.8376215549515,
+      "opticalWh": 4.798542936047852,
+      "thermalWh": 0.00029419851443890366,
+      "interactionWh": -0.000058420253935764777,
+      "netWh": 4.798778714308355,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-03",
+      "e00Wh": 3403.793930644332,
+      "e10Wh": 3411.3897778570104,
+      "e01Wh": 3403.7944161980363,
+      "e11Wh": 3411.3901652960103,
+      "opticalWh": 7.595847212678564,
+      "thermalWh": 0.00048555370449321344,
+      "interactionWh": -0.00009811470454224036,
+      "netWh": 7.596234651678515,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-04",
+      "e00Wh": 3617.6851242114694,
+      "e10Wh": 3626.6937640576007,
+      "e01Wh": 3617.685637346209,
+      "e11Wh": 3626.6941765758825,
+      "opticalWh": 9.008639846131246,
+      "thermalWh": 0.000513134739776433,
+      "interactionWh": -0.00010061645798487007,
+      "netWh": 9.009052364413037,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-05",
+      "e00Wh": 3895.298304037481,
+      "e10Wh": 3906.7145191744958,
+      "e01Wh": 3895.2989403623633,
+      "e11Wh": 3906.715039019034,
+      "opticalWh": 11.41621513701466,
+      "thermalWh": 0.0006363248821799061,
+      "interactionWh": -0.00011648034387690132,
+      "netWh": 11.416734981552963,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-06",
+      "e00Wh": 3798.6824805726555,
+      "e10Wh": 3809.7751939063032,
+      "e01Wh": 3798.683133462964,
+      "e11Wh": 3809.775734058326,
+      "opticalWh": 11.09271333364768,
+      "thermalWh": 0.0006528903086291393,
+      "interactionWh": -0.00011273828567937016,
+      "netWh": 11.09325348567063,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-07",
+      "e00Wh": 3860.1637132810242,
+      "e10Wh": 3870.309856399238,
+      "e01Wh": 3860.164289239846,
+      "e11Wh": 3870.310329364146,
+      "opticalWh": 10.146143118213786,
+      "thermalWh": 0.0005759588216278644,
+      "interactionWh": -0.00010299391351509257,
+      "netWh": 10.146616083121899,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-08",
+      "e00Wh": 3690.398536175958,
+      "e10Wh": 3700.8146745269987,
+      "e01Wh": 3690.3991349286807,
+      "e11Wh": 3700.8151562116614,
+      "opticalWh": 10.4161383510409,
+      "thermalWh": 0.0005987527229081024,
+      "interactionWh": -0.00011706806026268168,
+      "netWh": 10.416620035703545,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-09",
+      "e00Wh": 3273.8727951948476,
+      "e10Wh": 3281.031936858308,
+      "e01Wh": 3273.8732038366484,
+      "e11Wh": 3281.0322591141257,
+      "opticalWh": 7.159141663460559,
+      "thermalWh": 0.0004086418007318571,
+      "interactionWh": -0.00008638598319521407,
+      "netWh": 7.159463919278096,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-10",
+      "e00Wh": 2976.7925744334193,
+      "e10Wh": 2983.725569219786,
+      "e01Wh": 2976.792924102253,
+      "e11Wh": 2983.7258422325576,
+      "opticalWh": 6.932994786366635,
+      "thermalWh": 0.0003496688336781517,
+      "interactionWh": -0.00007665606199225294,
+      "netWh": 6.933267799138321,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-11",
+      "e00Wh": 2408.777702831737,
+      "e10Wh": 2412.9220455398286,
+      "e01Wh": 2408.777944879262,
+      "e11Wh": 2412.922244319434,
+      "opticalWh": 4.144342708091699,
+      "thermalWh": 0.00024204752526202356,
+      "interactionWh": -0.000043267919863865245,
+      "netWh": 4.144541487697097,
+      "closureResidualWh": 0
+    },
+    {
+      "month": "2025-12",
+      "e00Wh": 2354.7363449539234,
+      "e10Wh": 2358.268117028001,
+      "e01Wh": 2354.736540954433,
+      "e11Wh": 2358.2682800413318,
+      "opticalWh": 3.5317720740777077,
+      "thermalWh": 0.00019600050973167527,
+      "interactionWh": -0.00003298717911093263,
+      "netWh": 3.5319350874083284,
+      "closureResidualWh": 0
+    }
+  ],
+  "temperature": {
+    "e00AverageC": 14.208000458665168,
+    "e11AverageC": 14.208308753148273,
+    "e00MaximumC": 42.17671610431725,
+    "e11MaximumC": 42.17007825316255
+  },
+  "warmup": {
+    "enabled": true,
+    "cycles": 2,
+    "converged": true,
+    "terminalMaximumDeltaC": 0,
+    "toleranceC": 0.05,
+    "periodHours": 24
+  },
+  "energyAudit": {
+    "storedEnergyChangeJ": 250.2486331329119,
+    "netBoundaryEnergyJ": 250.2486331324517,
+    "conductionCancellationJ": -1.2398985136825708e-12,
+    "energyResidualJ": 4.614442176107843e-10,
+    "relativeEnergyResidual": 1.84394300913744e-12
+  },
+  "thermalMesh": {
+    "opticalSampleCount": 256,
+    "requestedThermalNodeCount": 6,
+    "thermalNodeCount": 6,
+    "conductionModel": "nearest-neighbour-laminate-network",
+    "inPlaneThermalConductivityWmK": 5,
+    "laminateThicknessM": 0.004,
+    "neighboursPerNode": 2,
+    "edgeCount": 6
+  },
+  "meshConvergence14Day": {
+    "points": [
+      {
+        "requestedNodeCount": 3,
+        "actualNodeCount": 3,
+        "acEnergyWh": 1124.3710801340915,
+        "averageTemperatureC": 2.007089179012896,
+        "relativeEnergyResidual": 2.72373975695047e-14
+      },
+      {
+        "requestedNodeCount": 6,
+        "actualNodeCount": 6,
+        "acEnergyWh": 1124.3756191054242,
+        "averageTemperatureC": 2.007089515508025,
+        "relativeEnergyResidual": 6.51515507268403e-14,
+        "relativeAcDifferenceFromPrevious": 0.000004036881675147665,
+        "averageTemperatureDifferenceFromPreviousC": 3.364951286499718e-7
+      },
+      {
+        "requestedNodeCount": 12,
+        "actualNodeCount": 12,
+        "acEnergyWh": 1124.3864793924577,
+        "averageTemperatureC": 2.0070923627648867,
+        "relativeEnergyResidual": 1.8016571302066292e-14,
+        "relativeAcDifferenceFromPrevious": 0.000009658855947206127,
+        "averageTemperatureDifferenceFromPreviousC": 0.0000028472568618376215
+      }
+    ],
+    "energyToleranceFraction": 0.01,
+    "temperatureToleranceC": 0.2,
+    "converged": true
+  },
+  "elapsedMs": 72455
+}

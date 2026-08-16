@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-16T04:26:37.934Z",
+  "scenario": {
+    "weatherSource": "same deterministic synthetic 8761-boundary fixture as annual transient audit",
+    "year": 2025,
+    "latitudeDeg": 37.5665,
+    "longitudeDeg": 126.978,
+    "shape": "cylinder",
+    "landAreaM2": 0.05,
+    "activePvAreaM2": 0.24999999999999997,
+    "rpm": 2,
+    "weatherPoints": 8761,
+    "expectedIntervals": 8760,
+    "thermalNodes": 6,
+    "opticalSamples": 256,
+    "electricalModel": "local-mpp-area-integral",
+    "inverter": "unity bypass (AC=DC)"
+  },
+  "integration": {
+    "steps": 8761,
+    "intervals": 8760,
+    "durationHours": 8760
+  },
+  "quasiSteady": {
+    "model": {
+      "model": "quasi-steady-faiman",
+      "labelKo": "준정상 광학 회전·열이력 미포함",
+      "includesThermalHistory": false,
+      "periodIntegration": "pointwise-quasi-steady"
+    },
+    "staticAcEnergyWh": 37704.72980360528,
+    "rotatingAcEnergyWh": 37709.676550560966,
+    "rotatingMinusStaticWh": 4.9467469556839205
+  },
+  "transient": {
+    "model": {
+      "model": "annual-transient-material-state",
+      "labelKo": "전년 시간 적분·과도 열이력 포함",
+      "includesThermalHistory": true,
+      "periodIntegration": "actual-weather-clock"
+    },
+    "staticAcEnergyWh": 38561.61546916094,
+    "rotatingAcEnergyWh": 38652.13849159104,
+    "rotatingMinusStaticWh": 90.52302243009763
+  },
+  "differences": {
+    "staticTransientMinusQuasiWh": 856.8856655556592,
+    "staticTransientMinusQuasiPercent": 2.2726211539479717,
+    "rotatingTransientMinusQuasiWh": 942.4619410300729,
+    "rotatingTransientMinusQuasiPercent": 2.4992575573180114
+  },
+  "requestFingerprint": "sim-v6-cache-v7-242f779eef57234a"
+}

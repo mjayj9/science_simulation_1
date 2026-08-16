@@ -21,7 +21,7 @@ import {
 describe("ThreeWorkspace land and footprint geometry", () => {
   it("does not apply comparison ground clearance twice", () => {
     const groundClearanceM = 0.017;
-    for (const kind of ["plane", "cube", "sphere", "hemisphere", "cylinder", "cone"] as const) {
+    for (const kind of ["plane", "cube", "hemisphere", "cylinder", "cone"] as const) {
       const model = createComparisonSurface(kind, {
         basis: "land",
         landAreaM2: 0.05,
@@ -43,6 +43,25 @@ describe("ThreeWorkspace land and footprint geometry", () => {
       const raised = resolveSurfacePlacement(model.dimensions, 0.03);
       expect(raised.translationY, kind).toBeCloseTo(0.03 - groundClearanceM, 14);
       expect(raised.groundClearanceM, kind).toBe(0.03);
+    }
+
+    // A land-matched sphere already uses the full common H_max as its diameter,
+    // so its fair installation touches the datum instead of adding support height.
+    const sphere = createComparisonSurface("sphere", {
+      basis: "land",
+      landAreaM2: 0.05,
+      maxHeightM: 1,
+      maximumActiveAreaM2: 1,
+      groundClearanceM: 0,
+    });
+    const spherePlacement = resolveSurfacePlacement(sphere.dimensions, 0);
+    expect(spherePlacement).toEqual({
+      translationY: 0,
+      groundClearanceM: 0,
+      displayedSupportHeightM: 0,
+    });
+    for (const sample of sphere.zones.flatMap((region) => region.samples)) {
+      expect(sample.position[1] + spherePlacement.translationY).toBe(sample.position[1]);
     }
 
     expect(resolveSurfacePlacement(undefined, groundClearanceM)).toEqual({
@@ -152,7 +171,8 @@ describe("ThreeWorkspace land and footprint geometry", () => {
     });
     const parcel = comparisonParcelRenderGeometry(kind, model.comparison);
     expect(parcel.shape).toBe("rectangle");
-    expect(parcel.areaM2).toBeCloseTo(model.comparison.landAreaM2, 12);
+    expect(parcel.areaM2).toBeCloseTo(model.comparison.footprint.staticProjectedAreaM2, 12);
+    expect(model.comparison.landAreaM2).toBeCloseTo(model.comparison.footprint.sweptAreaM2, 12);
     expect(model.comparison.footprint.sweptAreaM2).toBeGreaterThanOrEqual(parcel.areaM2);
   });
 

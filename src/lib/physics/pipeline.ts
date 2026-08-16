@@ -239,6 +239,152 @@ function offInverter(config: InverterConfig): InverterResult {
   return calculateInverter({ dcPowerW: 0, config });
 }
 
+export interface PreparedInstantEnvironment {
+  timestampMs: number;
+  solar: SolarPositionResult;
+  sunDirection: Vec3;
+  irradiance: IrradianceComponents;
+  ambientTemperatureC: number;
+  referenceWindSpeedMS: number;
+  referenceWindHeightM: number;
+  roughnessLengthM: number;
+  displacementHeightM: number;
+  /** Shared solar-distance term used by every POA solve at this timestamp. */
+  extraterrestrialNormalWm2: number;
+  /**
+   * Exact log-profile results keyed by requested module height. Curved
+   * surfaces repeat each material height across azimuth and rotation phases,
+   * so one step can reuse the identical wind solve without flattening the
+   * height-dependent convection model.
+   */
+  moduleWindSpeedByHeightM: Map<number, number>;
+}
+
+export interface PreparedSimplePanelInput {
+  panel: NonNullable<InstantSimulationInput["panel"]> & {
+    normal: Vec3;
+    areaM2: number;
+    efficiency: number;
+  };
+  electrical?: InstantSimulationInput["electrical"];
+  thermal?: ThermalConfig;
+}
+
+export interface PreparedSimplePanelResult {
+  solar: SolarPositionResult;
+  irradiance: IrradianceComponents;
+  poa: POAResult;
+  moduleWindSpeedMS: number;
+  moduleTemperatureC: number;
+  effectivePoaWm2: number;
+  dcPowerW: number;
+}
+
+/**
+ * Resolves timestamp, solar position and irradiance once for a set of panels
+ * sharing the same weather boundary. It changes no physics equation; callers
+ * still evaluate POA, height-dependent wind, Faiman temperature and DC power
+ * for every material sample.
+ */
+export function prepareInstantEnvironment(
+  input: Pick<
+    InstantSimulationInput,
+    "timestamp" | "location" | "solarOverride" | "irradiance" | "weather"
+  >,
+): PreparedInstantEnvironment {
+  const resolvedTimestampMs = timestampMs(input.timestamp);
+  const solar = resolveSolar(input.timestamp, input);
+  return {
+    timestampMs: resolvedTimestampMs,
+    solar,
+    sunDirection: sunVector(solar),
+    irradiance: normalizeIrradiance(input.irradiance, solar),
+    ambientTemperatureC: input.weather?.ambientTemperatureC ?? 25,
+    referenceWindSpeedMS: Math.max(0, input.weather?.referenceWindSpeedMS ?? 4),
+    referenceWindHeightM: input.weather?.referenceWindHeightM ?? 10,
+    roughnessLengthM: input.weather?.roughnessLengthM ?? 0.03,
+    displacementHeightM: input.weather?.displacementHeightM ?? 0,
+    extraterrestrialNormalWm2: extraterrestrialNormalIrradiance(solar),
+    moduleWindSpeedByHeightM: new Map<number, number>(),
+  };
+}
+
+/**
+ * Exact simple-PV subset of simulateInstant for a prepared shared environment.
+ * This is intentionally unavailable for single-diode or per-panel inverter
+ * solves. It exists so high-resolution surface quadrature does not recompute
+ * the same solar and irradiance context thousands of times.
+ */
+export function simulateSimplePanelAtPreparedEnvironment(
+  environment: PreparedInstantEnvironment,
+  input: PreparedSimplePanelInput,
+): PreparedSimplePanelResult {
+  // simulateInstant always resolves a canonical panel frame, including a
+  // second normalization after a caller's world transform. Preserve that
+  // operation order so the batched and scalar paths are bit-for-bit equal.
+  const panelNormal = createPanelFrame(input.panel).normal;
+  const poa = calculatePOA({
+    ...environment.irradiance,
+    solarZenithDeg: environment.solar.zenithDeg,
+    sunDirection: environment.sunDirection,
+    panelNormal,
+    visibility: input.panel.visibility,
+    diffuseVisibility: input.panel.diffuseVisibility,
+    groundVisibility: input.panel.groundVisibility,
+    albedo: input.panel.albedo,
+    iam: input.panel.iam,
+    diffuseModel: input.panel.diffuseModel,
+    extraterrestrialNormalWm2: environment.extraterrestrialNormalWm2,
+  });
+  const moduleHeightM = input.panel.heightM ?? 1;
+  let moduleWindSpeedMS = environment.moduleWindSpeedByHeightM.get(moduleHeightM);
+  if (moduleWindSpeedMS === undefined) {
+    moduleWindSpeedMS = environment.referenceWindSpeedMS;
+    try {
+      moduleWindSpeedMS = logWindSpeed({
+        referenceWindSpeedMS: environment.referenceWindSpeedMS,
+        heightM: moduleHeightM,
+        referenceHeightM: environment.referenceWindHeightM,
+        roughnessLengthM: environment.roughnessLengthM,
+        displacementHeightM: environment.displacementHeightM,
+      });
+    } catch {
+      moduleWindSpeedMS = environment.referenceWindSpeedMS;
+    }
+    environment.moduleWindSpeedByHeightM.set(moduleHeightM, moduleWindSpeedMS);
+  }
+  const moduleTemperatureC = faimanTemperature(
+    environment.ambientTemperatureC,
+    poa.totalWm2,
+    moduleWindSpeedMS,
+    input.thermal ?? DEFAULT_THERMAL,
+  );
+  const baseElectrical = input.electrical?.config ?? DEFAULT_ELECTRICAL;
+  const electrical: ElectricalConfig = {
+    ...baseElectrical,
+    areaM2: input.panel.areaM2,
+    efficiency: input.panel.efficiency,
+  };
+  const effectivePoaWm2 = poa.totalWm2
+    * (1 - clamp(input.panel.soilingLossFraction ?? 0, 0, 1));
+  const dcPowerW = environment.solar.isDaylight && effectivePoaWm2 > 0
+    ? simpleDcPower(
+        effectivePoaWm2,
+        moduleTemperatureC,
+        electrical,
+        input.electrical?.aggregateLossFraction,
+      )
+    : 0;
+  return {
+    solar: environment.solar,
+    irradiance: environment.irradiance,
+    poa,
+    moduleWindSpeedMS,
+    moduleTemperatureC,
+    effectivePoaWm2,
+    dcPowerW,
+  };
+}
 export function simulateInstant(input: InstantSimulationInput): InstantSimulationResult {
   const nowMs = timestampMs(input.timestamp);
   const ambientTemperatureC = input.weather?.ambientTemperatureC ?? 25;

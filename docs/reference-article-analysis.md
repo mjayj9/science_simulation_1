@@ -1,4 +1,34 @@
-# 참고 기사 분석: 태양광 발전에 영향을 미치는 6가지 요소
+# 참고 기사 및 연구 검증 A–D 분석
+
+## 연구 검증 A–D: 원문 조건과 재현 경계
+
+검증 기준일은 2026-08-12이다. 이 절은 DOI 원문, 출판사 본문·보충자료, 저자/기관 저장소에 공개된 출판본만 사용한다. 논문에서 보고한 비율이나 순위는 **관측 경향**이며 실행 계수, 형상별 multiplier, 허용오차의 중심값이 아니다. `src/lib/research/presets.ts`의 A–D는 일반 비교와 분리된 `research:*` namespace이고, 명시 입력만 적용하며 미보고·모호 입력은 `null`로 남긴다.
+
+### 검증표
+
+| ID·연구 | 원문이 보고한 경향 | 원문 조건과 분모 | 현재 맞춘 조건 | 맞추지 못한 조건 | 현재 판정·정량 오차·신뢰 | 차이의 가능한 원인 |
+|---|---|---|---|---|---|---|
+| A · Myers, Bernardi, Grossman, [Three-dimensional photovoltaics](https://doi.org/10.1063/1.3308490) | 10×10 m² footprint에서 높이 2→10 m에 따라 GA 최적 3DPV의 하루 에너지가 거의 선형 증가하고, 평면보다 오전·오후 출력이 평탄함. 표의 open-box/funnel 대 평면 비는 각 높이에서 1.29→2.38/2.43 | 여름철 샌프란시스코 하루, 64개 양면 삼각형, 높이별 동일 bounding box, 12분 간격, p편광, 6% 효율, 정상반사율 4.1%, 셀 간 specular 1회 반사, 지면반사·구름·외부장애물 없음. 최종 10,000 ray/triangle | 100 m² base, 선택한 10 m 높이, 광학 상수, 시간 간격, 1회 반사·무지면반사를 연구 메타데이터로 보존 | GA 좌표/optimizer, 정확한 날짜·위도, 활성면적, source-equivalent irradiance. 앱의 연속 구·원기둥 등은 이 논문 형상이 아님 | **미평가** · 오차 산출 불가 · 재현 신뢰 미평가. 조건 전사의 출처 신뢰 **높음** | 형상·활성면적·날짜/위도·복사·편광·전기 연결 차이 |
+| B · Bernardi et al., [Solar energy generation in three dimensions](https://doi.org/10.1039/C2EE21170J) | 연구한 사례의 footprint당 에너지가 고정 평면보다 2–20배, peak-power 시간이 늘고 계절·위도 변동이 감소. 그 대가로 생성 에너지당 태양전지 면적이 평면보다 1.5–4배 큼 | 2–20배는 하나의 보편 사례가 아님. 예컨대 20배는 Boston 겨울 50 m 건물 전체 피복 대 rooftop이고 PV 재료가 21배. 연간 open cube 2.1–3.8배는 1 m² base, clear-weather 근사, 수평 평면 기준. 실내 cube는 35 mm, flat은 33×37 mm, SCC3733 셀·병렬 bus·셀별 blocking diode | 실내 cube base/height, 1000 W/m² lamp, cover 반사율 14%, cell identity 및 독립 프리셋을 보존 | 정확한 셀 배치·활성면적·support·lamp geometry·diode I–V, 원 outdoor weather/I–V 시계열. 앱의 gap-free continuous cube와 동일하지 않음 | **미평가** · 오차 산출 불가 · 재현 신뢰 미평가. 출처 신뢰 **높음** | 활성면적/분모, discrete 병렬회로와 local-MPP 차이, 반사판·위도·계절·기상·평면 자세 |
+| C · El-Atab et al., [Nature-inspired spherical silicon solar cell](https://doi.org/10.1557/mrc.2020.44) | 구의 각도 응답이 거의 불변. equal-ground flat 대비 최대 이득은 aluminium cup 1 cm에서 101%, 흰 확산지 2 cm에서 39.7%, 모래 2 cm에서 14.8%, specular aluminium paper 7 cm에서 20.25%. 측정 최고점 온도는 구 41.2°C, 평면 47°C | AM1.5G 1000 W/m², 19% IBC silicon을 groove/PDMS로 구형화, projection 10.7 cm², ground/comparator 11.34 cm². 검정 3% diffuse, 흰색 85% diffuse, 모래 25% diffuse, Al paper 88% specular, finite cup. thermal comparison은 equal projection·similar total area·equal ground가 서로 다른 문맥 | 배경 종류, 산란 방식, 간격, equal-ground/equal-projection/active surface 분모를 분리. 선택한 angular case는 white diffuse 1 cm | 실제 corrugation·직경·회로·lamp spectrum/geometry·finite background/cup ray geometry·열 경계조건 | **미평가** · 오차 산출 불가 · 재현 신뢰 미평가. 출처 신뢰 **높음** | reflector 형상·산란, 활성면적·비교분모, 대류/온도측정 정의 차이 |
+| D · Almadhhachi, Seres, Farkas, [Harnessing solar power with aesthetic innovation](https://doi.org/10.1002/ese3.1717) | 실험에서 비슷한 모듈 수의 반구가 구보다 32% 더 많은 에너지를 기록했고, 뒤쪽 저조도 모듈 손실을 원인으로 설명. 다중 구조는 간격별 상호 그림자 손실 | 지름 0.3 m; 30 modules/hemisphere, 60/sphere; 각 30×110 mm; 70% surface coverage; hemisphere active 0.099 m², sphere 0.198 m². hemisphere projection은 원문 반올림 0.07 m²(지름에서 정확히 유도하면 0.0706858 m²)이고 sphere support pole은 0.01 m²로 서로 다른 footprint 정의. wiring·온도·그림자 포함 | 지름, 모듈 수, coverage, 실제 active area, 정확한 swept projection과 원문 반올림 projection 및 support footprint를 서로 다른 필드로 보존 | raw irradiance/temperature/I–V, 정확한 wiring, rear low-light response, albedo. 일반 비교는 100% continuous local-MPP skin이므로 원 실험과 다름 | **미평가** · 오차 산출 불가 · 재현 신뢰 미평가. 출처 신뢰 **높음** | coverage·PV면적, series/parallel mismatch, 후면 저조도·자체차폐·온도·지면반사·구조간 그림자, footprint 분모 |
+
+### 반드시 분리하는 조건
+
+- A의 선형 높이 경향은 같은 footprint와 각 높이별 bounding-volume 안에서 다시 최적화한 open-box/funnel 계열 결과다. 이를 단순 구·원기둥의 높이 보정으로 사용하지 않는다.
+- B의 2–20배는 사례별 높이·PV 면적·위도·계절·반사판·평면 기준 자세가 다르다. 특히 “1.5–4배”는 **태양전지 면적/생성 에너지**의 불리함이며, 3D 구조의 단순 활성면적 배율이 아니다.
+- C의 근접 흰 종이는 finite diffuse background이며 일반적인 무한 지면 albedo가 아니다. aluminium paper는 specular이고 aluminium cup은 45° 측면을 가진 concentrator다. 컵 이득을 구의 순수 형상 이득으로 합치지 않는다.
+- D의 sphere support footprint 0.01 m²와 horizontal projection 약 0.07 m²는 다른 토지 지표다. 공식 공정 비교의 swept projection에는 지름 0.3 m에서 유도한 `π(0.15 m)² = 0.0706858 m²`를 사용해야 하며, pole 면적으로 형상 전체 토지점유를 축소하지 않는다.
+- A–D 모두 현재 source-equivalent 실행 결과가 없으므로 방향 판정은 `미평가`다. 숫자가 비슷해 보여도 `경향 일치`, `부분 일치`, `불일치` 중 하나로 승격하지 않는다. 실제 실행 뒤에만 동일 분모로 정량 오차를 산출하고 신뢰등급을 매긴다.
+
+### 1차 출처
+
+- A: [DOI](https://doi.org/10.1063/1.3308490), [CaltechAUTHORS 출판 기록](https://authors.library.caltech.edu/records/7bv9y-j0563), [CaltechAUTHORS 출판본 PDF](https://authors.library.caltech.edu/records/7bv9y-j0563/files/1.3308490.pdf)
+- B: [RSC 원 논문](https://pubs.rsc.org/en/content/articlelanding/2012/ee/c2ee21170j), [RSC 보충자료](https://www.rsc.org/suppdata/ee/c2/c2ee21170j/c2ee21170j.pdf)
+- C: [DOI](https://doi.org/10.1557/mrc.2020.44), [Cambridge Core 논문 페이지](https://www.cambridge.org/core/journals/mrs-communications/article/natureinspired-spherical-silicon-solar-cell-for-three-dimensional-light-harvesting-improved-dust-and-thermal-management/0EE382BEDC3D233365B27E4C3777FDC4), [Cambridge Core 원문 PDF](https://www.cambridge.org/core/services/aop-cambridge-core/content/view/0EE382BEDC3D233365B27E4C3777FDC4/S2159685920000440a.pdf/natureinspired_spherical_silicon_solar_cell_for_threedimensional_light_harvesting_improved_dust_and_thermal_management.pdf)
+- D: [Wiley 원 논문](https://scijournals.onlinelibrary.wiley.com/doi/full/10.1002/ese3.1717)
+
+## 참고 기사: 태양광 발전에 영향을 미치는 6가지 요소
 
 ## 1. 목적과 사용 경계
 

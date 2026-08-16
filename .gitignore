@@ -40,3 +40,15 @@ yarn-error.log*
 /work/
 *.tsbuildinfo
 /.sites-package/
+
+# Local agent/editor tooling state
+/.claude/
+
+# Resumable audit checkpoints, including the per-run files parallel partial runs
+# write. Intermediate compute state keyed to a source fingerprint, not published
+# evidence: the audits discard them whenever that fingerprint changes and publish
+# their results as docs/ artifacts instead.
+docs/.*-checkpoint*.json
+
+# Half-written files from an interrupted atomic publish.
+*.tmp

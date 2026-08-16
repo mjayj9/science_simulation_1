@@ -1,119 +1,70 @@
-# 검증 결과와 테스트 계약
+# 검증 결과 및 테스트 계약
 
 검증 기준일: 2026-08-12 (Asia/Seoul)
 
-## 현재 상태
+## 수치 권위
 
-이 문서는 테스트 개수를 영구 릴리스 계약으로 고정하지 않는다. 테스트 파일과 항목은 구현과 함께 늘어날 수 있기 때문이다. 2026-08-12 최종 통합 재실행에서는 **Vitest 14개 파일·279개 테스트**, production build, 렌더 HTML smoke 2개가 모두 통과했다.
+현재 결과·오차·판정·순위의 단일 사람이 읽는 진입점은 [자동 생성 검증 보고서](generated-validation-report-2026.md)다. 그 파일은 아래 감사 JSON에서 매번 생성되며 수치를 손으로 복사해 유지하지 않는다. 이 문서 또한 계산 수치나 테스트 개수를 중복 기록하지 않는다.
 
-| 명령 | 문서 감사 시점 상태 | 최종 판정 규칙 |
-|---|---|---|
-| `npm.cmd run test:unit` | PASS — 14 files / 279 tests | 모든 항목 성공 |
-| `npm.cmd run typecheck` | PASS | TypeScript 오류 없음 |
-| `npm.cmd run lint` | PASS | ESLint 오류 없음 |
-| `npm.cmd run build` | PASS | production build 성공 |
-| `npm.cmd run test:smoke` | PASS — 2/2 | production HTML·메타데이터 검증 |
-| `npm.cmd test` | PASS | unit → build → HTML smoke 전체 성공 |
+| 감사 | 기계 판독 원본 | 사람이 읽는 파생본 | 검증 계약 |
+|---|---|---|---|
+| 공정 기하 | [`fair-geometry-audit-2026.json`](fair-geometry-audit-2026.json) | [`fair-geometry-audit-2026.md`](fair-geometry-audit-2026.md) | 공통 수평투영, `H_max`, 회전 불변성·면적 불변식 |
+| 실제 전년 비교 | [`full-year-comparison-audit-2026.json`](full-year-comparison-audit-2026.json) | [`full-year-comparison-audit-2026.md`](full-year-comparison-audit-2026.md) | 정지·통제 RPM·자연 RPM, 이상적·공학적 연결, 실제 시간 구간 |
+| 공학 연결 mesh 수렴 | [`engineering-mesh-convergence-audit-2026.json`](engineering-mesh-convergence-audit-2026.json) | [`engineering-mesh-convergence-audit-2026.md`](engineering-mesh-convergence-audit-2026.md) | 두 geometry contract, immutable topology/면적, 광학·위상·회로 3단계 수렴 |
+| 과도 열 + 공학 회로 전년 | [`transient-engineering-full-year-audit-2026.json`](transient-engineering-full-year-audit-2026.json) | [`transient-engineering-full-year-audit-2026.md`](transient-engineering-full-year-audit-2026.md) | 실제 전년 persistent T(t)→cell I-V→회로→인버터→모터, official 순위 |
+| 연간 과도 열 | [`annual-transient-audit-2026.json`](annual-transient-audit-2026.json) | 통합 보고서에서 생성 | persistent `T(t)`, E00/E10/E01/E11, 열잔차·mesh 수렴 |
+| 열모델 비교 | [`thermal-model-comparison-audit-2026.json`](thermal-model-comparison-audit-2026.json) | [`thermal-model-comparison-audit-2026.md`](thermal-model-comparison-audit-2026.md) | 같은 전년 clock의 준정상·과도 차이 |
+| 자연회전 | [`natural-rotation-audit-2026.json`](natural-rotation-audit-2026.json) | [`natural-rotation-audit-2026.md`](natural-rotation-audit-2026.md) | 형상별 ODE, no-C_Q 0 RPM, 공정 제외 sensitivity |
+| 연구 재현 | [`research-source-equivalent-audit.json`](research-source-equivalent-audit.json) | [`research-source-equivalent-audit.md`](research-source-equivalent-audit.md) | 1차 출처 조건, 오차·허용오차·판정 |
 
-이 숫자는 위 날짜의 최종 체크포인트이며, 이후 변경이 있으면 더 최신 실행 로그가 우선한다.
+`fair-comparison-audit-2026.json`의 과거 12대표일 환산표는 실제 전년 순위의 권위가 아니다. 새 전년 감사와 섞어 인용하지 않는다.
 
-## 기본 비교 계약의 감사 결론
+## 잠정 정지·자연 순위 (2026-08-16, 공식 아님)
 
-기본 동일 토지 비교는 형상당 worker variant 하나를 사용한다.
+전년 과도 열 + 공학 회로 결합 감사를 **정지 회전 모드만** 실행한 부분 감사 결과다. 계산 경로는 공식 순위와 동일하고 실제 8,760시간을 적분했으나, 통제회전 모드가 빠져 있어 게이트는 `officialRankingEligible=false`로 닫혀 있다. **아래 번호는 공식 순위가 아니며 `잠정 #N`으로만 표기한다.**
+
+| 잠정 | 형상 | A_PV (m²) | 연간 순 AC (kWh) | kWh/m²-land | kWh/m²-PV | 연결 손실 |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | cube | 0.250000 | 26.0317 | 520.634 | 104.127 | 32.18% |
+| 2 | cylinder | 0.250000 | 22.8146 | 456.293 | 91.259 | 40.24% |
+| 3 | sphere | 0.200000 | 14.4773 | 289.546 | 72.387 | 42.99% |
+| 4 | plane | 0.057735 | 13.5608 | 271.216 | 234.880 | **0.33%** |
+| 5 | cone | 0.111803 | 11.2945 | 225.890 | 101.021 | 36.21% |
+| 6 | hemisphere | 0.100000 | 9.4001 | 188.002 | 94.001 | 40.76% |
+
+자연 RPM은 여섯 형상 모두 0 RPM이므로 같은 계산을 재사용한다. 전 형상 `steps=8761`, `intervals=8760`, `closingEndpointPresent=true`, warm-up 수렴 `true`, 열수지 상대잔차 `1.4e-13`~`1.1e-12`, 검증 `PASS`. 인접 최소 격차는 6.76%로 수렴 허용오차 2%보다 크므로 순서 자체는 해상도에 민감하지 않다.
+
+PV 면적당 생산성은 순위가 거의 뒤집혀 `plane 234.880 > cube 104.127 > cone 101.021 > hemisphere 94.001 > cylinder 91.259 > sphere 72.387`이다. 평면은 직렬 셀이 모두 같은 각도로 빛을 받아 연결 손실이 0.33%에 그치지만 곡면은 가장 어두운 셀이 전류를 제한해 32~43%를 잃는다.
+
+준정상 열모델에서 이 결합 경로로 바꿀 때의 변화는 공학 회로에서 `-12.43%`(hemisphere)부터 `+16.67%`(cube)까지 벌어진다. 같은 전환이 이상적 local-MPP 경로에서는 `+1.63%`~`+2.68%`에 그친다. 이상적 모델은 미소면마다 독립 MPPT라 평균 온도만 작용하지만, 직렬 회로는 온도 **분포**가 mismatch를 통해 증폭되기 때문이다. 준정상 수치로 공학 결합 순위를 외삽하면 1·2위가 뒤바뀐다.
+
+공식화 조건은 통제회전 2 RPM 모드를 포함한 전체 실행과 `transient-engineering-full-year-audit-2026.json` 재발행이다. 표시 계약은 [`provisional-static-ranking.ts`](../src/ui/provisional-static-ranking.ts)와 [`provisional-static-ranking.test.ts`](../tests/provisional-static-ranking.test.ts)가 고정한다.
+
+## 현재 구현 계약
+
+- 실제 전년 계산은 비윤년 8,761개 weather 경계/8,760개 구간 또는 윤년 8,785개 경계/8,784개 구간을 직접 적분한다. closing endpoint는 중복 에너지로 계산하지 않는다.
+- 정지, 모든 형상에 같은 통제 RPM, 형상별 자연회전을 별도 group으로 계산한다. 자연회전은 월평균 풍속을 한 번 푸는 방식이 아니라 각 weather interval에서 동역학 ODE를 적분한다.
+- 전기 결과는 `local-mpp-area-integral` 이상적 연속막 상한과 `explicit-series-parallel-bypass` 공학적 연결로 분리한다.
+- legacy 전년 감사의 저해상도 공학 행은 `not-evaluated` 탐색값이고 순위 번호를 갖지 않는다. 공식 공학 연결 순위는 두 geometry contract의 mesh gate와 실제 전년 transient+engineering gate, 그리고 두 compact gate의 artifact SHA가 모두 통과한 자동 생성 보고서에서만 제공한다.
+- 준정상 결과에는 `준정상 광학 회전·열이력 미포함` provenance를 붙인다. annual transient opt-in의 authoritative 월·연간 결과는 full-clock E11이며 E00/E10/E01/E11 폐합, 열수지 잔차와 mesh 수렴을 함께 보고한다.
+- 모든 순위 행은 `A_land`, `A_PV`, `A_PV/A_land`, 총 AC, kWh/m²-land/year, kWh/m²-PV/year, 전기·열·회전 모델, 기상 출처, 시간 해상도와 실제 전년/대표일 구분을 가진다.
+
+## 연구 source-equivalent 판정
+
+A–D는 원 논문의 핵심 조건이 충분하지 않아 계속 `not-evaluated`이며 성공 건수에서 제외된다. E는 direct-beam convex-sphere 기하·광학 benchmark, F는 rotating heated-disk Reynolds/Nusselt benchmark로 source-equivalent 실행한다. 이 두 pass의 적용 범위는 각각 PV 전기/열 연간모델 전체가 아니라 해당 광학·기하 및 회전·열 상관 계산이다.
+
+논문별 보고값, 계산값, 절대·상대오차, 사전 허용오차, 일치·불일치 조건과 pass/partial/fail 판정은 [연구 감사](research-source-equivalent-audit.md)만을 권위로 삼는다. 연구 결과에 맞추기 위한 multiplier는 사용하지 않는다.
+
+## 재생성 명령
+
+감사 파일은 다음 fail-closed 파이프라인으로 모두 갱신하고 SHA-256 manifest를 만든 뒤 통합 보고서를 마지막에 생성한다.
 
 ```text
-variantId: compare:<shape>:ideal
-continuousSurface.electricalModel: local-mpp-area-integral
-Σ continuousSurface.samples[].areaM2 = A_PV
+npm run audit:all
 ```
 
-기본 variant에는 `panelCount`, `totalPanelAreaM2`, `topology`, `electricalFairnessMode`가 없다. 각 절대면적 표본의 POA·온도·국소 DC를 더하고 공통 인버터를 한 번 적용한다. 따라서 기본 결과에 20-zone Mode A/B 차이, 회로 mismatch 또는 bypass가 생기면 회귀다.
+단위·통합 테스트, typecheck, lint, production build와 렌더 smoke의 실제 명령·개수·실행시간은 최종 검증 실행 로그에서 보고한다. 이 수동 문서에는 과거 실행 개수나 시간을 고정값으로 남기지 않는다.
 
-자유 조립과 이전 프로젝트의 discrete-panel branch는 계속 테스트한다. 해당 branch의 20개 패널, Mode A/B, 단일 다이오드와 bypass 테스트가 남아 있다는 사실은 기본 비교가 그 모델을 쓴다는 뜻이 아니다.
+## 판정 범위
 
-## 자동 테스트 파일별 정확한 범위
-
-| 테스트 파일 | 기본 비교/공통 계약 | 레거시·기타 계약 |
-|---|---|---|
-| `tests/physics.test.ts` | 태양위치, AOI/cosine/IAM 단일 적용, 밤 0, Faiman, 인버터, 에너지 적분 | 단일 다이오드·회로·바이패스와 회전 단위 fixture |
-| `tests/continuous-surfaces.test.ts` | 해석 법선, 구·반구·원기둥·원뿔 투영, Y회전 불변, `Nφ` 수렴 | `0.050 m²`, 20-band 이전 곡면 생성기 회귀 |
-| `tests/continuous-surface-physics.test.ts` | 기본값의 국소 MPP alias, 면적 적분, 밤 0, 반사광 cap, 손실원장 | 명시적 `distributed-circuit`와 이전 zone I–V 경로 |
-| `tests/land-comparison.test.ts` | 여섯 형상의 동일 `A_land`, 면적지수, `A_PV` 닫힌식, 평면 `L×L`·0~75°·높이 제한, 매개화 영역 면적합 | 선택적 active-basis 기하 API 호환 |
-| `tests/land-area-acceptance.test.ts` | 구 직달 예산 `A_land`, 밤·유한성·결정론, local-MPP에서 mismatch/bypass 0, spike/dropout, 대표일 수렴 | backward field name이 같은 결과를 가리키는지 확인 |
-| `tests/comparison-performance.test.ts` | land/PV 이중 정규화, 원 시계열 적분, 광학 성분과 비유한 입력 거부 | 없음 |
-| `tests/reflector-budget.test.ts` | Lambert 지면/반사판 면적 예산과 일반·연구 설정 격리 | 연구용 등가 반사 옵션 |
-| `tests/research-presets.test.ts` | shape multiplier 금지, 명시값만 적용, null 보존 | 연구 namespace와 일반 설정 복귀 |
-| `tests/three-workspace.test.ts` | 실제 수평 투영, top view parcel, 원형/swept footprint, 반구 dome, 높이 표시 | 렌더 helper 계약 |
-| `tests/infrastructure.test.ts` | continuous-skin anchor와 ray/worker 경계 | 강체 panel, 저장·migration, API fallback |
-| `tests/time-series-diagnostics.test.ts` | 정상 일몰, 기상·차폐·인버터 전이, 무원인 spike/dropout | bypass 전이 원인코드 |
-| `tests/simulator-ui.test.ts` | 여섯 형상·동일 토지·fixed 평면 기본값, 단일 continuous variant, 이중 정규화, 비교 화면에서 20구역/`N_eq`/동일 활성면적/Mode A/B 제거 | 연구 전환과 현재 형상 화면 배선 |
-| `tests/annual-worker-guard.test.ts` | 현재 worker 객체와 request ID/fingerprint가 모두 일치하는 event만 수용 | 종료된 이전 worker의 queued event 차단 |
-| `tests/workers-annual.test.ts` | protocol v3 fingerprint, 절대면적 표본, panelCount 없는 단일 스킨, local-MPP 면적합, 밤 0, 원기둥 영역 폐합, AABB 차폐, 8,761 boundary validation | explicit panel Mode A/B, 회로, 회전·취소·stale 호환 |
-
-`tests/rendered-html.test.mjs`는 Vitest 개수에 포함하지 않는 production HTML·한국어 메타데이터 smoke다.
-
-## 수치 적분 검증 범위
-
-현재 자동화가 보장하는 내용은 다음과 같다.
-
-- 모든 표본의 위치·법선·절대면적이 유한하고 면적 가중치가 양수다.
-- 표본 면적합이 해석 `A_PV`와 부동소수점 허용오차 안에서 같다.
-- 렌더 mesh tessellation과 물리 `Nφ`는 서로 다른 입력이다.
-- 구의 direct-only 적분은 `DNI×A_land`에 0.1% 안에서 닫힌다.
-- 축대칭 투영면적 함수는 Y축 회전에 해석적으로 불변이다.
-- 선택한 순간·clear-day·12개 대표일 fixture에서 `Nφ=32→64` 변화가 요구 허용오차 안에 있다.
-- 여섯 형상의 밤 POA·DC·AC는 정확히 0이고 재실행 결과가 결정론적이다.
-- 기본 local-MPP 결과는 mismatch/bypass 손실을 만들지 않는다.
-
-마지막 수렴 기준은 fixture 범위의 수치 계약이다. 임의의 좁은 AABB 그림자, discontinuous weather, 빠른 회전과 실제 관측 연간 자료 전체에 0.5%를 보편 보증하지 않는다.
-
-## worker와 시간축 검증 범위
-
-- `WeatherSeries`는 중복 없는 오름차순 UTC timestamp와 유한·비음수 복사량을 요구한다.
-- 공급된 GHI/DNI/DHI를 worker에서 과거의 `sin(elevation)` 또는 제곱근 곡선으로 다시 만들지 않는다.
-- 연간 8,760개 시간 구간에는 다음 해 첫 boundary를 포함한 8,761개 timestamp가 필요하다.
-- 월 bucket은 `reportingOffsetMinutes`의 현지 경계로 나누되 태양·복사 계산 timestamp는 UTC다.
-- 고정 RPM interval-average는 에너지에 한 번만 곱하고 다시 사다리꼴 평균하지 않는다.
-- source worker 객체, request ID 또는 fingerprint 중 하나라도 현재 active request와 다르면 queued chunk·complete·cancel 이벤트를 stale로 폐기한다.
-- 기본 비교 worker는 fixed 평면 또는 표본의 공통 Y회전 자세에서 static obstacle AABB로 직달 가시율을 계산한다. 단축·이축 평면 tracking adapter는 worker 호환 테스트에는 남지만 동일 토지 기본 비교 variant에는 들어가지 않는다.
-- ground와 water는 장애물 AABB에서 제외한다. 산란광 sky-view 차폐는 이 ray 테스트의 범위가 아니다.
-
-## 실제 브라우저 8,760시간 실행
-
-기록된 실행은 새 세션의 기본 비교 화면에서 annual worker를 100%까지 완료한 결과다. worker는 양끝점을 포함한 8,761개 weather point로 8,760개 hourly interval을 적분했다. 조건은 서울 `37.5665°N/126.9780°E`, 해발 `38 m`, UTC+9, 2026년, `A_land=0.050 m²`, 평면 `L×L` footprint·경사/방위 `30°/180°`, RPM 0, `H_max=0.3 m`, support `0.01 m`, albedo `0.20`, 인공 반사판 없음, seed `240521`의 offline clear 시계열, 균형 품질 `Nφ=32`, 기본 building/tree AABB 2개다.
-
-| 형상 | kWh/year | kWh/m²-land/year | kWh/m²-PV/year |
-|---|---:|---:|---:|
-| 평면 | 23.716 | 474.315 | 410.769 |
-| 정육면체 | 38.778 | 775.556 | 155.111 |
-| 원기둥 | 38.842 | 776.832 | 155.366 |
-| 구 | 34.557 | 691.132 | 172.783 |
-| 반구 | 25.790 | 515.807 | 257.904 |
-| 원뿔 | 27.743 | 554.856 | 248.139 |
-
-원기둥 영역 귀속은 윗면 `12.986 kWh/year`, 옆면 `25.856 kWh/year`이고 합은 전체 `38.842 kWh/year`와 정확히 닫혔다. 이 표의 값과 실행 조건 해석은 [동일 토지 비교 보고서](land-area-comparison-report.md)를 따른다.
-
-최종 평면 수치는 `L×L` 수평 footprint 수정 뒤 다시 실행한 값이다. 수정 전 장방형 footprint 실행의 `23.620 / 472.399 / 409.110`은 최신 구현 기준값에서 제외한다.
-
-## 레거시 browser snapshot
-
-아래 값은 2026-08-11의 기본 비교 교체 전 snapshot이다. 모두 `A_PV=0.050 m²`인 12개 대표일 추정 경로이므로 위 표와 직접 비교하지 않는다.
-
-| 경로 | 대표연간 AC |
-|---|---:|
-| 평면 | 19.22 kWh |
-| 구 Mode B/이상 | 9.31 kWh |
-| 원기둥 | 9.20 kWh |
-| 원뿔 | 12.44 kWh |
-
-당시 구 Mode A는 `4.47 kWh`였다. Mode B `9.31 kWh`와의 차이는 20개 구역 공용 회로의 mismatch/bypass 계약이고, 평면 대비 차이는 동일 활성면적에서 평면의 큰 직달 투영과 구의 `A_PV/4` 투영 때문이다. 현재 기본 비교는 이 회로 분할을 제거하고 형상별 전체 `A_PV`의 국소 MPP를 적분한다.
-
-## 아직 자동화되지 않은 항목
-
-- 실제 production browser에서 8,760시간 수치를 매 커밋 고정하는 장시간 E2E 회귀
-- 그래프 점 선택이 timestamp·기상·광학·인버터·원인코드를 갱신하는 브라우저 상호작용 테스트
-- 연속 mesh의 틈, top-view footprint, 표본 helper와 hit-test를 픽셀 기준으로 검사하는 시각 회귀
-- 실제 GLB 삼각형 실루엣과 현재 AABB 차폐 차이의 정량 fixture
-- 관측/TMY 외부 기준자료와 동일 입력으로 수행한 독립 교차검증
-
-모델의 적용 한계는 [알려진 한계](known-limitations.md), 시간 급변의 진단 기준은 [입사각·시간 진단](incident-angle-diagnosis.md)을 함께 따른다.
+자동 검증은 모델 내부의 불변식과 지정 fixture를 검사한다. 실제 제조 가능성, 계측 기상 오차, 구조·전기 안전성과 장기 신뢰성을 인증하지 않는다. 공식 결합 경로는 장애물 없음, world-Y 세로축 회전, 고정 자세 평면만 검증했으며 외부 장애물과 plane tracking은 현재 미지원이다. 상세 해석 경계는 [알려진 한계](known-limitations.md)를 따른다.

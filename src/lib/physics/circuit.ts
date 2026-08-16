@@ -32,8 +32,33 @@ export interface CircuitResult {
   mismatchLossFraction: number;
 }
 
-function pointsAscendingVoltage(curve: CircuitDevice["curve"]): IVPoint[] {
-  return [...curve.points].sort((a, b) => a.voltageV - b.voltageV);
+/**
+ * I-V curves are generated in ascending-voltage order, so the sort is almost
+ * always a no-op. Detecting that costs one linear scan and avoids copying and
+ * sorting an array on every interpolation — and interpolation is the innermost
+ * operation of the annual solve, running on the order of 10^9 times. Order is
+ * still normalised when a caller supplies an unordered curve, so results are
+ * unchanged either way.
+ */
+function pointsAscendingVoltage(curve: CircuitDevice["curve"]): readonly IVPoint[] {
+  const points = curve.points;
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index - 1].voltageV > points[index].voltageV) {
+      return [...points].sort((left, right) => left.voltageV - right.voltageV);
+    }
+  }
+  return points;
+}
+
+/** Descending-current order, which is ascending-voltage reversed. */
+function pointsDescendingCurrent(curve: CircuitDevice["curve"]): readonly IVPoint[] {
+  const points = curve.points;
+  for (let index = 1; index < points.length; index += 1) {
+    if (points[index - 1].currentA < points[index].currentA) {
+      return [...points].sort((left, right) => right.currentA - left.currentA);
+    }
+  }
+  return points;
 }
 
 export function interpolateCurrentAtVoltage(curve: CircuitDevice["curve"], voltageV: number): number {
@@ -57,7 +82,7 @@ export function interpolateVoltageAtCurrent(curve: CircuitDevice["curve"], curre
   if (curve.points.length === 0) return 0;
   if (currentA <= 0) return curve.vocV;
   if (currentA >= curve.iscA) return 0;
-  const points = [...curve.points].sort((a, b) => b.currentA - a.currentA);
+  const points = pointsDescendingCurrent(curve);
   let lower = 0;
   let upper = points.length - 1;
   while (upper - lower > 1) {
@@ -187,7 +212,10 @@ export function calculateCircuit(input: CircuitInput): CircuitResult {
   const mpp = goldenMaximum(evaluate, lowerCoordinate, upperCoordinate);
   const deviceStates = input.topology === "series"
     ? seriesVoltageAtCurrent(input.devices, mpp.currentA, input).states
-    : parallelCurrentAtVoltage(input.devices, mpp.voltageV).states;
+    : parallelCurrentAtVoltage(
+        input.devices,
+        mpp.voltageV + mpp.currentA * Math.max(0, input.wiringResistanceOhm ?? 0),
+      ).states;
   const ideal = idealMppSum(input.devices);
   return {
     points,
