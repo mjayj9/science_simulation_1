@@ -1,0 +1,30 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploys the Solarform Engineering Lab simulator as a Node web service.
+#
+# The app is server-rendered (React Server Components), so it cannot be hosted
+# as a static site: there is no `index.html` in the build output. `vinext build`
+# emits `dist/standalone/`, a self-contained Node server that reads `PORT` and
+# binds `0.0.0.0` — exactly Render's contract.
+#
+# The physics itself runs in the browser (Web Workers + WebGL 2). This service
+# only renders the page shell, so it stays idle-cheap and does not need to be
+# sized for simulation load.
+services:
+  - type: web
+    name: solarform-engineering-lab
+    runtime: node
+    plan: free
+    region: singapore
+    # `--include=dev` is load-bearing: Vite, vinext and the TypeScript toolchain
+    # are devDependencies, and Render may run the install with
+    # NODE_ENV=production, which would otherwise skip them and fail the build.
+    buildCommand: npm ci --include=dev && npm run build
+    # The standalone bundle carries its own node_modules, so the running service
+    # does not depend on dev packages surviving the build.
+    startCommand: node dist/standalone/server.js
+    healthCheckPath: /
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
