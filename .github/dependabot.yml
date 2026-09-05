@@ -1,0 +1,25 @@
+# Dependabot — 의존성 업데이트를 자동으로 PR로 올려줍니다.
+# 올라온 PR은 직접 읽고 리뷰한 뒤 머지하세요.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Seoul"
+    # 한 번에 열려 있을 수 있는 PR 수 제한 — 알림 폭탄 방지
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # 작은 업데이트(minor/patch)는 하나의 PR로 묶습니다.
+      # major 업데이트는 깨질 위험이 크므로 일부러 따로 옵니다.
+      minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
