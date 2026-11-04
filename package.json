@@ -40,7 +40,7 @@
     "recharts": "^3.10.1",
     "three": "^0.185.1",
     "three-mesh-bvh": "^0.9.14",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
